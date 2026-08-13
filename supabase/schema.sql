@@ -1,0 +1,451 @@
+-- Telegram-based Human-AI Collaboration Room schema draft.
+-- Tokens and CLI credentials must never be stored in plaintext.
+
+create extension if not exists pgcrypto;
+
+create table if not exists huai_rooms (
+  room_id uuid primary key default gen_random_uuid(),
+  telegram_chat_id bigint unique not null,
+  owner_telegram_user_id bigint not null,
+  purpose text not null,
+  rules text not null default '',
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint huai_rooms_status_check check (status in ('active', 'archived', 'suspended'))
+);
+
+create table if not exists huai_room_members (
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  telegram_user_id bigint not null,
+  role text not null,
+  permissions jsonb not null default '[]'::jsonb,
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  primary key (room_id, telegram_user_id),
+  constraint huai_room_members_role_check check (role in ('owner', 'human_member', 'platoon_leader', 'claude_leader', 'codex_leader', 'auditor', 'operator')),
+  constraint huai_room_members_status_check check (status in ('active', 'invited', 'left', 'removed', 'suspended'))
+);
+
+create table if not exists huai_ai_actors (
+  actor_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  role text not null,
+  adapter_type text not null,
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  constraint huai_ai_actors_role_check check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor')),
+  constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'auditor')),
+  constraint huai_ai_actors_status_check check (status in ('active', 'inactive', 'disabled')),
+  unique (room_id, role)
+);
+
+create table if not exists huai_telegram_bots (
+  telegram_bot_id uuid primary key default gen_random_uuid(),
+  telegram_bot_user_id bigint unique,
+  bot_username text not null unique,
+  display_name text,
+  actor_id uuid not null references huai_ai_actors(actor_id) on delete cascade,
+  token_secret_ref text not null,
+  webhook_secret_ref text not null,
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  constraint huai_telegram_bots_status_check check (status in ('active', 'inactive', 'disabled')),
+  unique (actor_id)
+);
+
+create table if not exists huai_telegram_updates (
+  telegram_bot_id uuid not null references huai_telegram_bots(telegram_bot_id) on delete cascade,
+  update_id bigint not null,
+  telegram_chat_id bigint not null,
+  telegram_message_id bigint,
+  received_at timestamptz not null default now(),
+  processed_at timestamptz,
+  status text not null default 'received',
+  error text,
+  raw_update jsonb not null default '{}'::jsonb,
+  processing_started_at timestamptz,
+  attempts integer not null default 0,
+  last_error text,
+  locked_at timestamptz,
+  locked_until timestamptz,
+  constraint huai_telegram_updates_status_check check (status in ('received', 'processing', 'processed', 'ignored', 'retry_pending', 'failed')),
+  primary key (telegram_bot_id, update_id)
+);
+
+create unique index if not exists huai_telegram_updates_chat_message_unique
+on huai_telegram_updates (telegram_chat_id, telegram_message_id)
+where telegram_message_id is not null;
+
+create index if not exists huai_telegram_updates_pending_idx
+on huai_telegram_updates (status, received_at)
+where status in ('received', 'retry_pending', 'failed');
+
+create or replace function huai_can_act_in_room(
+  p_room_id uuid,
+  p_telegram_user_id bigint,
+  p_permission text
+) returns boolean
+language sql
+stable
+as $$
+  select exists (
+    select 1
+    from huai_room_members rm
+    where rm.room_id = p_room_id
+      and rm.telegram_user_id = p_telegram_user_id
+      and rm.status = 'active'
+      and (
+        case
+          when p_permission in ('task:approve', 'task:reject', 'task:final_approve', 'task:cancel', 'task:verify', 'bots:manage')
+            then rm.role = 'owner'
+          else rm.role = 'owner' or rm.permissions ? p_permission
+        end
+      )
+  );
+$$;
+
+create or replace function huai_claim_telegram_update(
+  p_telegram_bot_id uuid,
+  p_update_id bigint,
+  p_locked_until timestamptz
+) returns boolean
+language plpgsql
+as $$
+declare
+  v_row_count integer := 0;
+begin
+  update huai_telegram_updates
+  set status = 'processing',
+      processing_started_at = coalesce(processing_started_at, now()),
+      locked_at = now(),
+      locked_until = p_locked_until,
+      attempts = attempts + 1
+  where telegram_bot_id = p_telegram_bot_id
+    and update_id = p_update_id
+    and status in ('received', 'retry_pending', 'failed')
+    and (locked_until is null or locked_until < now());
+
+  get diagnostics v_row_count = row_count;
+  return v_row_count = 1;
+end;
+$$;
+
+create table if not exists huai_task_proposals (
+  proposal_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  source_message_binding_id uuid,
+  title text not null,
+  purpose text not null,
+  scope text not null,
+  completion_criteria text not null,
+  proposed_by_actor_id uuid references huai_ai_actors(actor_id),
+  status text not null default 'pending',
+  created_at timestamptz not null default now(),
+  decided_at timestamptz,
+  constraint huai_task_proposals_status_check check (status in ('pending', 'approved', 'rejected', 'revision_requested', 'cancelled'))
+);
+
+create table if not exists huai_tasks (
+  task_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  proposal_id uuid references huai_task_proposals(proposal_id),
+  approved_by_approval_id uuid,
+  assignee_actor_id uuid references huai_ai_actors(actor_id),
+  idempotency_key text unique,
+  status text not null,
+  priority text not null default 'normal',
+  title text not null,
+  purpose text not null,
+  scope text not null,
+  completion_criteria text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint huai_tasks_status_check check (status in ('proposal_pending', 'proposal_revision_requested', 'proposal_rejected', 'scheduled', 'waiting_dependencies', 'queued_for_gateway', 'in_progress', 'mid_approval_pending', 'paused_by_owner', 'verification_pending', 'verification_in_progress', 'revision_requested', 'revision_in_progress', 'reverification_pending', 'commander_completion_pending', 'completion_approval_pending', 'owner_supplement_requested', 'completed', 'cancel_requested', 'cancelled', 'failed_retryable', 'blocked', 'rejected_or_cancelled'))
+);
+
+create unique index if not exists huai_tasks_approved_proposal_unique
+on huai_tasks (proposal_id)
+where proposal_id is not null;
+
+create table if not exists huai_task_dependencies (
+  dependency_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  predecessor_task_id uuid not null references huai_tasks(task_id) on delete cascade,
+  successor_task_id uuid not null references huai_tasks(task_id) on delete cascade,
+  dependency_type text not null,
+  is_blocking boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (predecessor_task_id, successor_task_id, dependency_type),
+  constraint huai_task_dependencies_type_check check (dependency_type in ('blocks', 'same_file_conflict', 'resource_conflict', 'related'))
+);
+
+create table if not exists huai_approvals (
+  approval_id uuid primary key default gen_random_uuid(),
+  task_id uuid references huai_tasks(task_id) on delete cascade,
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  stage text not null,
+  decider_telegram_user_id bigint not null,
+  decision text not null,
+  reason text,
+  created_at timestamptz not null default now(),
+  idempotency_key text unique,
+  constraint huai_approvals_stage_check check (stage in ('task_approval', 'midpoint_approval', 'commander_completion', 'final_approval', 'cancellation')),
+  constraint huai_approvals_decision_check check (decision in ('approved', 'rejected', 'revision_requested', 'cancelled'))
+);
+
+alter table huai_tasks
+  add constraint huai_tasks_approved_by_approval_fk
+  foreign key (approved_by_approval_id) references huai_approvals(approval_id);
+
+create table if not exists huai_verifications (
+  verification_id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references huai_tasks(task_id) on delete cascade,
+  target_version text not null,
+  verdict text not null,
+  evidence text not null,
+  required_fixes text,
+  recommendations text,
+  reverify_scope text,
+  verifier_actor_id uuid references huai_ai_actors(actor_id),
+  created_at timestamptz not null default now(),
+  constraint huai_verifications_verdict_check check (verdict in ('pass', 'conditional_pass', 'fail'))
+);
+
+create table if not exists huai_reports (
+  report_id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references huai_tasks(task_id) on delete cascade,
+  is_meaningful boolean not null,
+  summary text not null,
+  approval_required boolean not null default false,
+  impact_scope jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists huai_revision_requests (
+  revision_request_id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references huai_tasks(task_id) on delete cascade,
+  verification_id uuid references huai_verifications(verification_id) on delete set null,
+  required_fixes text not null,
+  recommendations text,
+  reverify_scope text not null,
+  status text not null default 'open',
+  created_at timestamptz not null default now(),
+  constraint huai_revision_requests_status_check check (status in ('open', 'submitted', 'verified', 'closed', 'cancelled'))
+);
+
+create table if not exists huai_artifacts (
+  artifact_id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references huai_tasks(task_id) on delete cascade,
+  uri text not null,
+  version text not null,
+  checksum text,
+  author_actor_id uuid references huai_ai_actors(actor_id),
+  is_final boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists huai_events (
+  event_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  task_id uuid references huai_tasks(task_id) on delete cascade,
+  event_type text not null,
+  idempotency_key text not null unique,
+  payload jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists huai_outbox (
+  huai_outbox_id uuid primary key default gen_random_uuid(),
+  event_id uuid references huai_events(event_id) on delete cascade,
+  idempotency_key text not null unique,
+  target_kind text not null,
+  target text not null,
+  payload jsonb not null,
+  status text not null default 'pending',
+  attempts integer not null default 0,
+  locked_at timestamptz,
+  locked_until timestamptz,
+  last_error text,
+  sent_at timestamptz,
+  next_attempt_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  constraint huai_outbox_target_kind_check check (target_kind in ('telegram_bot', 'local_gateway')),
+  constraint huai_outbox_status_check check (status in ('pending', 'processing', 'sent', 'retry_pending', 'failed', 'dead'))
+);
+
+
+create or replace function lease_huai_outbox(
+  p_limit integer,
+  p_locked_until timestamptz,
+  p_target_kind text
+) returns setof huai_outbox
+language plpgsql
+as $
+begin
+  return query
+  with candidates as (
+    select o.huai_outbox_id
+    from huai_outbox o
+    where o.target_kind = p_target_kind
+      and (
+        (o.status in ('pending', 'retry_pending') and o.next_attempt_at <= now())
+        or (o.status = 'processing' and o.locked_until < now())
+      )
+      and (o.locked_until is null or o.locked_until < now())
+    order by o.created_at asc
+    limit greatest(p_limit, 0)
+    for update skip locked
+  )
+  update huai_outbox o
+  set status = 'processing',
+      attempts = attempts + 1,
+      locked_at = now(),
+      locked_until = p_locked_until
+  from candidates c
+  where o.huai_outbox_id = c.huai_outbox_id
+  returning o.*;
+end;
+$$;
+
+create or replace function mark_huai_outbox_sent(
+  p_huai_outbox_id uuid,
+  p_send_result jsonb
+) returns boolean
+language plpgsql
+as $$
+declare
+  v_updated integer;
+begin
+  update huai_outbox
+  set status = 'sent',
+      sent_at = now(),
+      locked_at = null,
+      locked_until = null,
+      last_error = null,
+      payload = jsonb_set(payload, '{sendResult}', coalesce(p_send_result, '{}'::jsonb), true)
+  where huai_outbox_id = p_huai_outbox_id
+    and status = 'processing';
+
+  get diagnostics v_updated = row_count;
+  return v_updated = 1;
+end;
+$$;
+create table if not exists huai_hook_attempts (
+  hook_attempt_id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references huai_events(event_id) on delete cascade,
+  hook_type text not null,
+  status text not null default 'pending',
+  attempts integer not null default 0,
+  last_error text,
+  next_attempt_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  constraint huai_hook_attempts_status_check check (status in ('pending', 'processing', 'succeeded', 'failed', 'retry_pending'))
+);
+
+create table if not exists huai_gateway_instances (
+  gateway_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  machine_label text not null,
+  status text not null default 'offline',
+  allowed_project_roots jsonb not null default '[]'::jsonb,
+  allowed_adapters jsonb not null default '["claude_code","codex"]'::jsonb,
+  last_heartbeat_at timestamptz,
+  created_at timestamptz not null default now(),
+  constraint huai_gateway_instances_status_check check (status in ('online', 'offline', 'draining', 'disabled'))
+);
+
+create table if not exists huai_execution_attempts (
+  attempt_id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references huai_tasks(task_id) on delete cascade,
+  gateway_id uuid not null references huai_gateway_instances(gateway_id) on delete restrict,
+  adapter_type text not null,
+  status text not null default 'queued',
+  attempt_no integer not null default 1,
+  idempotency_key text not null unique,
+  started_at timestamptz,
+  finished_at timestamptz,
+  error text,
+  telemetry jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (task_id, adapter_type, attempt_no),
+  constraint huai_execution_attempts_adapter_type_check check (adapter_type in ('claude_code', 'codex')),
+  constraint huai_execution_attempts_status_check check (status in ('queued', 'leased', 'running', 'cancelled', 'failed', 'retry_scheduled', 'completed'))
+);
+
+create table if not exists huai_message_bindings (
+  binding_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  event_id uuid references huai_events(event_id) on delete set null,
+  task_id uuid references huai_tasks(task_id) on delete set null,
+  proposal_id uuid references huai_task_proposals(proposal_id) on delete set null,
+  approval_id uuid references huai_approvals(approval_id) on delete set null,
+  report_id uuid references huai_reports(report_id) on delete set null,
+  verification_id uuid references huai_verifications(verification_id) on delete set null,
+  telegram_bot_id uuid references huai_telegram_bots(telegram_bot_id) on delete set null,
+  telegram_chat_id bigint not null,
+  telegram_message_id bigint not null,
+  binding_kind text not null,
+  direction text not null,
+  edit_of_binding_id uuid references huai_message_bindings(binding_id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique (telegram_chat_id, telegram_message_id),
+  constraint huai_message_bindings_kind_check check (binding_kind in ('event', 'task', 'report', 'verification', 'proposal', 'approval')),
+  constraint huai_message_bindings_direction_check check (direction in ('inbound', 'outbound'))
+);
+
+create table if not exists huai_audit_logs (
+  audit_id uuid primary key default gen_random_uuid(),
+  room_id uuid references huai_rooms(room_id) on delete set null,
+  actor_telegram_user_id bigint,
+  actor_id uuid references huai_ai_actors(actor_id),
+  action text not null,
+  target_table text not null,
+  target_id uuid,
+  before_data jsonb,
+  after_data jsonb,
+  reason text,
+  idempotency_key text unique,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists huai_recovery_snapshots (
+  snapshot_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  task_id uuid references huai_tasks(task_id) on delete set null,
+  snapshot_type text not null,
+  storage_uri text not null,
+  checksum text not null,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  constraint huai_recovery_snapshots_type_check check (snapshot_type in ('room', 'task', 'artifact', 'full_project'))
+);
+
+alter table huai_rooms enable row level security;
+alter table huai_room_members enable row level security;
+alter table huai_ai_actors enable row level security;
+alter table huai_telegram_bots enable row level security;
+alter table huai_telegram_updates enable row level security;
+alter table huai_tasks enable row level security;
+alter table huai_approvals enable row level security;
+alter table huai_verifications enable row level security;
+alter table huai_artifacts enable row level security;
+alter table huai_events enable row level security;
+alter table huai_outbox enable row level security;
+alter table huai_task_proposals enable row level security;
+alter table huai_task_dependencies enable row level security;
+alter table huai_reports enable row level security;
+alter table huai_revision_requests enable row level security;
+alter table huai_hook_attempts enable row level security;
+alter table huai_message_bindings enable row level security;
+alter table huai_gateway_instances enable row level security;
+alter table huai_execution_attempts enable row level security;
+alter table huai_audit_logs enable row level security;
+alter table huai_recovery_snapshots enable row level security;
+
+revoke all on all tables in schema public from anon, authenticated;
+revoke all on all sequences in schema public from anon, authenticated;
+
+
+
+

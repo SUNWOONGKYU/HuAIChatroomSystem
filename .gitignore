@@ -1,0 +1,32 @@
+# local operation secrets
+.env.operation.local
+.env*.local
+*.secret
+*.key
+
+# dependencies and build outputs
+node_modules/
+dist/
+coverage/
+
+# local runtime artifacts
+*.log
+*.pid
+__huai_*_smoke*.txt
+.codex-remote-attachments/
+supabase/.temp/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+# internal agent/session records
+sessions/
+_WorkLog/
+
+# local design/source binaries not needed for quick GitHub bootstrap
+*.docx
+*.jpg
+*.jpeg
+*.png

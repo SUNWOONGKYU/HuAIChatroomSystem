@@ -1,0 +1,58 @@
+﻿import { buildLocalGatewayRuntimeFromEnv, runLocalGatewayLoop } from "./runtime.js";
+import { createLocalGatewayHealthServer, maskHealthError, type LocalGatewayHealthState } from "./health.js";
+
+const runtime = buildLocalGatewayRuntimeFromEnv();
+let running = true;
+const healthState: LocalGatewayHealthState = {
+  startedAt: new Date().toISOString(),
+  configured: true,
+  consecutiveErrors: 0
+};
+const healthServer = maybeStartHealthServer();
+
+process.once("SIGINT", () => {
+  running = false;
+  healthServer?.close();
+});
+process.once("SIGTERM", () => {
+  running = false;
+  healthServer?.close();
+});
+
+await runLocalGatewayLoop(runtime.config, {
+  store: runtime.store,
+  runner: runtime.runner,
+  sink: runtime.sink,
+  setTimeout,
+  shouldContinue: () => running,
+  now: () => new Date(),
+  onResult(result) {
+    healthState.lastTickAt = new Date().toISOString();
+    healthState.consecutiveErrors = 0;
+    healthState.lastError = undefined;
+    console.log(JSON.stringify({ type: "local_gateway_tick", ...result }));
+  },
+  onError(error) {
+    healthState.consecutiveErrors += 1;
+    healthState.lastError = maskHealthError(error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(JSON.stringify({ type: "local_gateway_error", error: maskHealthError(message) }));
+  }
+});
+
+function maybeStartHealthServer() {
+  const rawPort = process.env.LOCAL_GATEWAY_HEALTH_PORT;
+  if (!rawPort) return undefined;
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port <= 0) throw new Error("invalid-env:LOCAL_GATEWAY_HEALTH_PORT");
+  const server = createLocalGatewayHealthServer({
+    state: healthState,
+    readinessCheck: async () => {
+      await runtime.store.leasePendingLocalGateway(0, new Date().toISOString());
+    }
+  });
+  server.listen(port, "127.0.0.1", () => {
+    console.log(JSON.stringify({ type: "local_gateway_health_listening", port }));
+  });
+  return server;
+}

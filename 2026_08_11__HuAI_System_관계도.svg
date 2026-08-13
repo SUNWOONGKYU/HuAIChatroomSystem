@@ -1,0 +1,28 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1040" viewBox="0 0 1700 1040" role="img" aria-label="HuAI Collab Chatroom System 관계도">
+  <defs>
+    <style>.bg{fill:#f7f8fb}.panel{fill:#fff;stroke:#d7dde8;stroke-width:2}.telegram{fill:#e9f7ef;stroke:#58a66f;stroke-width:3}.bot{fill:#fff;stroke:#7c8aa5;stroke-width:2}.core{fill:#222b3a}.db{fill:#eef2ff;stroke:#5967c8;stroke-width:3}.gw{fill:#fff7e6;stroke:#d28b20;stroke-width:3}.audit{fill:#fff0f4;stroke:#d14e7c;stroke-width:3}.trace{fill:#eefdf8;stroke:#159a78;stroke-width:3}.title{font:700 36px Arial,'Malgun Gothic',sans-serif;fill:#18202f}.h{font:700 24px Arial,'Malgun Gothic',sans-serif;fill:#18202f}.txt{font:18px Arial,'Malgun Gothic',sans-serif;fill:#30394b}.small{font:15px Arial,'Malgun Gothic',sans-serif;fill:#4d5a6e}.white{font:20px Arial,'Malgun Gothic',sans-serif;fill:#fff}.arrow{stroke:#596170;stroke-width:3;fill:none;marker-end:url(#arrow)}.dash{stroke:#9aa4b5;stroke-width:2;fill:none;stroke-dasharray:8 8;marker-end:url(#arrow)}</style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#596170"/></marker>
+  </defs>
+  <rect class="bg" width="1700" height="1040"/>
+  <text class="title" x="70" y="70">HuAI Collab Chatroom System 관계도</text>
+  <text class="txt" x="70" y="108">Telegram은 업무 화면, Supabase DB는 공식 상태, local-gateway는 실제 PC 실행 지점입니다.</text>
+  <rect class="telegram" x="70" y="160" width="390" height="660" rx="18"/>
+  <text class="h" x="105" y="205">Telegram 프로젝트방</text>
+  <text class="small" x="105" y="235">사람은 평소처럼 대화하고, AI에게만 멘션합니다.</text>
+  <rect class="bot" x="105" y="275" width="310" height="62" rx="12"/><text class="h" x="130" y="313">사람 참여자</text><text class="small" x="130" y="330">방장 / 고객 / 작업 참여자</text>
+  <rect class="bot" x="105" y="360" width="310" height="62" rx="12"/><text class="h" x="130" y="398">LeaderBot</text><text class="small" x="130" y="415">제안, 승인 흐름, 라우팅</text>
+  <rect class="bot" x="105" y="445" width="310" height="62" rx="12"/><text class="h" x="130" y="483">CodexBot</text><text class="small" x="130" y="500">Codex 실행 결과 보고</text>
+  <rect class="bot" x="105" y="530" width="310" height="62" rx="12"/><text class="h" x="130" y="568">ClaudeBot</text><text class="small" x="130" y="585">Claude Code 실행 결과 보고</text>
+  <rect class="audit" x="105" y="615" width="310" height="74" rx="12"/><text class="h" x="130" y="655">AuditBot</text><text class="small" x="130" y="674">의미 있는 결과 또는 직접 감사 검증</text>
+  <rect class="trace" x="105" y="715" width="310" height="62" rx="12"/><text class="h" x="130" y="752">조회 명령</text><text class="small" x="130" y="769">/tasks /task /search /trace</text>
+  <rect class="core" x="570" y="245" width="430" height="300" rx="18"/>
+  <text class="white" x="605" y="292">Central Orchestrator</text>
+  <text class="white" x="605" y="332">권한 확인</text><text class="white" x="605" y="370">작업 제안과 승인 처리</text><text class="white" x="605" y="408">역할별 실행자 라우팅</text><text class="white" x="605" y="446">중복 update / 버튼 멱등 처리</text><text class="white" x="605" y="484">조회 명령을 DB query로 변환</text>
+  <rect class="db" x="1140" y="155" width="430" height="320" rx="18"/>
+  <text class="h" x="1180" y="205">Supabase DB</text><text class="txt" x="1180" y="248">공식 작업 상태의 단일 기준</text><text class="small" x="1180" y="292">rooms / members / tasks / events</text><text class="small" x="1180" y="322">artifacts / verifications / outbox</text><text class="small" x="1180" y="352">message bindings / gateway instances</text><text class="small" x="1180" y="382">토큰 원문과 raw payload 노출 금지</text>
+  <rect class="gw" x="1140" y="565" width="430" height="250" rx="18"/>
+  <text class="h" x="1180" y="615">Local Gateway</text><text class="txt" x="1180" y="656">작업 PC에서 실제 실행</text><text class="small" x="1180" y="696">프로젝트 폴더 제한</text><text class="small" x="1180" y="726">Codex / Claude Code adapter</text><text class="small" x="1180" y="756">결과 요약 후 DB와 Telegram으로 반환</text>
+  <path class="arrow" d="M460 420 C520 420 520 395 570 395"/><path class="arrow" d="M1000 330 C1065 285 1075 285 1140 285"/><path class="arrow" d="M1355 475 L1355 565"/><path class="arrow" d="M1140 700 C1065 690 1070 525 1000 475"/><path class="arrow" d="M570 485 C510 540 515 665 460 750"/><path class="dash" d="M415 652 C560 780 870 870 1140 745"/><path class="arrow" d="M415 746 C520 740 520 505 570 505"/>
+  <rect class="panel" x="70" y="865" width="1500" height="95" rx="12"/><text class="txt" x="105" y="895">현재 표시 기준: 작업 제안 버튼은 실행 / 수정 / 반려, 검증 버튼은 검증 / 보완 / 완료입니다.</text><text class="small" x="105" y="922">Telegram에는 사람이 알아야 할 짧은 결과만 표시합니다. 내부 JSON·훅 로그·토큰·불필요한 경로 나열은 숨깁니다.</text><text class="small" x="105" y="947">/trace는 이벤트명, 산출물 URI, 검증 이력을 직접 보여주되 raw payload와 URI secret query 값은 마스킹합니다.</text>
+</svg>
+

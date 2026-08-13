@@ -1,0 +1,178 @@
+# GitHub Quick Start
+
+이 문서는 HuAI Collab Chatroom System을 처음 받은 사람이 Telegram 프로젝트방 기반 운영 환경을 빠르게 구축하기 위한 절차입니다.
+
+## 1. 준비물
+
+- Node.js 24 이상
+- Supabase 프로젝트 1개
+- 공개 HTTPS 주소 1개: Cloudflare Tunnel, reverse proxy, 또는 배포 호스트
+- 작업 PC 1대: Codex CLI와 Claude Code가 로그인된 상태
+- Telegram 비공개 그룹 1개
+- Telegram BotFather로 만든 봇 4개
+
+필수 봇:
+
+- LeaderBot
+- ClaudeBot
+- CodexBot
+- AuditBot
+
+네 봇은 반드시 서로 다른 Telegram bot token을 사용합니다. 통합 봇 하나가 여러 역할을 연기하는 구조는 사용하지 않습니다.
+
+## 2. 설치
+
+```powershell
+npm install
+npm run build
+npm run verify:operation-ready
+```
+
+`verify:operation-ready`가 통과하면 코드, 스키마, 문서, 보안 검사, Telegram 연동 스크립트가 기본 기준을 만족한 상태입니다.
+
+## 3. 환경변수 작성
+
+`.env.operation.example`을 참고해서 실제 운영 환경변수를 준비합니다. 실제 token, service role key, webhook secret은 GitHub에 올리지 않습니다.
+
+중요 값:
+
+```text
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+BOT_SERVICE_TELEGRAM_CHAT_ID=
+BOT_SERVICE_OWNER_TELEGRAM_USER_ID=
+BOT_SERVICE_PUBLIC_BASE_URL=
+BOT_SERVICE_PLATOON_BOT_TOKEN=
+BOT_SERVICE_CLAUDE_BOT_TOKEN=
+BOT_SERVICE_CODEX_BOT_TOKEN=
+BOT_SERVICE_AUDITOR_BOT_TOKEN=
+BOT_SERVICE_EXECUTION_TIMEOUT_MS=900000
+LOCAL_GATEWAY_MAX_RUNTIME_MS=900000
+LOCAL_GATEWAY_LEASE_MS=960000
+```
+
+운영 기본 실행 제한은 15분입니다. 더 긴 작업은 작은 단위로 나누는 것이 기본 원칙입니다.
+
+## 4. Supabase 준비
+
+1. Supabase SQL editor 또는 CLI에서 `supabase/schema.sql`을 적용합니다.
+2. 프로젝트방 정보를 seed SQL로 생성합니다.
+
+```powershell
+node scripts/generate-supabase-room-seed.mjs
+```
+
+3. 생성된 SQL을 검토한 뒤 Supabase에 적용합니다.
+
+저장 원칙:
+
+- Telegram chat id와 user id는 숫자 표시명이나 username이 아니라 실제 id로 저장합니다.
+- bot token 원문은 DB에 저장하지 않고 `env:...` 형태의 secret reference만 저장합니다.
+
+## 5. Telegram 연결
+
+BotFather에서 네 봇을 만들고 비공개 그룹에 초대합니다. 그룹 privacy는 운영 정책에 맞춰 설정하되, 이 시스템은 webhook으로 들어온 update를 중앙 오케스트레이터에서 권한 검사 후 처리합니다.
+
+webhook 명령 생성:
+
+```powershell
+node scripts/generate-telegram-webhook-commands.mjs
+```
+
+실제 적용 전 점검:
+
+```powershell
+node scripts/apply-telegram-webhooks.mjs --dry-run
+```
+
+실제 적용:
+
+```powershell
+node scripts/apply-telegram-webhooks.mjs --apply
+```
+
+## 6. 서비스 실행
+
+운영 환경변수를 로드한 상태에서 다음 두 서비스를 실행합니다.
+
+```powershell
+node dist/apps/bot-service/src/cli.js
+node dist/apps/local-gateway/src/cli.js
+```
+
+이미 실행 중인 운영 서비스를 현재 환경값으로 재시작하려면 다음 스크립트를 사용합니다.
+
+```powershell
+node scripts/restart-operation-services-from-live-env.mjs
+```
+
+상태 확인:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/healthz
+Invoke-RestMethod http://127.0.0.1:8797/healthz
+Invoke-RestMethod http://127.0.0.1:8797/readyz
+```
+
+## 7. Telegram smoke test
+
+Telegram 그룹에서 다음처럼 입력합니다.
+
+```text
+@leader_chatroom_bot CodexBot에게 gateway-report-rendering 테스트를 실행하고 통과 여부만 보고하게 해줘
+```
+
+정상 흐름:
+
+1. LeaderBot이 작업 제안을 표시합니다.
+2. 방장이 `실행` 버튼을 누릅니다.
+3. LeaderBot이 작업 시작을 짧게 보고합니다.
+4. CodexBot이 실행 결과를 보고합니다.
+5. Telegram에는 내부 JSON, hook log, token, stack trace가 노출되지 않습니다.
+
+## 8. 운영 사용법
+
+일반 작업:
+
+```text
+@leader_chatroom_bot 작업 내용을 말합니다
+```
+
+명시적 새 작업:
+
+```text
+/newtask@leader_chatroom_bot 작업 내용을 말합니다
+```
+
+조회:
+
+```text
+/tasks
+/task <task_id>
+/search <단어>
+/trace <task_id>
+```
+
+직접 감사:
+
+```text
+@audit_chatroom_bot 이 작업을 보안 검토해줘
+```
+
+버튼:
+
+- `실행`: 제안을 승인하고 실제 작업을 시작합니다.
+- `수정`: 제안을 다시 다듬도록 요청합니다.
+- `반려`: 제안을 진행하지 않습니다.
+- `검증`: AuditBot 재검증을 요청합니다.
+- `보완`: 작업자에게 보완을 요청합니다.
+- `완료`: 방장이 최종 완료 승인합니다.
+
+## 9. 배포 전 최종 확인
+
+```powershell
+npm run verify:operation-ready
+node scripts/verify-no-secrets.mjs
+```
+
+GitHub에 올리기 전에는 `.env.operation.local`, bot token, Supabase service role key, webhook secret, CLI 인증 파일이 포함되지 않았는지 반드시 확인합니다.
