@@ -155,7 +155,7 @@ export function classifyAgentFailure(result: ProcessRunResult): string | undefin
 
 function classifyFailureText(text: string): string | undefined {
   if (!text) return undefined;
-  if (/hit your (?:session |usage )?limit|usage limit|session limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(text)) return "agent-usage-limit";
+  if (/hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(text)) return "agent-usage-limit";
   if (/read-only sandbox|workspace is read-only|writing is blocked|patch rejected/i.test(text)) return "agent-write-blocked";
   if (/rejected by user approval settings/i.test(text)) return "agent-approval-blocked";
   if (/Unable to write|could not be created|could not be modified/i.test(text)) return "agent-reported-write-failure";

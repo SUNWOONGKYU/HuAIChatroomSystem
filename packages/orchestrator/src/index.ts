@@ -675,12 +675,13 @@ function stripRequestFiller(text: string): string {
 function summarizeTitle(text: string): string {
   const normalized = stripRequestFiller(text);
   if (!normalized) return "새 작업";
-  if (isMultiAiReviewRequest(normalized)) return "AI 협의 및 검증";
+  if (normalized.includes("추가로 개선할 사항") || normalized.includes("개선할 사항") || normalized.includes("개선 사항") || normalized.includes("보완점")) return "개선 사항 도출";
+  if (normalized.includes("완성도") || normalized.includes("평가")) return "완성도 평가";
+  if (isMultiAiReviewRequest(normalized)) return "다중 AI 검토";
   if (normalized.includes("자동감사") || normalized.includes("오딧") || normalized.includes("감사")) return "감사 흐름 조정";
   if (normalized.includes("권한") || normalized.includes("쓰기") || normalized.includes("write")) return "실행 권한 보정";
   if (normalized.includes("안됨") || normalized.includes("안 되") || normalized.includes("오류") || normalized.includes("반응")) return "장애 원인 수정";
   if (normalized.includes("진행 상황") || normalized.includes("진도")) return "진행 상황 보고";
-  if (normalized.includes("완성도") || normalized.includes("평가")) return "완성도 평가";
   if (normalized.includes("보안") || normalized.includes("검증")) return "검증 및 감사";
   if (normalized.includes("버튼") || normalized.includes("화면") || normalized.includes("문구") || normalized.includes("텔레그램")) return "Telegram 사용자 경험 개선";
   if (normalized.includes("문서") || normalized.includes("설명") || normalized.includes("관계도") || normalized.includes("흐름도")) return "문서 및 다이어그램 갱신";

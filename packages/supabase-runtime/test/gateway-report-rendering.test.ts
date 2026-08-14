@@ -99,6 +99,19 @@ test("gateway failure report exposes Claude session limit clearly", () => {
   assert.equal(text.includes("실행 중 오류가 발생했습니다"), false);
 });
 
+test("gateway failure report exposes Claude weekly limit clearly", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "claude_code" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "You've hit your weekly limit · resets Aug 15, 7pm (Asia/Seoul)" }]
+  });
+
+  assert.match(text, /ClaudeBot 현재 상태: 사용 한도 초과/);
+  assert.match(text, /CodexBot으로 작업/);
+  assert.equal(text.includes("weekly limit"), false);
+});
+
 test("gateway failure report exposes classified Claude usage limit without raw CLI output", () => {
   const text = renderGatewayReportText({
     request: { ...makeRequest(), adapterType: "claude_code" },

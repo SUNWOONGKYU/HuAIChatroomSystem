@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
 import { handleTelegramInput } from "../src/index.js";
@@ -73,7 +73,7 @@ test("multi AI mention creates collaboration proposal", () => {
   assert.equal(result.events[0]?.eventType, "proposal_created");
   assert.equal(result.events[0]?.payload.intent, "multi_ai_review");
   const proposalText = String(result.outbox[0]?.payload.text);
-  assert.match(proposalText, /AI 협의 작업 제안/);
+  assert.match(proposalText, /작업 제안/);
   assert.match(proposalText, /ClaudeBot과 CodexBot/);
   assert.match(proposalText, /AuditBot/);
 });
@@ -219,7 +219,11 @@ test("system improvement request becomes multi AI review", () => {
   const result = handleTelegramInput({ kind: "message", envelope: envelope("@platoon_bot 추가로 개선할 사항을 찾는 작업이다.") }, ownerContext(), ports());
   assert.equal(result.accepted, true);
   assert.equal(result.events[0]?.payload.intent, "multi_ai_review");
-  assert.match(String(result.outbox[0]?.payload.text), /AI 협의 작업 제안/);
+  assert.equal(result.events[0]?.payload.title, "개선 사항 도출");
+  const proposalText = String(result.outbox[0]?.payload.text);
+  assert.match(proposalText, /작업: 개선 사항 도출/);
+  assert.match(proposalText, /개선 후보/);
+  assert.doesNotMatch(proposalText, /AI 협의/);
 });
 
 test("task list command includes structured DB query payload", () => {

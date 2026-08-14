@@ -54,3 +54,11 @@ test("proposal messages use summarized work categories instead of raw prompts", 
   assert.equal(message.includes("\uC6D0\uC778\uC744 \uD655\uC778\uD558\uACE0 \uD544\uC694\uD55C \uCF54\uB4DC\uC640 \uC124\uC815\uC744 \uBC14\uB85C \uBCF4\uC815\uD569\uB2C8\uB2E4"), true);
   assert.equal(message.includes("@leader_chatroom_bot"), false);
 });
+test("multi ai improvement proposals preserve the user goal instead of saying ai discussion", () => {
+  const message = buildWorkProposalMessage({ kind: "multi_ai_review", title: "\uAC1C\uC120 \uC0AC\uD56D \uB3C4\uCD9C" });
+
+  assert.equal(message.includes("\uC791\uC5C5 \uC81C\uC548"), true);
+  assert.equal(message.includes("\uC791\uC5C5: \uAC1C\uC120 \uC0AC\uD56D \uB3C4\uCD9C"), true);
+  assert.equal(message.includes("\uAC1C\uC120 \uD6C4\uBCF4"), true);
+  assert.equal(message.includes("\u0041\u0049 \uD611\uC758"), false);
+});

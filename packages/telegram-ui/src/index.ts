@@ -80,13 +80,25 @@ export type WorkProposalMessageInput = {
 };
 
 export function buildWorkProposalMessage(input: WorkProposalMessageInput): string {
-  const heading = input.kind === "multi_ai_review" ? "\u0041\u0049 \uD611\uC758 \uC791\uC5C5 \uC81C\uC548" : input.kind === "task_followup" ? "\uD6C4\uC18D \uC791\uC5C5 \uC81C\uC548" : "\uC791\uC5C5 \uC81C\uC548";
+  const heading = input.kind === "task_followup" ? "\uD6C4\uC18D \uC791\uC5C5 \uC81C\uC548" : "\uC791\uC5C5 \uC81C\uC548";
   return [
     heading,
     "\uC791\uC5C5: " + input.title,
-    "\uCC98\uB9AC: " + (input.kind === "multi_ai_review" ? "ClaudeBot\uACFC CodexBot\uC774 \uAC01\uAC01 \uC758\uACAC\uC744 \uB0B4\uACE0 AuditBot\uC774 \uAC80\uC99D\uD569\uB2C8\uB2E4." : proposalPlanForTitle(input.title)),
-    "\uC644\uB8CC: " + (input.kind === "multi_ai_review" ? "\uC758\uACAC \uCC28\uC774\uC640 \uCD5C\uC885 \uAD8C\uACE0\uAC00 \uC0AC\uB78C\uC5D0\uAC8C \uC77D\uAE30 \uC27D\uAC8C \uBCF4\uACE0\uB429\uB2C8\uB2E4." : proposalDoneForTitle(input.title))
+    "\uCC98\uB9AC: " + (input.kind === "multi_ai_review" ? multiAiProposalPlanForTitle(input.title) : proposalPlanForTitle(input.title)),
+    "\uC644\uB8CC: " + (input.kind === "multi_ai_review" ? multiAiProposalDoneForTitle(input.title) : proposalDoneForTitle(input.title))
   ].join("\n");
+}
+
+function multiAiProposalPlanForTitle(title: string): string {
+  if (title.includes("\uAC1C\uC120")) return "ClaudeBot\uACFC CodexBot\uC774 \uAC1C\uC120 \uD6C4\uBCF4\uB97C \uAC01\uAC01 \uCC3E\uACE0 AuditBot\uC774 \uADFC\uAC70\uC640 \uC6B0\uC120\uC21C\uC704\uB97C \uAC80\uC99D\uD569\uB2C8\uB2E4.";
+  if (title.includes("\uC644\uC131\uB3C4") || title.includes("\uD3C9\uAC00")) return "ClaudeBot\uACFC CodexBot\uC774 \uBD84\uC57C\uBCC4 \uC644\uC131\uB3C4\uB97C \uAC01\uAC01 \uD3C9\uAC00\uD558\uACE0 AuditBot\uC774 \uD310\uC815\uC744 \uAC80\uC99D\uD569\uB2C8\uB2E4.";
+  return "ClaudeBot\uACFC CodexBot\uC774 \uAC01\uAC01 \uAC80\uD1A0\uD558\uACE0 AuditBot\uC774 \uADFC\uAC70\uC640 \uACB0\uB860\uC744 \uAC80\uC99D\uD569\uB2C8\uB2E4.";
+}
+
+function multiAiProposalDoneForTitle(title: string): string {
+  if (title.includes("\uAC1C\uC120")) return "\uAC1C\uC120 \uD6C4\uBCF4, \uADFC\uAC70, \uC6B0\uC120\uC21C\uC704, \uC2E4\uD589 \uAD8C\uACE0\uAC00 \uBCF4\uACE0\uB429\uB2C8\uB2E4.";
+  if (title.includes("\uC644\uC131\uB3C4") || title.includes("\uD3C9\uAC00")) return "\uBD84\uC57C\uBCC4 \uC810\uC218, \uADFC\uAC70, \uBCF4\uC644 \uC0AC\uD56D\uC774 \uBCF4\uACE0\uB429\uB2C8\uB2E4.";
+  return "\uAC01 AI\uC758 \uAC80\uD1A0 \uACB0\uACFC\uC640 AuditBot \uD310\uC815\uC774 \uC0AC\uB78C\uC774 \uC77D\uAE30 \uC27D\uAC8C \uBCF4\uACE0\uB429\uB2C8\uB2E4.";
 }
 
 function proposalPlanForTitle(title: string): string {
