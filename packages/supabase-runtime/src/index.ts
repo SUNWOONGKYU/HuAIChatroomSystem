@@ -1,12 +1,22 @@
-import { maskTelegramSensitiveText as maskSensitiveText } from "../../telegram-ui/src/sanitize.js";
+import { maskTelegramSensitiveText as maskSensitiveText, safeTelegramTraceUri } from "../../telegram-ui/src/sanitize.js";
 import {
+  type ArtifactManifest,
   type ExecutionRequest,
   type GatewayEvent,
   type OutboxRecord,
   type OutboxTarget,
   type TelegramSendResult
 } from "../../contracts/src/index.js";
-import { buildCompletionKeyboard } from "../../telegram-ui/src/index.js";
+import { buildCompletionKeyboard, buildProposalKeyboard } from "../../telegram-ui/src/index.js";
+import { isLeaderPlanningAttempt, LEADER_PLANNING_ATTEMPT_PREFIX } from "../../orchestrator/src/index.js";
+import { parseLeaderDecision, type LeaderPlan } from "../../orchestrator/src/leader-planning.js";
+import {
+  isForbiddenTransition,
+  transitionTaskStatus,
+  type TaskStatus,
+  type WorkflowContext,
+  type WorkflowEventType
+} from "../../workflow/src/index.js";
 
 export type SupabaseRuntimeConfig = {
   url: string;
@@ -115,6 +125,16 @@ export class SupabaseOutboxStore {
       }
     });
 
+    // 소대장 판단 결과는 작업 산출물이 아니라 제안이다. 여기서 갈라 처리하고 끝낸다.
+    if (isLeaderPlanningAttempt(input.request.attemptId)) {
+      await this.applyLeaderPlanningResult(input, telegramChatId, event.event_id);
+      return;
+    }
+
+    if (input.status === "completed") {
+      await this.persistCollectedArtifacts(input.request, input.events);
+    }
+
     if (input.status === "completed" && input.request.reportBotRole === "auditor") {
       await this.recordAuditVerification(input, resultSummary, telegramChatId, event.event_id);
     }
@@ -140,6 +160,158 @@ export class SupabaseOutboxStore {
         }
       });
     }
+  }
+
+  // 소대장이 대화를 읽고 내린 판단을 방에 올린다.
+  // 판단 실패는 조용히 넘기지 않는다 — 사람이 불렀는데 아무 반응이 없으면 시스템이 죽은 것처럼 보인다.
+  private async applyLeaderPlanningResult(
+    input: { request: ExecutionRequest; status: "completed" | "failed" | "rejected"; events: GatewayEvent[] },
+    telegramChatId: string,
+    sourceEventId: string
+  ): Promise<void> {
+    await this.rememberLeaderSession(input.request.actorId, input.events);
+
+    const idempotencyKey = "telegram-leader-plan:" + input.request.attemptId;
+    // Telegram 표시용 정리본(summarizeGatewayOutput)은 JSON 을 내부 로그로 보고 걷어낸다.
+    // 소대장 판단은 JSON 이므로 반드시 원본 stdout 에서 읽어야 한다.
+    const decision = input.status === "completed"
+      ? parseLeaderDecision(rawStdoutFromGatewayEvents(input.events))
+      : undefined;
+
+    if (!decision) {
+      await this.insertOutboxIdempotently({
+        event_id: sourceEventId,
+        idempotency_key: idempotencyKey,
+        target_kind: "telegram_bot",
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        payload: {
+          botRole: "platoon_leader",
+          telegramChatId,
+          text: "요청을 작업으로 정리하지 못했습니다. 조금 더 구체적으로 다시 말씀해 주세요.",
+          binding: { kind: "event", eventId: sourceEventId },
+          idempotencyKey
+        }
+      });
+      return;
+    }
+
+    if (decision.kind === "no_action") {
+      // 사람끼리 상의 중이라고 판단한 경우. 방을 어지럽히지 않고 기록만 남긴다.
+      await this.insertEventIdempotently({
+        room_id: input.request.roomId,
+        task_id: null,
+        event_type: "proposal_rejected",
+        idempotency_key: "leader-no-action:" + input.request.attemptId,
+        payload: { stage: "leader_no_action", reason: decision.reason, attemptId: input.request.attemptId }
+      });
+      return;
+    }
+
+    const plan = decision.plan;
+    const proposalId = "proposal_" + input.request.attemptId.replace(LEADER_PLANNING_ATTEMPT_PREFIX, "");
+    await this.insertEventIdempotently({
+      room_id: input.request.roomId,
+      task_id: null,
+      event_type: "proposal_created",
+      idempotency_key: "leader-proposal:" + input.request.attemptId,
+      payload: {
+        proposalId,
+        title: plan.title,
+        purpose: plan.purpose,
+        scope: plan.scope,
+        completionCriteria: plan.completionCriteria,
+        rawText: plan.scope,
+        requestedActorRole: plan.assignee === "both" ? undefined : plan.assignee,
+        intent: plan.assignee === "both" ? "multi_ai_review" : "new_task",
+        assignee: plan.assignee,
+        assigneeReason: plan.reason,
+        stage: "leader_planned",
+        createdAt: new Date().toISOString()
+      }
+    });
+
+    await this.insertOutboxIdempotently({
+      event_id: sourceEventId,
+      idempotency_key: idempotencyKey,
+      target_kind: "telegram_bot",
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      payload: {
+        botRole: "platoon_leader",
+        telegramChatId,
+        text: renderLeaderPlanMessage(plan),
+        keyboard: buildProposalKeyboard(proposalId),
+        binding: { kind: "event", eventId: sourceEventId },
+        idempotencyKey
+      }
+    });
+  }
+
+  // 다음 호출에서 --resume 으로 이어받도록 세션을 기억한다.
+  private async rememberLeaderSession(actorId: string, events: readonly GatewayEvent[]): Promise<void> {
+    if (!isUuid(actorId)) return;
+    const sessionId = sessionIdFromGatewayEvents(events);
+    if (!sessionId) return;
+    await this.client
+      .request("PATCH", "/huai_ai_actors?actor_id=eq." + encodeURIComponent(actorId), {
+        body: { cli_session_id: sessionId, cli_session_updated_at: new Date().toISOString() },
+        prefer: "return=minimal"
+      })
+      .then((response) => response.expectOk())
+      .catch(() => undefined);
+  }
+
+  private async persistCollectedArtifacts(request: ExecutionRequest, events: readonly GatewayEvent[]): Promise<void> {
+    if (!isUuid(request.taskId)) return;
+    const collected = collectedArtifactsFromEvents(events);
+    if (collected.length === 0) return;
+
+    const saved: Array<{ uri: string; version: string; isFinal: boolean }> = [];
+    for (const artifact of collected) {
+      const uri = artifactUri(artifact, request);
+      const existing = await this.client
+        .request(
+          "GET",
+          "/huai_artifacts?task_id=eq." + encodeURIComponent(request.taskId) +
+            "&uri=eq." + encodeURIComponent(uri) +
+            "&version=eq." + encodeURIComponent(artifact.version) +
+            "&select=artifact_id&limit=1"
+        )
+        .then((response) => response.json<Array<{ artifact_id: string }>>());
+      if (existing.length > 0) continue;
+
+      // 409 = huai_artifacts_task_uri_version_unique 위반.
+      // 리스 만료로 같은 attempt 가 in-flight 중복 실행됐다는 뜻이므로 정상 스킵한다.
+      const inserted = await this.client.request("POST", "/huai_artifacts", {
+        body: {
+          task_id: request.taskId,
+          uri,
+          version: artifact.version,
+          checksum: artifact.checksum,
+          author_actor_id: isUuid(request.actorId) ? request.actorId : null,
+          is_final: false
+        },
+        prefer: "return=minimal"
+      });
+      if (inserted.status === 409) continue;
+      await inserted.expectOk();
+      saved.push({ uri, version: artifact.version, isFinal: false });
+    }
+
+    if (saved.length === 0) return;
+
+    await this.insertEventIdempotently({
+      room_id: request.roomId,
+      task_id: request.taskId,
+      event_type: "artifact_saved",
+      idempotency_key: "artifact-saved:" + request.attemptId,
+      payload: {
+        taskId: request.taskId,
+        attemptId: request.attemptId,
+        actorId: request.actorId,
+        artifactCount: saved.length,
+        artifacts: saved
+      }
+    });
   }
 
   private async recordAuditVerification(input: {
@@ -170,6 +342,13 @@ export class SupabaseOutboxStore {
       }).then((response) => response.expectOk());
     }
 
+    // 불합격이 막다른 길이 되면 독립 검증 기능 전체가 장식이 된다.
+    // 기획서 H-07: "검증 의견 등록 -> 담당 작업팀에 수정 요구, 상태를 수정 중으로 전환".
+    if (verdict !== "pass") {
+      await this.requestRevisionAfterFailedVerification(input, resultSummary, telegramChatId, sourceEventId);
+      return;
+    }
+
     if (verdict === "pass") {
       await this.insertOutboxIdempotently({
         event_id: sourceEventId,
@@ -186,6 +365,97 @@ export class SupabaseOutboxStore {
         }
       });
     }
+  }
+
+  // 검증 불합격 -> 보완 요청. FR-014 / H-07 / AC-07.
+  // 담당팀에게 필수 수정을 전달하고 작업 상태를 revision_requested 로 전이시킨다.
+  // 검증자는 직접 수정하지 않는다 — 의견서만 남기고 수정은 원 담당팀이 한다(AC-07).
+  private async requestRevisionAfterFailedVerification(
+    input: { request: ExecutionRequest; events: GatewayEvent[]; occurredAt: string },
+    resultSummary: string,
+    telegramChatId: string,
+    sourceEventId: string
+  ): Promise<void> {
+    const taskId = input.request.taskId;
+    const requiredFixes = resultSummary || "검증에서 보완이 필요한 항목이 확인되었습니다.";
+    const reverifyScope = "보완된 변경 범위";
+
+    if (isUuid(taskId)) {
+      const existing = await this.client
+        .request("GET", "/huai_revision_requests?task_id=eq." + encodeURIComponent(taskId) + "&status=eq.open&select=revision_request_id&limit=1")
+        .then((response) => response.json<Array<{ revision_request_id: string }>>());
+      if (existing.length === 0) {
+        await this.client.request("POST", "/huai_revision_requests", {
+          body: {
+            task_id: taskId,
+            required_fixes: maskSensitiveText(requiredFixes).slice(0, 4000),
+            reverify_scope: reverifyScope,
+            status: "open"
+          },
+          prefer: "return=minimal"
+        }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
+      }
+    }
+
+    // 상태기계에 실제로 반영한다. 이벤트만 쌓고 상태를 안 바꾸면 작업은 여전히 검증 중으로 남는다.
+    const event = await this.insertEventIdempotently({
+      room_id: input.request.roomId,
+      task_id: isUuid(taskId) ? taskId : null,
+      event_type: "verification_failed_or_changes_requested",
+      idempotency_key: "verification-failed:" + input.request.attemptId,
+      payload: {
+        taskId,
+        attemptId: input.request.attemptId,
+        verifierActorId: input.request.actorId,
+        actorRole: "auditor",
+        requiredFixes: maskSensitiveText(requiredFixes).slice(0, 4000),
+        reverifyScope,
+        changedScope: "content",
+        occurredAt: input.occurredAt
+      }
+    });
+    await this.advanceTaskStatus(taskId, "verification_failed_or_changes_requested", { isVerifier: true, actorRole: "auditor" });
+
+    // 담당팀 봇으로 보완 요청을 보낸다. 검증자 봇이 아니라 작업자 봇이 받아야 한다.
+    const assigneeBotRole = input.request.adapterType === "claude_code" ? "claude_leader" : "codex_leader";
+    const idempotencyKey = "telegram-revision-request:" + input.request.attemptId;
+    await this.insertOutboxIdempotently({
+      event_id: event.event_id,
+      idempotency_key: idempotencyKey,
+      target_kind: "telegram_bot",
+      target: JSON.stringify({ kind: "telegram_bot", botRole: assigneeBotRole, telegramChatId }),
+      payload: {
+        botRole: assigneeBotRole,
+        telegramChatId,
+        text: renderRevisionRequestText(taskId, requiredFixes, reverifyScope),
+        binding: { kind: "task", taskId },
+        idempotencyKey
+      }
+    });
+  }
+
+  // 게이트웨이 결과 경로에서도 상태기계를 적용한다.
+  // 이 경로는 원래 이벤트만 쓰고 작업 상태를 바꾸지 않아, 실행 결과가 상태기계에 닿지 않았다.
+  private async advanceTaskStatus(
+    taskId: string,
+    eventType: WorkflowEventType,
+    context: Partial<WorkflowContext>
+  ): Promise<void> {
+    if (!isUuid(taskId)) return;
+    const rows = await this.client
+      .request("GET", "/huai_tasks?task_id=eq." + encodeURIComponent(taskId) + "&select=status")
+      .then((response) => response.json<Array<{ status: TaskStatus }>>());
+    const current = rows[0]?.status;
+    if (!current) return;
+    if (isForbiddenTransition(current, eventType)) return;
+    const decision = transitionTaskStatus(current, eventType, { ...gatewaySystemContext(), ...context });
+    if (!decision.allowed) return;
+    await this.client
+      .request("PATCH", "/huai_tasks?task_id=eq." + encodeURIComponent(taskId), {
+        body: { status: decision.nextStatus, updated_at: new Date().toISOString() },
+        prefer: "return=minimal"
+      })
+      .then((response) => response.expectOk());
   }
 
   private async enqueueMultiAiAuditIfReady(input: {
@@ -320,6 +590,84 @@ export class SupabaseOutboxStore {
   }
 }
 
+
+// 게이트웨이 결과 경로는 사람 행위자가 없다. 시스템 기본 맥락에서 출발하고
+// 호출부가 실제 역할(검증자 등)을 덮어쓴다.
+function gatewaySystemContext(): WorkflowContext {
+  return {
+    actorRole: "system",
+    isOwner: false,
+    isAssignee: false,
+    isVerifier: false,
+    hasOwnerTaskApproval: true,
+    hasVerificationPass: false,
+    hasCommanderCompletionDecision: false,
+    hasOwnerFinalApproval: false,
+    idempotencyKey: "gateway"
+  };
+}
+
+// 소대장이 정리한 작업을 방장이 읽고 판단할 수 있는 형태로 보여준다.
+// 내부 상태나 실행 로그는 넣지 않는다 (FR-005).
+export function renderLeaderPlanMessage(plan: LeaderPlan): string {
+  const assigneeLabel = plan.assignee === "both"
+    ? "ClaudeBot + CodexBot"
+    : plan.assignee === "claude_leader" ? "ClaudeBot" : "CodexBot";
+  return [
+    "작업 제안: " + plan.title,
+    "",
+    "목적: " + plan.purpose,
+    "범위: " + plan.scope,
+    "완료 조건: " + plan.completionCriteria,
+    "담당: " + assigneeLabel + (plan.reason ? " (" + plan.reason + ")" : "")
+  ].join("\n");
+}
+
+// 표시용 정리를 거치지 않은 원본 stdout. 소대장 판단 JSON 을 잃지 않으려면 필요하다.
+export function rawStdoutFromGatewayEvents(events: readonly GatewayEvent[]): string {
+  return events
+    .filter((event): event is GatewayEvent & { type: "stdout"; text: string } => event.type === "stdout" && typeof event.text === "string")
+    .map((event) => event.text)
+    .join("\n");
+}
+
+// claude --output-format json 은 session_id 를 돌려준다. stdout 에서 건져낸다.
+export function sessionIdFromGatewayEvents(events: readonly GatewayEvent[]): string | undefined {
+  for (const event of events) {
+    if (event.type !== "stdout" || typeof event.text !== "string") continue;
+    const match = event.text.match(/"session_id"\s*:\s*"([0-9a-fA-F-]{16,})"/);
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+export function renderRevisionRequestText(taskId: string, requiredFixes: string, reverifyScope: string): string {
+  return [
+    "검증 결과 보완이 필요합니다.",
+    "작업: " + taskId,
+    "",
+    "필수 수정:",
+    maskSensitiveText(requiredFixes).slice(0, 1500),
+    "",
+    "재검증 범위: " + reverifyScope,
+    "보완 후 다시 검증을 요청해 주세요."
+  ].join("\n");
+}
+
+export function collectedArtifactsFromEvents(events: readonly GatewayEvent[]): ArtifactManifest[] {
+  const byKey = new Map<string, ArtifactManifest>();
+  for (const event of events) {
+    if (event.type !== "artifact_collected") continue;
+    const artifact = event.artifact;
+    if (!artifact || typeof artifact.path !== "string" || typeof artifact.version !== "string") continue;
+    byKey.set(`${artifact.uri ?? artifact.path}::${artifact.version}`, artifact);
+  }
+  return [...byKey.values()];
+}
+
+export function artifactUri(artifact: ArtifactManifest, request: ExecutionRequest): string {
+  return safeTelegramTraceUri(artifact.uri ?? `${request.projectPath}/${artifact.path}`);
+}
 
 export function summarizeSupabaseSendResult(result: TelegramSendResult): Record<string, unknown> {
   return { telegramMessageId: result.telegramMessageId };
@@ -569,7 +917,17 @@ export function renderGatewayReportText(input: {
 }): string {
   if (input.status === "completed") {
     const summary = summarizeGatewayOutput(input.events);
-    return summary ? ["\uC791\uC5C5 \uC2E4\uD589 \uC644\uB8CC", "\uACB0\uACFC:", summary].join("\n") : "\uC791\uC5C5 \uC2E4\uD589 \uC644\uB8CC.";
+    const lines = summary
+      ? ["\uC791\uC5C5 \uC2E4\uD589 \uC644\uB8CC", "\uACB0\uACFC:", summary]
+      : ["\uC791\uC5C5 \uC2E4\uD589 \uC644\uB8CC."];
+    const collectionFailure = input.events.find(
+      (event): event is Extract<GatewayEvent, { type: "artifact_collection_failed" }> =>
+        event.type === "artifact_collection_failed"
+    );
+    if (collectionFailure) {
+      lines.push("\uC8FC\uC758: \uC0B0\uCD9C\uBB3C \uC218\uC9D1\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uC791\uC5C5 \uACB0\uACFC\uB294 \uC815\uC0C1\uC774\uC9C0\uB9CC \uC0B0\uCD9C\uBB3C \uC774\uB825\uC774 \uB0A8\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+    }
+    return lines.join("\n");
   }
 
   const outputSummary = summarizeGatewayOutput(input.events);

@@ -23,6 +23,7 @@ await runLocalGatewayLoop(runtime.config, {
   store: runtime.store,
   runner: runtime.runner,
   sink: runtime.sink,
+  artifacts: runtime.artifacts,
   setTimeout,
   shouldContinue: () => running,
   now: () => new Date(),

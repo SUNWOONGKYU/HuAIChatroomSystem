@@ -5,6 +5,10 @@ export type CommandPlan = {
   args: readonly string[];
   cwd: string;
   timeoutMs: number;
+  // 프롬프트는 명령줄이 아니라 stdin 으로 넘긴다.
+  // 대화 맥락 뭉치를 통째로 실으면 Windows 명령줄 길이 한계에 걸리고,
+  // 멀티라인이 잘려 나가는 문제도 생긴다.
+  stdinInput?: string;
 };
 
 export type AiAdapter = {
@@ -28,14 +32,17 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
         "--permission-mode",
         isAudit ? "dontAsk" : "acceptEdits",
         "--model",
-        "sonnet",
+        request.model ?? "sonnet",
         "--output-format",
         "text",
         `--add-dir=${request.projectPath}`,
-        request.prompt
+        // 이전 세션을 이어받으면 소대장이 방의 맥락을 기억한다.
+        ...(request.resumeSessionId ? ["--resume", request.resumeSessionId] : [])
       ],
       request.projectPath,
-      request.timeoutMs
+      request.timeoutMs,
+      // 프롬프트는 argv 가 아니라 stdin 으로. 대화 맥락 뭉치를 실으면 명령줄 길이 한계에 걸린다.
+      request.prompt
     );
   }
 
@@ -57,14 +64,15 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
   );
 }
 
-function platformPlan(command: string, args: readonly string[], cwd: string, timeoutMs: number): CommandPlan {
-  if (process.platform !== "win32") return { executable: command, args, cwd, timeoutMs };
+function platformPlan(command: string, args: readonly string[], cwd: string, timeoutMs: number, stdinInput?: string): CommandPlan {
+  if (process.platform !== "win32") return { executable: command, args, cwd, timeoutMs, stdinInput };
   if (command === "codex") {
     return {
       executable: process.execPath,
       args: [codexEntrypoint(), ...args],
       cwd,
-      timeoutMs
+      timeoutMs,
+      stdinInput
     };
   }
   if (command === "claude") {
@@ -72,10 +80,11 @@ function platformPlan(command: string, args: readonly string[], cwd: string, tim
       executable: claudeExecutable(),
       args,
       cwd,
-      timeoutMs
+      timeoutMs,
+      stdinInput
     };
   }
-  return { executable: command, args, cwd, timeoutMs };
+  return { executable: command, args, cwd, timeoutMs, stdinInput };
 }
 
 function codexEntrypoint(): string {

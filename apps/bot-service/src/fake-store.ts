@@ -16,11 +16,20 @@ import {
   type PersistedOutboxItem
 } from "./persistence.js";
 
+export type FakeStoredArtifact = {
+  taskId: string;
+  uri: string;
+  version: string;
+  checksum: string;
+  isFinal: boolean;
+};
+
 export type FakeStoreSnapshot = {
   events: PersistedEvent[];
   outbox: PersistedOutboxItem[];
   processedUpdates: string[];
   failedUpdates: Array<{ idempotencyKey: string; error: string }>;
+  artifacts: FakeStoredArtifact[];
 };
 
 export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxDispatcherStore {
@@ -28,6 +37,7 @@ export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxD
   private readonly outbox: PersistedOutboxItem[] = [];
   private readonly processedUpdates = new Set<string>();
   private readonly failedUpdates: Array<{ idempotencyKey: string; error: string }> = [];
+  private readonly artifacts: FakeStoredArtifact[] = [];
 
   async commitTelegramInputResult(input: Parameters<OrchestratorPersistencePort["commitTelegramInputResult"]>[0]) {
     const createdAt = new Date().toISOString();
@@ -152,6 +162,29 @@ export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxD
       createdAt
     });
 
+    if (input.status === "completed") {
+      const savedArtifacts = this.storeCollectedArtifacts(input.request, input.events);
+      if (savedArtifacts.length > 0) {
+        this.events.push({
+          eventId: randomUUID(),
+          eventType: "artifact_saved",
+          idempotencyKey: "artifact-saved:" + input.request.attemptId,
+          payload: {
+            taskId: input.request.taskId,
+            attemptId: input.request.attemptId,
+            actorId: input.request.actorId,
+            artifactCount: savedArtifacts.length,
+            artifacts: savedArtifacts.map((artifact) => ({
+              uri: artifact.uri,
+              version: artifact.version,
+              isFinal: artifact.isFinal
+            }))
+          },
+          createdAt
+        });
+      }
+    }
+
     if (input.status === "completed" && shouldRequestFakeAutomaticAudit(input.request)) {
       this.outbox.push({
         outboxId: randomUUID(),
@@ -182,8 +215,31 @@ export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxD
       events: structuredClone(this.events),
       outbox: structuredClone(this.outbox),
       processedUpdates: [...this.processedUpdates],
-      failedUpdates: structuredClone(this.failedUpdates)
+      failedUpdates: structuredClone(this.failedUpdates),
+      artifacts: structuredClone(this.artifacts)
     };
+  }
+
+  private storeCollectedArtifacts(request: ExecutionRequest, events: readonly GatewayEvent[]): FakeStoredArtifact[] {
+    const saved: FakeStoredArtifact[] = [];
+    for (const event of events) {
+      if (event.type !== "artifact_collected") continue;
+      const uri = event.artifact.uri ?? `${request.projectPath}/${event.artifact.path}`;
+      const duplicate = this.artifacts.some(
+        (item) => item.taskId === request.taskId && item.uri === uri && item.version === event.artifact.version
+      );
+      if (duplicate) continue;
+      const row: FakeStoredArtifact = {
+        taskId: request.taskId,
+        uri,
+        version: event.artifact.version,
+        checksum: event.artifact.checksum,
+        isFinal: false
+      };
+      this.artifacts.push(row);
+      saved.push(row);
+    }
+    return saved;
   }
 
   private requireOutbox(outboxId: string): PersistedOutboxItem {

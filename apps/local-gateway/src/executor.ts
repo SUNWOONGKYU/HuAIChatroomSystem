@@ -1,5 +1,6 @@
 import { type CommandPlan } from "../../../packages/ai-adapters/src/index.js";
 import {
+  type ArtifactManifest,
   type ExecutionRequest,
   type GatewayEvent
 } from "../../../packages/contracts/src/index.js";
@@ -8,6 +9,7 @@ import {
   planExecution,
   type GatewayPolicy
 } from "./index.js";
+import { type ArtifactCollector } from "./artifact-collector.js";
 
 export type ProcessRunResult = {
   exitCode: number;
@@ -34,6 +36,7 @@ export async function executeGatewayRequest(input: {
   policy: GatewayPolicy;
   runner: ProcessRunner;
   sink: GatewayEventSink;
+  artifacts?: ArtifactCollector;
   now?: () => string;
 }): Promise<ExecutionResult> {
   const now = input.now ?? (() => new Date().toISOString());
@@ -61,6 +64,8 @@ export async function executeGatewayRequest(input: {
     await input.sink.publish(event);
   }
 
+  const startedAtMs = startedAtMillis(events);
+
   try {
     const result = await input.runner.run(plan);
     if (result.stdout) {
@@ -82,6 +87,23 @@ export async function executeGatewayRequest(input: {
 
     const agentFailure = classifyAgentFailure(result, input.request.adapterType);
     if (result.exitCode === 0 && !agentFailure) {
+      const collection = await collectArtifacts(input.artifacts, input.request, startedAtMs);
+      for (const artifact of collection.artifacts) {
+        events.push({
+          type: "artifact_collected",
+          taskId: input.request.taskId,
+          attemptId: input.request.attemptId,
+          artifact
+        });
+      }
+      if (collection.failureReason) {
+        events.push({
+          type: "artifact_collection_failed",
+          taskId: input.request.taskId,
+          attemptId: input.request.attemptId,
+          reason: collection.failureReason
+        });
+      }
       events.push({ type: "completed", taskId: input.request.taskId, attemptId: input.request.attemptId, at: now() });
       await publishNewEvents(events, input.sink, 2);
       return { status: "completed", retryable: false, events };
@@ -126,6 +148,34 @@ export async function executeGatewayRequest(input: {
 async function publishNewEvents(events: GatewayEvent[], sink: GatewayEventSink, startIndex: number): Promise<void> {
   for (const event of events.slice(startIndex)) {
     await sink.publish(event);
+  }
+}
+
+function startedAtMillis(events: readonly GatewayEvent[]): number {
+  const started = events.find((event): event is Extract<GatewayEvent, { type: "started" }> => event.type === "started");
+  const parsed = started ? Date.parse(started.at) : Number.NaN;
+  return Number.isNaN(parsed) ? Date.now() : parsed;
+}
+
+// 수집 실패는 실행 자체를 실패시키지 않는다. 다만 조용히 삼키지도 않는다 —
+// 산출물이 통째로 유실됐는데 "완료"만 보고되면 운영자가 알 방법이 없다.
+async function collectArtifacts(
+  collector: ArtifactCollector | undefined,
+  request: ExecutionRequest,
+  startedAtMs: number
+): Promise<{ artifacts: ArtifactManifest[]; failureReason?: string }> {
+  if (!collector) return { artifacts: [] };
+  try {
+    return { artifacts: await collector.collect({ request, startedAtMs }) };
+  } catch (error) {
+    const reason = maskSensitiveOutput(error instanceof Error ? error.message : String(error));
+    console.error(JSON.stringify({
+      type: "artifact_collection_failed",
+      taskId: request.taskId,
+      attemptId: request.attemptId,
+      reason
+    }));
+    return { artifacts: [], failureReason: reason };
   }
 }
 

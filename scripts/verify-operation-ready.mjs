@@ -20,8 +20,13 @@ const STEPS = [
   "verify:gate27",
   "verify:gate28",
   "verify:gate29",
+  "verify:gate30",
+  "verify:gate31",
+  "verify:gate32",
+  "verify:gate33",
   "verify:local-gateway-runtime",
   "verify:local-gateway-consumer",
+  "verify:spec-coverage",
   "verify:structure",
   "verify:secrets"
 ];

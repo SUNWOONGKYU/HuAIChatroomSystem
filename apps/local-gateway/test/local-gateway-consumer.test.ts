@@ -69,7 +69,31 @@ test("executes allowed claude request through Windows executable path", async ()
   } else {
     assert.equal(plans[0]?.executable, "claude");
   }
-  assert.deepEqual(plans[0]?.args, ["--print", "--permission-mode", "acceptEdits", "--model", "sonnet", "--output-format", "text", `--add-dir=${process.cwd()}`, "do work"]);
+  // 프롬프트는 argv 가 아니라 stdin 으로 간다.
+  // 소대장이 대화 맥락 뭉치를 실어 보내면 Windows 명령줄 길이 한계에 걸리기 때문이다.
+  assert.deepEqual(plans[0]?.args, ["--print", "--permission-mode", "acceptEdits", "--model", "sonnet", "--output-format", "text", `--add-dir=${process.cwd()}`]);
+  assert.equal(plans[0]?.stdinInput, "do work");
+});
+
+test("resumeSessionId 가 있으면 이전 세션을 이어받는다", async () => {
+  const store = new FakeBotServiceStore();
+  const request = makeExecutionRequest({ projectPath: process.cwd(), adapterType: "claude_code", resumeSessionId: "sess-1", model: "opus" });
+  await seedLocalGatewayOutbox(store, request);
+  const plans: CommandPlan[] = [];
+
+  await runLocalGatewayConsumerOnce({
+    store,
+    policy: makePolicy(),
+    runner: { async run(plan) { plans.push(plan); return { exitCode: 0, stdout: "ok", stderr: "" }; } },
+    sink: { async publish() {} },
+    limit: 10,
+    leaseUntil: "2026-08-10T00:01:00.000Z",
+    maxAttempts: 3,
+    now: () => "2026-08-10T00:00:00.000Z"
+  });
+
+  assert.deepEqual(plans[0]?.args.slice(-2), ["--resume", "sess-1"], "세션을 이어받아야 소대장이 방의 맥락을 기억한다");
+  assert.equal(plans[0]?.args.includes("opus"), true, "역할별 모델 지정이 반영되어야 한다");
 });
 test("auditor codex execution stays read-only", async () => {
   const store = new FakeBotServiceStore();

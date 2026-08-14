@@ -14,8 +14,10 @@ import {
 } from "./persistence.js";
 import { type OutboxDispatcherStore } from "./outbox.js";
 import { makeTelegramUpdateIdempotencyKey } from "./index.js";
-import { transitionTaskStatus, type TaskStatus, type WorkflowContext, type WorkflowEventType } from "../../../packages/workflow/src/index.js";
+import { isForbiddenTransition, transitionTaskStatus, type TaskStatus, type WorkflowContext, type WorkflowEventType } from "../../../packages/workflow/src/index.js";
 import { summarizeSupabaseSendResult } from "../../../packages/supabase-runtime/src/index.js";
+import { isLeaderPlanningAttempt } from "../../../packages/orchestrator/src/index.js";
+import { buildLeaderPlanningPrompt, type RoomTurn } from "../../../packages/orchestrator/src/leader-planning.js";
 
 export type SupabaseStoreConfig = {
   url: string;
@@ -95,6 +97,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
           .then((response) => response.json<EventRow[]>());
 
     const persistedEvents = eventRows.map(toPersistedEvent);
+    // 승인 기록은 상태 전이보다 먼저 남긴다. 전이나 아웃박스 hydration 이 실패해도
+    // "누가 무엇을 승인했는가"는 사실로서 보존되어야 한다 (NFR-02).
+    await this.recordApprovals(eventsToPersist);
     await this.applyTaskTransitions(eventsToPersist);
     const fallbackEventId = persistedEvents[0]?.eventId;
     const outboxRows = input.result.outbox.map((item, index) => ({
@@ -105,7 +110,8 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       payload: item.payload
     }));
 
-    const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(outboxRows);
+    const planningHydratedRows = await this.hydrateLeaderPlanningRows(outboxRows);
+    const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows);
     const hydratedOutboxRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows);
     const insertedOutbox = await this.insertOutboxRowsIdempotently(hydratedOutboxRows);
 
@@ -167,12 +173,64 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     });
   }
 
+  // 방장·소대장의 결정을 append-only 원장에 남긴다.
+  // 승인 시점 대상은 proposal 일 수도 task 일 수도 있으므로 받은 식별자를 entity_ref 에 그대로 보존하고,
+  // task UUID 를 이미 아는 경우에만 task_id 를 채운다. 이 테이블은 이후 절대 UPDATE 하지 않는다.
+  private async recordApprovals(events: readonly OrchestratorPersistencePortEvent[]): Promise<void> {
+    const rows = events
+      .map((event) => {
+        const mapping = approvalRecordForEvent(event.eventType);
+        if (!mapping) return undefined;
+        const entityRef = approvalEntityRefFromPayload(event.payload);
+        const deciderId = approvalDeciderFromPayload(event.payload);
+        if (!entityRef || !deciderId) return undefined;
+        return {
+          room_id: this.roomId,
+          task_id: isUuid(entityRef) ? entityRef : null,
+          entity_ref: entityRef,
+          stage: mapping.stage,
+          decision: mapping.decision,
+          decider_telegram_user_id: deciderId,
+          reason: approvalReasonFromPayload(event.payload),
+          // 이벤트와 같은 재시도 도메인이므로 dedup 경계를 이벤트 멱등키와 일치시킨다.
+          idempotency_key: event.idempotencyKey
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+
+    for (const row of rows) {
+      const response = await this.client.request("POST", "/huai_approvals", {
+        body: row,
+        prefer: "return=minimal"
+      });
+      if (response.status === 409) continue;
+      await response.expectOk();
+    }
+  }
+
+  private async fetchApprovalIdForEntity(entityRef: string, stage: ApprovalStage): Promise<string | undefined> {
+    const rows = await this.client
+      .request(
+        "GET",
+        "/huai_approvals?entity_ref=eq." + encodeURIComponent(entityRef) +
+          "&stage=eq." + encodeURIComponent(stage) +
+          "&decision=eq.approved&select=approval_id&order=created_at.asc&limit=1"
+      )
+      .then((response) => response.json<Array<{ approval_id: string }>>());
+    return rows[0]?.approval_id;
+  }
+
   private async applyTaskTransitions(events: readonly OrchestratorPersistencePortEvent[]): Promise<void> {
     for (const event of events) {
       const taskId = taskIdFromEventPayload(event.payload);
       if (!taskId) continue;
       const current = await this.fetchTaskStatus(taskId);
       if (!current) continue;
+      // 명시적 금지 전이를 먼저 차단한다. 화이트리스트만으로도 막히지만,
+      // 금지 사유를 구분해 보고해야 승인 전 실행 시도를 운영 기록에서 식별할 수 있다.
+      if (isForbiddenTransition(current, event.eventType as WorkflowEventType)) {
+        throw new Error(`task-transition-forbidden:${event.eventType}:${current}`);
+      }
       const decision = transitionTaskStatus(current, event.eventType as WorkflowEventType, workflowContextFromEvent(event));
       if (!decision.allowed) throw new Error(`task-transition-not-allowed:${event.eventType}:${current}:${decision.reason}`);
       await this.patchTaskStatus(taskId, decision.nextStatus);
@@ -196,6 +254,82 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .then((rows) => {
         if (rows.length !== 1) throw new Error("task-state-conflict:patch");
       });
+  }
+
+  // 소대장 판단 요청에 방의 직전 논의를 실어준다.
+  // 오케스트레이터는 순수 함수라 DB 를 못 읽으므로 여기서 채운다.
+  private async hydrateLeaderPlanningRows(rows: OutboxInsertRow[]): Promise<OutboxInsertRow[]> {
+    const hydrated: OutboxInsertRow[] = [];
+    for (const row of rows) {
+      const request = executionRequestPayload(row.payload);
+      if (!request || typeof request.attemptId !== "string" || !isLeaderPlanningAttempt(request.attemptId)) {
+        hydrated.push(row);
+        continue;
+      }
+      const triggeringText = typeof row.payload.triggeringText === "string" ? row.payload.triggeringText : "";
+      const telegramChatId = typeof row.payload.telegramChatId === "string" ? row.payload.telegramChatId : undefined;
+      const turns = telegramChatId ? await this.fetchRecentRoomTurns(telegramChatId) : [];
+      const leader = await this.fetchLeaderActor();
+      hydrated.push({
+        ...row,
+        payload: {
+          ...row.payload,
+          executionRequest: {
+            ...request,
+            prompt: buildLeaderPlanningPrompt({ turns, triggeringText }),
+            ...(leader?.actor_id ? { actorId: leader.actor_id } : {}),
+            ...(leader?.cli_session_id ? { resumeSessionId: leader.cli_session_id } : {})
+          }
+        }
+      });
+    }
+    return hydrated;
+  }
+
+  // 직전 논의 뭉치 — 마지막으로 작업이 만들어진 시점 이후의 방 대화.
+  // 그 시점을 못 찾으면 최근 40건으로 자른다.
+  private async fetchRecentRoomTurns(telegramChatId: string): Promise<RoomTurn[]> {
+    const since = await this.fetchLastWorkCreatedAt();
+    const ownerId = await this.fetchOwnerTelegramUserId();
+    const filter = since ? "&received_at=gt." + encodeURIComponent(since) : "";
+    const rows = await this.client
+      .request(
+        "GET",
+        "/huai_telegram_updates?telegram_chat_id=eq." + encodeURIComponent(telegramChatId) +
+          filter + "&select=raw_update,received_at&order=received_at.desc&limit=40"
+      )
+      .then((response) => response.json<Array<{ raw_update: Record<string, unknown>; received_at?: string }>>())
+      .catch(() => []);
+
+    return rows
+      .map((row) => roomTurnFromRawUpdate(row.raw_update, ownerId))
+      .filter((turn): turn is RoomTurn => Boolean(turn))
+      .reverse();
+  }
+
+  private async fetchLastWorkCreatedAt(): Promise<string | undefined> {
+    const rows = await this.client
+      .request("GET", "/huai_events?room_id=eq." + encodeURIComponent(this.roomId) + "&event_type=eq.owner_task_approved&select=created_at&order=created_at.desc&limit=1")
+      .then((response) => response.json<Array<{ created_at?: string }>>())
+      .catch(() => []);
+    return rows[0]?.created_at;
+  }
+
+  private async fetchOwnerTelegramUserId(): Promise<string | undefined> {
+    const rows = await this.client
+      .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(this.roomId) + "&role=eq.owner&select=telegram_user_id&limit=1")
+      .then((response) => response.json<Array<{ telegram_user_id: string | number }>>())
+      .catch(() => []);
+    const value = rows[0]?.telegram_user_id;
+    return value === undefined || value === null ? undefined : String(value);
+  }
+
+  private async fetchLeaderActor(): Promise<{ actor_id: string; cli_session_id?: string } | undefined> {
+    const rows = await this.client
+      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(this.roomId) + "&role=eq.platoon_leader&select=actor_id,cli_session_id&limit=1")
+      .then((response) => response.json<Array<{ actor_id: string; cli_session_id?: string }>>())
+      .catch(() => []);
+    return rows[0];
   }
 
   private async hydrateExecutionOutboxPrompts(rows: Array<{
@@ -264,7 +398,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       const proposalId = typeof row.payload.proposalId === "string" ? row.payload.proposalId : undefined;
       if (!proposalId || !wanted.has(proposalId) || hints.has(proposalId)) continue;
       const prompt = proposalPromptFromPayload(row.payload);
-      if (prompt) hints.set(proposalId, { prompt, title: proposalTitleFromPayload(row.payload), requestedActorRole: proposalActorRoleFromPayload(row.payload), executionMode: proposalExecutionModeFromPayload(row.payload), rawText: proposalRequestTextFromPayload(row.payload) });
+      if (prompt) hints.set(proposalId, { prompt, title: proposalTitleFromPayload(row.payload), requestedActorRole: proposalActorRoleFromPayload(row.payload), executionMode: proposalExecutionModeFromPayload(row.payload), rawText: proposalRequestTextFromPayload(row.payload), purpose: proposalFieldFromPayload(row.payload, "purpose"), scope: proposalFieldFromPayload(row.payload, "scope"), completionCriteria: proposalFieldFromPayload(row.payload, "completionCriteria") });
     }
     return hints;
   }
@@ -313,9 +447,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         proposal_id: proposalUuid,
         room_id: this.roomId,
         title: hint.title,
-        purpose: hint.title,
-        scope: hint.rawText ?? hint.title,
-        completion_criteria: "승인된 요청의 실행 결과가 사람에게 보고됩니다.",
+        purpose: hint.purpose ?? hint.title,
+        scope: hint.scope ?? hint.rawText ?? hint.title,
+        completion_criteria: hint.completionCriteria ?? DEFAULT_COMPLETION_CRITERIA,
         status: "approved",
         decided_at: new Date().toISOString()
       },
@@ -325,17 +459,21 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   }
 
   private async insertTaskForProposal(proposalId: string, proposalUuid: string | undefined, hint: ProposalExecutionHint, assigneeActorId: string | undefined): Promise<Array<{ task_id: string }>> {
+    // 승인 원장은 절대 수정하지 않는다. 대신 task 를 만들 때 그 task 가 어느 승인으로 생겼는지를
+    // 여기서 한 번 연결한다 (AC-08 "완료 전 3단계 승인 증거").
+    const approvalId = await this.fetchApprovalIdForEntity(proposalId, "task_approval");
     const response = await this.client.request("POST", "/huai_tasks", {
       body: {
         room_id: this.roomId,
         proposal_id: proposalUuid ?? null,
+        approved_by_approval_id: approvalId ?? null,
         assignee_actor_id: assigneeActorId ?? null,
         idempotency_key: taskIdempotencyKey(proposalId),
         status: "scheduled",
         title: hint.title,
-        purpose: hint.title,
-        scope: hint.rawText ?? hint.title,
-        completion_criteria: "승인된 요청의 실행 결과가 사람에게 보고됩니다."
+        purpose: hint.purpose ?? hint.title,
+        scope: hint.scope ?? hint.rawText ?? hint.title,
+        completion_criteria: hint.completionCriteria ?? DEFAULT_COMPLETION_CRITERIA
       },
       prefer: "return=representation"
     });
@@ -622,6 +760,10 @@ type ProposalExecutionHint = {
   requestedActorRole?: ExecutionActorRole;
   executionMode?: "multi_ai_review";
   rawText?: string;
+  // FR-007: 제안 단계에서 구조화된 목적·범위·완료조건. 완료조건은 검증 판정 기준이 된다.
+  purpose?: string;
+  scope?: string;
+  completionCriteria?: string;
 };
 
 type OutboxInsertRow = {
@@ -777,10 +919,39 @@ function proposalExecutionModeFromPayload(payload: Record<string, unknown>): "mu
   return payload.intent === "multi_ai_review" ? "multi_ai_review" : undefined;
 }
 
+// Telegram raw update 에서 사람 발화만 뽑는다. 봇 메시지와 콜백은 대화가 아니다.
+function roomTurnFromRawUpdate(rawUpdate: Record<string, unknown>, ownerTelegramUserId: string | undefined): RoomTurn | undefined {
+  const message = (rawUpdate?.message ?? undefined) as Record<string, unknown> | undefined;
+  if (!message) return undefined;
+  const from = message.from as Record<string, unknown> | undefined;
+  if (from?.is_bot === true) return undefined;
+  const text = typeof message.text === "string" ? message.text : typeof message.caption === "string" ? message.caption : "";
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const userId = from?.id === undefined ? undefined : String(from.id);
+  const isOwner = Boolean(userId && ownerTelegramUserId && userId === ownerTelegramUserId);
+  const speaker = isOwner ? "방장" : nameFromTelegramUser(from, userId);
+  return { speaker, text: maskSensitiveText(trimmed).slice(0, 500), isOwner };
+}
+
+function nameFromTelegramUser(from: Record<string, unknown> | undefined, userId: string | undefined): string {
+  const first = typeof from?.first_name === "string" ? from.first_name.trim() : "";
+  const username = typeof from?.username === "string" ? from.username.trim() : "";
+  return first || username || (userId ? "참여자" + userId.slice(-4) : "참여자");
+}
+
 function proposalTitleFromPayload(payload: Record<string, unknown>): string {
   const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const rawText = typeof payload.rawText === "string" ? payload.rawText.trim() : "";
   return title || rawText.slice(0, 80) || "승인된 Telegram 작업";
+}
+
+// 완료 조건이 없으면 검증자가 판정할 기준이 없다. 제안 단계에서 못 뽑았을 때만 쓰는 최후 기본값.
+const DEFAULT_COMPLETION_CRITERIA = "요청 내용이 실제로 수행되어 결과가 확인 가능한 형태로 보고된다.";
+
+function proposalFieldFromPayload(payload: Record<string, unknown>, key: "purpose" | "scope" | "completionCriteria"): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function proposalRequestTextFromPayload(payload: Record<string, unknown>): string | undefined {
@@ -862,6 +1033,47 @@ function workflowContextFromEvent(event: OrchestratorPersistencePortEvent): Work
     changedScope: changedScopeValue(payload.changedScope),
     idempotencyKey: event.idempotencyKey
   };
+}
+
+// 승인성 이벤트 -> huai_approvals 의 (stage, decision).
+// 기획서 FR-008 / FR-015 / AC-08 이 요구하는 "완료 전 3단계 승인 증거"를 남기기 위한 매핑이다.
+// 여기에 없는 이벤트는 승인 기록 대상이 아니다.
+const APPROVAL_STAGE_BY_EVENT: Readonly<Record<string, { stage: ApprovalStage; decision: ApprovalDecision }>> = {
+  owner_task_approved: { stage: "task_approval", decision: "approved" },
+  owner_task_rejected: { stage: "task_approval", decision: "rejected" },
+  proposal_rejected: { stage: "task_approval", decision: "rejected" },
+  proposal_revision_requested: { stage: "task_approval", decision: "revision_requested" },
+  owner_mid_approved: { stage: "midpoint_approval", decision: "approved" },
+  owner_mid_rejected: { stage: "midpoint_approval", decision: "rejected" },
+  commander_completion_approved: { stage: "commander_completion", decision: "approved" },
+  owner_final_approved: { stage: "final_approval", decision: "approved" },
+  owner_final_rejected: { stage: "final_approval", decision: "rejected" },
+  owner_supplement_requested: { stage: "final_approval", decision: "revision_requested" },
+  owner_cancel_requested: { stage: "cancellation", decision: "cancelled" },
+  cancel_approved: { stage: "cancellation", decision: "cancelled" }
+};
+
+export type ApprovalStage = "task_approval" | "midpoint_approval" | "commander_completion" | "final_approval" | "cancellation";
+export type ApprovalDecision = "approved" | "rejected" | "revision_requested" | "cancelled";
+
+export function approvalRecordForEvent(eventType: string): { stage: ApprovalStage; decision: ApprovalDecision } | undefined {
+  return APPROVAL_STAGE_BY_EVENT[eventType];
+}
+
+// 승인 시점 대상 식별자. proposal 단계면 "proposal_xxxx", 이후 단계면 task UUID 가 들어온다.
+export function approvalEntityRefFromPayload(payload: Record<string, unknown>): string | undefined {
+  return stringValue(payload.entityId) ?? stringValue(payload.targetId) ?? stringValue(payload.taskId) ?? stringValue(payload.proposalId);
+}
+
+export function approvalDeciderFromPayload(payload: Record<string, unknown>): string | undefined {
+  const value = payload.telegramUserId ?? payload.deciderTelegramUserId;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return typeof value === "string" && /^\d+$/.test(value.trim()) ? value.trim() : undefined;
+}
+
+export function approvalReasonFromPayload(payload: Record<string, unknown>): string | null {
+  const reason = stringValue(payload.reason) ?? stringValue(payload.rawText);
+  return reason ? maskSensitiveText(reason).slice(0, 2000) : null;
 }
 
 function inferredActorRoleFromEvent(eventType: string): string {

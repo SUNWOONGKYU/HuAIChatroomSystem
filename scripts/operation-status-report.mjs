@@ -8,15 +8,16 @@ export async function buildOperationStatusReport(env, options = {}, fetchImpl = 
   const botHealthUrl = options.botHealthUrl ?? env.BOT_SERVICE_HEALTH_URL ?? "http://127.0.0.1:8787/healthz";
   const gatewayHealthUrl = options.gatewayHealthUrl ?? env.LOCAL_GATEWAY_HEALTH_URL ?? "http://127.0.0.1:8797/healthz";
 
-  const [botService, localGateway, updates, outbox] = await Promise.all([
+  const [botService, localGateway, updates, outbox, approvals] = await Promise.all([
     fetchHealth(fetchImpl, botHealthUrl),
     fetchHealth(fetchImpl, gatewayHealthUrl),
     fetchTelegramUpdateSummary(fetchImpl, baseUrl, serviceRoleKey),
-    inspectOutbox(env, fetchImpl)
+    inspectOutbox(env, fetchImpl),
+    fetchApprovalLedgerSummary(fetchImpl, baseUrl, serviceRoleKey)
   ]);
 
-  const status = decideOverallStatus({ botService, localGateway, updates, outbox });
-  return { generatedAt: now, status, botService, localGateway, updates, outbox };
+  const status = decideOverallStatus({ botService, localGateway, updates, outbox, approvals });
+  return { generatedAt: now, status, botService, localGateway, updates, outbox, approvals };
 }
 
 export function formatOperationStatusReport(report) {
@@ -24,8 +25,12 @@ export function formatOperationStatusReport(report) {
     `operation_status status=${report.status} generated_at=${report.generatedAt}`,
     `service bot_service=${formatHealth(report.botService)} local_gateway=${formatHealth(report.localGateway)}`,
     `telegram_updates scanned=${report.updates.scanned} processed=${report.updates.processed} failed=${report.updates.failed} pending=${report.updates.pending} latest_at=${report.updates.latestAt ?? "none"}`,
-    `outbox scanned=${report.outbox.scanned} sent=${report.outbox.counts.sent ?? 0} dead=${report.outbox.counts.dead ?? 0} retry_pending=${report.outbox.counts.retry_pending ?? 0} processing=${report.outbox.counts.processing ?? 0} stale_processing=${report.outbox.staleProcessing}`
+    `outbox scanned=${report.outbox.scanned} sent=${report.outbox.counts.sent ?? 0} dead=${report.outbox.counts.dead ?? 0} retry_pending=${report.outbox.counts.retry_pending ?? 0} processing=${report.outbox.counts.processing ?? 0} stale_processing=${report.outbox.staleProcessing}`,
+    `approvals scanned=${report.approvals.scanned} task_approved=${report.approvals.taskApproved} orphaned=${report.approvals.orphaned}${report.approvals.error ? ` error=${report.approvals.error}` : ""}`
   ];
+  for (const row of report.approvals.orphanRows ?? []) {
+    lines.push(`approval_orphan entity_ref=${row.entityRef} decided_at=${row.decidedAt} action=승인은 기록됐으나 대응 task 가 없다. 아웃박스 hydration 실패 여부를 확인하라.`);
+  }
   for (const row of report.outbox.problemRows ?? []) {
     lines.push(`outbox_problem id=${row.id} target=${row.targetKind} status=${row.status} attempts=${row.attempts} kind=${row.kind} action=${row.action}`);
   }
@@ -65,10 +70,63 @@ async function fetchTelegramUpdateSummary(fetchImpl, baseUrl, serviceRoleKey) {
   return summary;
 }
 
-function decideOverallStatus({ botService, localGateway, updates, outbox }) {
+// 고아 승인 탐지.
+// 승인 원장은 append-only 라서 "승인은 났는데 task 물질화가 실패한" 상태를 제약으로 막지 않는다.
+// 대신 여기서 탐지한다. task_approval/approved 인데 대응 task 가 없으면 아웃박스 hydration 이 실패한 것이다.
+// (거부·취소·중간승인은 원래 task 가 없을 수 있으므로 task_approval + approved 만 대상으로 한다.)
+async function fetchApprovalLedgerSummary(fetchImpl, baseUrl, serviceRoleKey) {
+  const summary = { scanned: 0, taskApproved: 0, orphaned: 0, orphanRows: [], error: undefined };
+  let approvals;
+  try {
+    approvals = await getJson(
+      fetchImpl,
+      `${baseUrl}/rest/v1/huai_approvals?select=approval_id,stage,decision,entity_ref,task_id,created_at&order=created_at.desc&limit=200`,
+      serviceRoleKey
+    );
+  } catch (error) {
+    // 조회 실패를 조용히 넘기면 점검 기능이 죽어도 아무도 모른다. 상태에 드러낸다.
+    summary.error = sanitize(error instanceof Error ? error.message : String(error));
+    return summary;
+  }
+  summary.scanned = approvals.length;
+  const candidates = [];
+  for (const row of approvals) {
+    if (row.stage !== "task_approval" || row.decision !== "approved") continue;
+    summary.taskApproved += 1;
+    if (row.task_id) continue;
+    if (typeof row.entity_ref === "string" && row.entity_ref) candidates.push(row);
+  }
+  if (candidates.length === 0) return summary;
+
+  const keys = candidates.map((row) => `"task:approved-proposal:${String(row.entity_ref).replace(/"/g, "")}"`).join(",");
+  let tasks;
+  try {
+    tasks = await getJson(
+      fetchImpl,
+      `${baseUrl}/rest/v1/huai_tasks?idempotency_key=in.(${encodeURIComponent(keys)})&select=idempotency_key`,
+      serviceRoleKey
+    );
+  } catch (error) {
+    summary.error = sanitize(error instanceof Error ? error.message : String(error));
+    return summary;
+  }
+  const materialized = new Set(tasks.map((task) => task.idempotency_key));
+
+  for (const row of candidates) {
+    if (materialized.has(`task:approved-proposal:${row.entity_ref}`)) continue;
+    summary.orphaned += 1;
+    if (summary.orphanRows.length < 10) {
+      summary.orphanRows.push({ entityRef: row.entity_ref, decidedAt: row.created_at });
+    }
+  }
+  return summary;
+}
+
+function decideOverallStatus({ botService, localGateway, updates, outbox, approvals }) {
   if (!botService.ok || !localGateway.ok) return "down";
   if (localGateway.hasLastError || (localGateway.consecutiveErrors ?? 0) > 0 || outbox.staleProcessing > 0) return "attention";
   if ((outbox.counts.dead ?? 0) > 0 || updates.failed > 0 || updates.pending > 0) return "attention";
+  if ((approvals?.orphaned ?? 0) > 0 || approvals?.error) return "attention";
   return "ok";
 }
 

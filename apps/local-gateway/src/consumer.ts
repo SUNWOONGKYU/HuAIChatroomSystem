@@ -1,6 +1,7 @@
 ﻿import { assertExecutionRequestPayload, type ExecutionRequest, type GatewayEvent, type OutboxRecord } from "../../../packages/contracts/src/index.js";
 import { executeGatewayRequest, type GatewayEventSink, type ProcessRunner } from "./executor.js";
 import { maskSensitiveOutput, type GatewayPolicy } from "./index.js";
+import { type ArtifactCollector } from "./artifact-collector.js";
 
 export type LocalGatewayOutboxStore = {
   leasePendingLocalGateway(limit: number, leaseUntil: string): Promise<OutboxRecord[]>;
@@ -29,6 +30,7 @@ export async function runLocalGatewayConsumerOnce(input: {
   policy: GatewayPolicy;
   runner: ProcessRunner;
   sink: GatewayEventSink;
+  artifacts?: ArtifactCollector;
   limit: number;
   leaseUntil: string;
   maxAttempts: number;
@@ -52,6 +54,7 @@ export async function runLocalGatewayConsumerOnce(input: {
       policy: input.policy,
       runner: input.runner,
       sink: input.sink,
+      artifacts: input.artifacts,
       now: input.now
     });
 

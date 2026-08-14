@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
-import { handleTelegramInput } from "../src/index.js";
+import { handleTelegramInput,
+  isLeaderPlanningAttempt
+} from "../src/index.js";
 
 test("owner verify command routes an auditor bot message", () => {
   const result = handleTelegramInput(
@@ -43,7 +45,7 @@ test("final approve callback routes platoon leader completion message", () => {
   assert.match(String(result.outbox[0]?.payload.text), /최종 승인 완료: task-1/);
 });
 
-test("mention message strips leader mention and creates a structured proposal", () => {
+test("소대장 멘션은 즉시 제안이 아니라 판단 실행을 요청한다", () => {
   const result = handleTelegramInput(
     { kind: "message", envelope: envelope("@platoon_bot build the mention router") },
     ownerContext(),
@@ -51,18 +53,24 @@ test("mention message strips leader mention and creates a structured proposal", 
   );
 
   assert.equal(result.accepted, true);
-  assert.equal(result.events[0]?.eventType, "proposal_created");
-  assert.equal(result.events[0]?.payload.rawText, "build the mention router");
-  assert.equal(result.events[0]?.payload.intent, "new_task");
-  const proposalText = String(result.outbox[0]?.payload.text);
-  assert.match(proposalText, /작업 제안/);
-  assert.match(proposalText, /작업:/);
-  assert.match(proposalText, /처리:/);
-  assert.match(proposalText, /완료:/);
-  assert.doesNotMatch(proposalText, /버튼:/);
-  assert.doesNotMatch(proposalText, /build the mention router/);
+  // 정규식으로 제목을 고르던 자리에 실제 판단이 들어갔다.
+  // 방의 직전 논의를 읽고 목적·범위·완료조건·담당을 재구성한 뒤에 제안이 올라간다.
+  const gateway = result.outbox.find((item) => item.target.kind === "local_gateway");
+  assert.ok(gateway, "판단 실행이 게이트웨이로 나가야 한다");
+  const request = gateway.payload.executionRequest as { attemptId: string; adapterType: string; reportBotRole: string };
+  assert.equal(isLeaderPlanningAttempt(request.attemptId), true);
+  assert.equal(request.adapterType, "claude_code");
+  assert.equal(request.reportBotRole, "platoon_leader");
+  assert.equal(result.events[0]?.payload.stage, "leader_planning_requested");
+  assert.equal(result.events[0]?.payload.triggeringText, "build the mention router");
+  assert.equal(
+    result.outbox.some((item) => item.payload.keyboard),
+    false,
+    "판단 전에는 승인 버튼을 올리지 않는다"
+  );
 });
-test("multi AI mention creates collaboration proposal", () => {
+
+test("다중 AI 요청도 소대장이 판단해 배분한다", () => {
   const result = handleTelegramInput(
     { kind: "message", envelope: envelope("@platoon_bot ClaudeBot과 CodexBot이 각각 의견 내고 AuditBot이 검증해서 결론 내줘") },
     ownerContext(),
@@ -70,24 +78,27 @@ test("multi AI mention creates collaboration proposal", () => {
   );
 
   assert.equal(result.accepted, true);
-  assert.equal(result.events[0]?.eventType, "proposal_created");
-  assert.equal(result.events[0]?.payload.intent, "multi_ai_review");
-  const proposalText = String(result.outbox[0]?.payload.text);
-  assert.match(proposalText, /작업 제안/);
-  assert.match(proposalText, /ClaudeBot과 CodexBot/);
-  assert.match(proposalText, /AuditBot/);
+  // 누구에게 시킬지는 정규식이 봇 이름을 찾는 게 아니라 소대장이 판단한다.
+  const gateway = result.outbox.find((item) => item.target.kind === "local_gateway");
+  assert.ok(gateway, "판단 실행이 게이트웨이로 나가야 한다");
+  assert.equal(isLeaderPlanningAttempt((gateway.payload.executionRequest as { attemptId: string }).attemptId), true);
+  assert.match(String(gateway.payload.triggeringText), /ClaudeBot과 CodexBot/);
 });
 
-test("leader mention stores Claude execution actor hint", () => {
+test("담당 지목이 있어도 소대장이 판단해 배분한다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 클로드 분대장 불러서 상태 확인해") },
+    { kind: "message", envelope: envelope("@platoon_bot Claude Code로 이 코드 점검해줘") },
     ownerContext(),
     ports()
   );
 
   assert.equal(result.accepted, true);
-  assert.equal(result.events[0]?.eventType, "proposal_created");
-  assert.equal(result.events[0]?.payload.requestedActorRole, "claude_leader");
+  // 예전에는 정규식이 "Claude" 를 찾아 담당을 못박았다.
+  // 이제는 요청 원문을 소대장에게 넘기고 소대장이 배분을 판단한다.
+  const gateway = result.outbox.find((item) => item.target.kind === "local_gateway");
+  assert.ok(gateway);
+  assert.match(String(gateway.payload.triggeringText), /Claude Code/);
+  assert.equal(isLeaderPlanningAttempt((gateway.payload.executionRequest as { attemptId: string }).attemptId), true);
 });
 
 test("bare continuation mention asks for task clarification", () => {
@@ -188,18 +199,17 @@ test("caption text and reply context are parsed from Telegram updates", () => {
   assert.deepEqual(parsed.attachmentKinds, ["photo"]);
 });
 
-test("explicit proposal continuation becomes a follow-up proposal", () => {
+test("기존 작업 후속 요청은 연결을 잃지 않는다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot proposal_abc-123 계속해") },
+    { kind: "message", envelope: envelope("@platoon_bot proposal_abc 이어서 진행해줘") },
     ownerContext(),
     ports()
   );
 
   assert.equal(result.accepted, true);
-  assert.equal(result.events[0]?.eventType, "proposal_created");
+  // 소대장이 판단하더라도 어느 작업의 후속인지는 보존되어야 한다.
+  assert.equal(result.events[0]?.payload.targetId, "proposal_abc");
   assert.equal(result.events[0]?.payload.intent, "task_followup");
-  assert.equal(result.events[0]?.payload.targetId, "proposal_abc-123");
-  assert.match(String(result.outbox[0]?.payload.text), /후속 작업 제안/);
 });
 
 function envelope(messageText?: string, callbackData?: string, botRole: "platoon_leader" | "claude_leader" | "codex_leader" | "auditor" = "platoon_leader", botUsername = "platoon_bot", options: { replyToMessageText?: string; attachmentKinds?: readonly string[] } = {}): TelegramUpdateEnvelope {
@@ -305,15 +315,18 @@ test("owner approval immediately posts execution-started message before gateway 
   assert.equal(result.outbox[1]?.target.kind, "local_gateway");
 });
 
-test("system improvement request becomes multi AI review", () => {
-  const result = handleTelegramInput({ kind: "message", envelope: envelope("@platoon_bot 추가로 개선할 사항을 찾는 작업이다.") }, ownerContext(), ports());
+test("개선 요청도 소대장이 읽고 배분을 판단한다", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("@platoon_bot 추가로 개선할 사항을 찾아줘") },
+    ownerContext(),
+    ports()
+  );
+
   assert.equal(result.accepted, true);
-  assert.equal(result.events[0]?.payload.intent, "multi_ai_review");
-  assert.equal(result.events[0]?.payload.title, "개선 사항 도출");
-  const proposalText = String(result.outbox[0]?.payload.text);
-  assert.match(proposalText, /작업: 개선 사항 도출/);
-  assert.match(proposalText, /개선 후보/);
-  assert.doesNotMatch(proposalText, /AI 협의/);
+  const gateway = result.outbox.find((item) => item.target.kind === "local_gateway");
+  assert.ok(gateway, "판단 실행이 나가야 한다");
+  assert.match(String(gateway.payload.triggeringText), /개선할 사항/);
+  assert.equal(result.events[0]?.payload.intent, "new_task");
 });
 
 test("task list command includes structured DB query payload", () => {

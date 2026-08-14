@@ -104,6 +104,7 @@ test("hydrates approved local gateway execution prompt from proposal event", asy
     jsonResponse(200, [{ payload: { proposalId, rawText, title: "fallback title" } }]),
     jsonResponse(200, []),
     jsonResponse(201, []),
+    jsonResponse(200, []),
     jsonResponse(201, [{ task_id: taskId }]),
     jsonResponse(201, [{ huai_outbox_id: "outbox-local-1", event_id: null, idempotency_key: "gateway:execution:1", target_kind: "local_gateway", target: JSON.stringify({ kind: "local_gateway", gatewayId: "gateway-local" }), payload: { executionRequest: { taskId, prompt: rawText } }, status: "pending", attempts: 0, created_at: "2026-08-10T00:00:00.000Z" }])
   ]);
@@ -112,9 +113,9 @@ test("hydrates approved local gateway execution prompt from proposal event", asy
   await store.commitTelegramInputResult(makeOutboxCommit("gateway:execution:1", { kind: "local_gateway", gatewayId: "gateway-local" }, { executionRequest: { taskId: proposalId, prompt: "Execute approved task " + proposalId } }));
 
   assert.match(calls.requests[0]?.url ?? "", /huai_events/);
-  const hydratedPrompt = calls.requests[4]?.body[0].payload.executionRequest.prompt;
-  assert.equal(calls.requests[3]?.body.idempotency_key, "task:approved-proposal:" + proposalId);
-  assert.equal(calls.requests[4]?.body[0].payload.executionRequest.taskId, taskId);
+  const hydratedPrompt = calls.requests[5]?.body[0].payload.executionRequest.prompt;
+  assert.equal(calls.requests[4]?.body.idempotency_key, "task:approved-proposal:" + proposalId);
+  assert.equal(calls.requests[5]?.body[0].payload.executionRequest.taskId, taskId);
   assert.equal(typeof hydratedPrompt, "string");
   assert.match(hydratedPrompt, /USER_REQUEST:\nprint only OK/);
   assert.match(hydratedPrompt, /Do not call this product an MVP/);
@@ -129,6 +130,7 @@ test("hydrates approved execution actor from requested proposal role", async () 
     jsonResponse(200, [{ actor_id: "actor-claude", role: "claude_leader", adapter_type: "claude_code" }]),
     jsonResponse(200, []),
     jsonResponse(201, []),
+    jsonResponse(200, []),
     jsonResponse(201, [{ task_id: taskId }]),
     jsonResponse(201, [{ huai_outbox_id: "outbox-local-2", event_id: null, idempotency_key: "gateway:execution:2", target_kind: "local_gateway", target: JSON.stringify({ kind: "local_gateway", gatewayId: "gateway-local" }), payload: { executionRequest: { taskId, actorId: "actor-claude", adapterType: "claude_code" } }, status: "pending", attempts: 0, created_at: "2026-08-10T00:00:00.000Z" }])
   ]);
@@ -136,7 +138,7 @@ test("hydrates approved execution actor from requested proposal role", async () 
 
   await store.commitTelegramInputResult(makeOutboxCommit("gateway:execution:2", { kind: "local_gateway", gatewayId: "gateway-local" }, { executionRequest: { taskId: proposalId, actorId: "actor-codex", adapterType: "codex", prompt: "Execute approved task " + proposalId } }));
 
-  const executionRequest = calls.requests[5]?.body[0].payload.executionRequest;
+  const executionRequest = calls.requests[6]?.body[0].payload.executionRequest;
   assert.equal(executionRequest.actorId, "actor-claude");
   assert.equal(executionRequest.adapterType, "claude_code");
   assert.match(executionRequest.prompt, /USER_REQUEST:\nClaude Code로 점검해/);
@@ -153,6 +155,7 @@ test("expands multi AI approval into claude and codex executions before audit", 
     ]),
     jsonResponse(200, []),
     jsonResponse(201, []),
+    jsonResponse(200, []),
     jsonResponse(201, [{ task_id: taskId }]),
     jsonResponse(201, [])
   ]);
@@ -160,7 +163,7 @@ test("expands multi AI approval into claude and codex executions before audit", 
 
   await store.commitTelegramInputResult(makeOutboxCommit("gateway:execution:3", { kind: "local_gateway", gatewayId: "gateway-local" }, { executionRequest: { taskId: proposalId, actorId: "actor-codex", adapterType: "codex", attemptId: "attempt-1", prompt: "Execute approved task " + proposalId } }));
 
-  const insertedRows = calls.requests[5]?.body;
+  const insertedRows = calls.requests[6]?.body;
   assert.equal(insertedRows.length, 2);
   assert.deepEqual(insertedRows.map((row: any) => row.idempotency_key), ["gateway:execution:3:claude", "gateway:execution:3:codex"]);
   assert.equal(insertedRows[0].payload.executionRequest.adapterType, "claude_code");

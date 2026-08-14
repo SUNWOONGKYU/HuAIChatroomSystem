@@ -4,6 +4,7 @@ import { type GatewayEventSink, type ProcessRunner } from "./executor.js";
 import { type GatewayPolicy } from "./index.js";
 import { createNodeProcessRunner } from "./process-runner.js";
 import { buildLocalGatewaySupabaseOutboxStoreFromEnv } from "./supabase-store.js";
+import { createArtifactCollector, type ArtifactCollector } from "./artifact-collector.js";
 
 export type LocalGatewayRuntimeConfig = {
   intervalMs: number;
@@ -18,6 +19,7 @@ export type LocalGatewayLoopDependencies = {
   store: LocalGatewayOutboxStore;
   runner: ProcessRunner;
   sink: GatewayEventSink;
+  artifacts?: ArtifactCollector;
   setTimeout: (callback: () => void, ms: number) => unknown;
   shouldContinue: () => boolean;
   now: () => Date;
@@ -38,6 +40,7 @@ export async function runLocalGatewayLoop(
         policy: config.policy,
         runner: deps.runner,
         sink: deps.sink,
+        artifacts: deps.artifacts,
         limit: config.limit,
         leaseUntil: new Date(now.getTime() + config.leaseMs).toISOString(),
         maxAttempts: config.maxAttempts,
@@ -64,7 +67,8 @@ export function buildLocalGatewayRuntimeFromEnv(env: NodeJS.ProcessEnv = process
     config,
     store: buildLocalGatewaySupabaseOutboxStoreFromEnv(env),
     runner: createNodeProcessRunner(),
-    sink: createConsoleGatewayEventSink()
+    sink: createConsoleGatewayEventSink(),
+    artifacts: createArtifactCollector()
   };
 }
 

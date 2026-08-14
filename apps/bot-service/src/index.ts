@@ -6,6 +6,7 @@ import {
 } from "../../../packages/orchestrator/src/index.js";
 import {
   TelegramUpdateEnvelope,
+  isAddressedToBot,
   isKnownCommand,
   parseTelegramCallbackData,
   type TelegramInboundQueueMessage,
@@ -91,14 +92,20 @@ export function routeTelegramWebhook(
   const command = extractCommand(envelope.messageText);
   const callback = parseTelegramCallbackData(envelope.callbackData);
 
-  return {
-    kind: "accepted",
-    input: callback
-      ? { kind: "callback", envelope, callback }
-      : command
-        ? { kind: "command", envelope, command }
-        : { kind: "message", envelope }
-  };
+  // 버튼 콜백은 그 봇이 발행한 키보드에서 온 것이라 대상이 이미 확정돼 있다.
+  if (callback) return { kind: "accepted", input: { kind: "callback", envelope, callback } };
+
+  // 나머지는 전부 "이 발화가 나에게 한 말인가"를 먼저 판정한다.
+  // 명령도 예외가 아니다 — 이 검사를 건너뛰면 이름 없는 `/tasks` 하나를 네 봇이 각자 처리한다.
+  const addressed = isAddressedToBot({
+    envelope,
+    thisBotUsername: bot.botUsername,
+    thisBotRole: bot.botRole,
+    allBotUsernames: [...config.botsByUsername.keys()]
+  });
+  if (!addressed) return { kind: "accepted", input: { kind: "observation", envelope } };
+  if (command) return { kind: "accepted", input: { kind: "command", envelope, command } };
+  return { kind: "accepted", input: { kind: "message", envelope } };
 }
 
 export async function handleTelegramWebhookFastAck(

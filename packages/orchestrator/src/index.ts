@@ -117,6 +117,12 @@ export function handleTelegramInput(
     return { accepted: false, authorization };
   }
 
+  // 사람끼리의 대화는 맥락으로만 보관한다. 이벤트도 아웃박스도 만들지 않는다.
+  // 소대장이 나중에 호출됐을 때 이 대화들을 읽고 작업으로 재구성한다.
+  if (input.kind === "observation") {
+    return { accepted: true, authorization: { allowed: true }, events: [], outbox: [] };
+  }
+
   if (input.kind === "message") {
     return routeFreeformMessage(input, ports);
   }
@@ -152,6 +158,7 @@ export function createProposalFromTelegram(
   const text = overrideText ?? (input.kind === "message" ? input.envelope.messageText ?? "" : input.command.args.join(" "));
   const routed = routeProposalText(input, text, overrideText !== undefined);
   const title = summarizeTitle(routed.text);
+  const structure = deriveProposalStructure(routed.text, title);
   const event: OrchestratorEvent = {
     eventType: "proposal_created",
     idempotencyKey: `proposal:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
@@ -161,6 +168,9 @@ export function createProposalFromTelegram(
       telegramUserId: input.envelope.telegramUserId,
       sourceMessageId: input.envelope.telegramMessageId,
       title,
+      purpose: structure.purpose,
+      scope: structure.scope,
+      completionCriteria: structure.completionCriteria,
       rawText: routed.text,
       intent: routed.intent,
       targetId: routed.targetId,
@@ -205,13 +215,89 @@ export function routeFreeformMessage(
         ? createProposalFromTelegram(input, ports, `${text} 첨부: ${input.envelope.attachmentKinds.join(", ")}`)
         : renderContextDependentFixClarification(input);
   }
+  // 알맹이 없는 위임("코덱스한테 시켜줘")은 판단을 돌릴 값이 없다. 먼저 되묻는다.
   const vagueDelegationRole = detectVagueActorDelegation(text, input);
   if (vagueDelegationRole) return renderActorDelegationClarification(input, vagueDelegationRole);
   if (input.envelope.telegramBotRole === "auditor") return createDirectAuditRequest(input, ports, text);
   const freeformIntent = classifyFreeformIntent(text);
   if (freeformIntent === "acknowledgement") return renderAcknowledgementAnswer(input);
   if (freeformIntent === "informational_answer") return renderInformationalAnswer(input, text);
+
+  // 소대장이 부름을 받으면 정규식으로 제목을 고르는 대신 실제로 판단하게 한다.
+  // 방의 직전 논의를 읽고 목적·범위·완료조건·담당을 재구성한다.
+  // 게이트웨이 경유라 기존 Claude/Codex 구독을 그대로 쓴다.
+  if (input.envelope.telegramBotRole === "platoon_leader" && ports.executionDefaults) {
+    return requestLeaderPlanning(input, ports, text);
+  }
+
+  // 소대장 판단 경로가 없으면(게이트웨이 미설정 등) 기존 규칙 기반 제안으로 떨어진다.
   return createProposalFromTelegram(input, ports);
+}
+
+// 소대장 판단 요청. 실제 프롬프트는 저장소 계층에서 방의 대화를 읽어 채운다
+// (오케스트레이터는 순수 함수라 DB 를 읽지 않는다).
+export function requestLeaderPlanning(
+  input: Extract<NormalizedTelegramInput, { kind: "message" }>,
+  ports: TelegramInputHandlingPorts,
+  text: string
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const defaults = ports.executionDefaults;
+  if (!defaults) return createProposalFromTelegram(input, ports);
+
+  const planningId = ports.makeId("planning");
+  const attemptId = `${LEADER_PLANNING_ATTEMPT_PREFIX}${planningId}`;
+  // 기존 작업을 가리키는 후속 요청이면 그 연결을 잃지 않는다.
+  const targetId = extractWorkItemId(text);
+  const event: OrchestratorEvent = {
+    eventType: "proposal_created",
+    idempotencyKey: `leader-planning:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
+    payload: {
+      planningId,
+      stage: "leader_planning_requested",
+      telegramChatId: input.envelope.telegramChatId,
+      telegramUserId: input.envelope.telegramUserId,
+      triggeringText: text,
+      targetId,
+      intent: targetId ? "task_followup" : "new_task",
+      createdAt: ports.now()
+    }
+  };
+
+  const executionRequest: ExecutionRequest = {
+    roomId: defaults.roomId,
+    taskId: planningId,
+    attemptId,
+    actorId: defaults.actorId,
+    requestedBy: input.envelope.telegramUserId ?? "unknown",
+    adapterType: "claude_code",
+    projectPath: defaults.projectPath,
+    // 저장소 계층이 방의 직전 논의를 읽어 실제 판단 프롬프트로 교체한다.
+    prompt: LEADER_PLANNING_PROMPT_PLACEHOLDER,
+    timeoutMs: Math.min(defaults.timeoutMs, 300000),
+    idempotencyKey: `leader-planning:${planningId}`,
+    createdAt: ports.now(),
+    reportBotRole: "platoon_leader"
+  };
+
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: [event],
+    outbox: [
+      {
+        target: { kind: "local_gateway", gatewayId: defaults.gatewayId },
+        idempotencyKey: `gateway:leader-planning:${planningId}`,
+        payload: { executionRequest, telegramChatId: input.envelope.telegramChatId, triggeringText: text }
+      }
+    ]
+  };
+}
+
+export const LEADER_PLANNING_ATTEMPT_PREFIX = "leader-planning-";
+export const LEADER_PLANNING_PROMPT_PLACEHOLDER = "__LEADER_PLANNING__";
+
+export function isLeaderPlanningAttempt(attemptId: string): boolean {
+  return attemptId.startsWith(LEADER_PLANNING_ATTEMPT_PREFIX);
 }
 
 export function createDirectAuditRequest(
@@ -488,6 +574,62 @@ type RoutedProposalText = {
   requestedActorRole?: "claude_leader" | "codex_leader";
 };
 
+export type ProposalStructure = {
+  purpose: string;
+  scope: string;
+  completionCriteria: string;
+};
+
+// 기획서 FR-007 은 제안이 "목적·범위·완료 조건"으로 구조화될 것을 요구한다.
+// 완료 조건은 특히 중요하다 — 검증자가 무엇을 기준으로 합격/불합격을 판정할지가 여기서 정해진다.
+// 완료 조건 없이 재검증 루프를 얹으면 검증이 형식이 된다.
+//
+// 이 계층에는 LLM 이 없으므로 결정론적 규칙으로 뽑는다.
+// 요청자가 완료 조건을 직접 말했으면 그대로 쓰고, 아니면 요청 종류에서 도출한다.
+export function deriveProposalStructure(text: string, title: string): ProposalStructure {
+  const normalized = text.trim();
+  return {
+    purpose: derivePurpose(normalized, title),
+    scope: normalized || title,
+    completionCriteria: deriveCompletionCriteria(normalized)
+  };
+}
+
+function derivePurpose(text: string, title: string): string {
+  // "~하기 위해", "~하려고", "~할 수 있도록" 처럼 목적을 직접 말한 경우 그 절을 쓴다.
+  const stated = text.match(/([^.!?\n]{4,80}?)(?:하기\s*위해|하기\s*위하여|하려고|할\s*수\s*있도록|하도록)/);
+  if (stated?.[1]) return `${stated[1].trim()}하기 위해`;
+  const firstSentence = text.split(/[.!?\n]/).map((part) => part.trim()).find((part) => part.length >= 4);
+  return firstSentence && firstSentence !== title ? firstSentence : title;
+}
+
+function deriveCompletionCriteria(text: string): string {
+  // 1) 요청자가 완료 조건을 직접 말한 경우 — 표현을 바꾸지 않고 그대로 살린다.
+  const stated = text.match(/([^.!?\n]{4,120}?(?:하면|되면|지면|까지)\s*(?:완료|끝|done))/i);
+  if (stated?.[1]) return `${stated[1].trim()}로 본다.`;
+  if (/테스트\s*(?:가\s*)?통과|빌드\s*(?:가\s*)?통과|검증\s*통과/.test(text)) {
+    return "관련 테스트와 빌드가 통과하고 결과가 보고된다.";
+  }
+
+  // 2) 요청 종류에서 도출
+  if (/오류|버그|안\s*되|안됨|장애|실패|고쳐|수정해/.test(text)) {
+    return "보고된 증상이 재현되지 않고, 원인과 조치 내용이 근거와 함께 보고된다.";
+  }
+  if (/조사|분석|원인|파악|알아봐|확인해/.test(text)) {
+    return "조사 결과와 근거가 보고되고, 후속 조치 필요 여부가 명시된다.";
+  }
+  if (/문서|정리|작성|기록/.test(text)) {
+    return "요청한 문서가 생성·갱신되고 위치와 변경 요지가 보고된다.";
+  }
+  if (/검토|리뷰|의견|평가|개선할\s*사항|보완점/.test(text)) {
+    return "검토 결과가 항목별 근거와 함께 정리되어 보고된다.";
+  }
+  if (/구현|추가|만들|기능/.test(text)) {
+    return "요청한 동작이 실제로 실행되어 확인되고, 사용 방법이 보고된다.";
+  }
+  return "요청 내용이 실제로 수행되어 결과가 확인 가능한 형태로 보고된다.";
+}
+
 function routeProposalText(
   input: Extract<NormalizedTelegramInput, { kind: "message" | "command" }>,
   originalText: string,
@@ -709,6 +851,7 @@ function requiresOwner(input: NormalizedTelegramInput): boolean {
 }
 
 function requiredPermissionForInput(input: NormalizedTelegramInput): RoomPermission | undefined {
+  if (input.kind === "observation") return undefined;
   if (input.kind === "message") return "task:create";
 
   if (input.kind === "command") {

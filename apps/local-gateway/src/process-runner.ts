@@ -14,10 +14,14 @@ function runCommand(plan: CommandPlan): Promise<{ exitCode: number; stdout: stri
     const child = spawn(plan.executable, [...plan.args], {
       cwd: plan.cwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      // stdinInput 이 없으면 ignore — CLI 가 입력을 기다리며 멈추지 않게 한다.
+      stdio: [plan.stdinInput === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       windowsHide: true,
       env: buildChildProcessEnv(process.env)
     });
+    if (plan.stdinInput !== undefined && child.stdin) {
+      child.stdin.end(plan.stdinInput, "utf8");
+    }
     let stdout = "";
     let stderr = "";
     let settled = false;

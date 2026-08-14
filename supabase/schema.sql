@@ -34,6 +34,9 @@ create table if not exists huai_ai_actors (
   adapter_type text not null,
   status text not null default 'active',
   created_at timestamptz not null default now(),
+  -- 소대장이 방의 맥락을 기억하도록 CLI 세션을 이어받는다(--resume).
+  cli_session_id text,
+  cli_session_updated_at timestamptz,
   constraint huai_ai_actors_role_check check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor')),
   constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'auditor')),
   constraint huai_ai_actors_status_check check (status in ('active', 'inactive', 'disabled')),
@@ -190,9 +193,14 @@ create table if not exists huai_approvals (
   reason text,
   created_at timestamptz not null default now(),
   idempotency_key text unique,
+  -- 승인 시점의 대상 식별자를 그대로 보존한다. task 물질화 이전 단계의 승인은 proposal id 가 들어간다.
+  entity_ref text,
   constraint huai_approvals_stage_check check (stage in ('task_approval', 'midpoint_approval', 'commander_completion', 'final_approval', 'cancellation')),
   constraint huai_approvals_decision_check check (decision in ('approved', 'rejected', 'revision_requested', 'cancelled'))
 );
+
+create index if not exists huai_approvals_entity_ref_idx on huai_approvals (entity_ref);
+create index if not exists huai_approvals_task_stage_idx on huai_approvals (task_id, stage);
 
 alter table huai_tasks
   add constraint huai_tasks_approved_by_approval_fk
@@ -244,6 +252,25 @@ create table if not exists huai_artifacts (
   is_final boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+create unique index if not exists huai_artifacts_task_uri_version_unique
+  on huai_artifacts (task_id, uri, version);
+
+-- 승인·이벤트 원장은 수정·삭제 불가 (NFR-02). 정정은 보정 기록을 새로 남긴다.
+create or replace function huai_reject_ledger_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception 'append-only-ledger:% is immutable (attempted %)', tg_table_name, tg_op
+    using hint = 'Record a compensating entry instead of updating or deleting the original row.';
+end;
+$$;
+
+drop trigger if exists huai_approvals_append_only on huai_approvals;
+create trigger huai_approvals_append_only
+  before update or delete on huai_approvals
+  for each row execute function huai_reject_ledger_mutation();
 
 create table if not exists huai_events (
   event_id uuid primary key default gen_random_uuid(),
@@ -420,6 +447,11 @@ create table if not exists huai_recovery_snapshots (
   created_at timestamptz not null default now(),
   constraint huai_recovery_snapshots_type_check check (snapshot_type in ('room', 'task', 'artifact', 'full_project'))
 );
+
+drop trigger if exists huai_events_append_only on huai_events;
+create trigger huai_events_append_only
+  before update or delete on huai_events
+  for each row execute function huai_reject_ledger_mutation();
 
 alter table huai_rooms enable row level security;
 alter table huai_room_members enable row level security;
