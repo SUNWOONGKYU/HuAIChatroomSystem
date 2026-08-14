@@ -1,20 +1,20 @@
 ﻿# Telegram bot profile colors
 
-Use these PNG files as BotFather profile pictures so Telegram shows stable role colors instead of random default initials.
+Use these profile pictures so Telegram shows stable role colors instead of random default initials.
 
-| Bot | File | Color |
-| --- | --- | --- |
-| LeaderBot | `leaderbot-deep-orange.png` | deep orange `#D9480F` |
-| ClaudeBot | `claudebot-orange.png` | orange `#F59F00` |
-| CodexBot | `codexbot-purple.png` | purple `#7C3AED` |
-| AuditBot | `auditbot-gold.png` | gold `#F2C94C` |
+| Bot | PNG preview | Bot API JPG | Color |
+| --- | --- | --- | --- |
+| LeaderBot | `leaderbot-deep-orange.png` | `leaderbot-deep-orange.jpg` | deep orange `#D9480F` |
+| ClaudeBot | `claudebot-orange.png` | `claudebot-orange.jpg` | orange `#F59F00` |
+| CodexBot | `codexbot-purple.png` | `codexbot-purple.jpg` | purple `#7C3AED` |
+| AuditBot | `auditbot-gold.png` | `auditbot-gold.jpg` | gold `#F2C94C` |
 
-Apply with BotFather:
+Apply automatically with Telegram Bot API:
 
-1. Open `@BotFather`.
-2. Run `/setuserpic`.
-3. Select the target bot.
-4. Upload the matching PNG file.
-5. Repeat for all role bots.
+```powershell
+npm run apply:telegram-bot-profiles
+```
 
-Telegram Bot API webhooks do not control the default avatar color. Use profile pictures for consistent colors.
+The script calls `setMyProfilePhoto` for all four role bots using `.env.operation.local`. It prints only role, username, and status; raw bot tokens are not printed.
+
+Manual fallback: open `@BotFather`, run `/setuserpic`, select each bot, and upload the matching PNG file.
