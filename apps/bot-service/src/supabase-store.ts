@@ -110,7 +110,8 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       payload: item.payload
     }));
 
-    const planningHydratedRows = await this.hydrateLeaderPlanningRows(outboxRows);
+    const startedHydratedRows = await this.hydrateExecutionStartedMessages(outboxRows);
+    const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows);
     const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows);
     const hydratedOutboxRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows);
     const insertedOutbox = await this.insertOutboxRowsIdempotently(hydratedOutboxRows);
@@ -256,6 +257,37 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       });
   }
 
+  // "작업 실행을 시작했습니다: p_032d2db2..." 처럼 내부 id 만 보여주면
+  // 방장은 무슨 작업이 시작됐는지, 누가 하는지 알 수 없다.
+  // 소대장이 이미 제목과 담당을 정해뒀으니 그것을 실어 보낸다.
+  private async hydrateExecutionStartedMessages(rows: OutboxInsertRow[]): Promise<OutboxInsertRow[]> {
+    const targets = rows.filter((row) => row.idempotency_key.startsWith("telegram:execution-started:"));
+    if (targets.length === 0) return rows;
+
+    const proposalIds = Array.from(new Set(targets.map((row) => row.idempotency_key.split(":")[2]).filter(Boolean)));
+    const hints = await this.fetchProposalExecutionHints(proposalIds);
+
+    return rows.map((row) => {
+      if (!row.idempotency_key.startsWith("telegram:execution-started:")) return row;
+      const hint = hints.get(row.idempotency_key.split(":")[2] ?? "");
+      if (!hint?.title) return row;
+      const worker = executionWorkerLabel(hint.requestedActorRole, hint.executionMode);
+      return {
+        ...row,
+        payload: {
+          ...row.payload,
+          text: [
+            `작업을 시작했습니다: ${hint.title}`,
+            worker ? `담당: ${worker}` : undefined,
+            hint.completionCriteria ? `완료 조건: ${hint.completionCriteria}` : undefined,
+            "",
+            "작업에는 보통 몇 분이 걸립니다. 끝나면 결과를 보고하겠습니다."
+          ].filter((line) => line !== undefined).join("\n")
+        }
+      };
+    });
+  }
+
   // 소대장 판단 요청에 방의 직전 논의를 실어준다.
   // 오케스트레이터는 순수 함수라 DB 를 못 읽으므로 여기서 채운다.
   private async hydrateLeaderPlanningRows(rows: OutboxInsertRow[]): Promise<OutboxInsertRow[]> {
@@ -381,7 +413,20 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         continue;
       }
       const actor = hint.requestedActorRole ? actorsByRole.get(hint.requestedActorRole) : undefined;
-      hydrated.push({ ...row, payload: { ...row.payload, executionRequest: { ...taskExecutionRequest, ...(actor ? { actorId: actor.actor_id, adapterType: actor.adapter_type } : {}), prompt: hint.prompt } } });
+      // reportBotRole 까지 함께 바꿔야 한다.
+      // 예전에는 actorId·adapterType 만 바꿔서, 소대장이 ClaudeBot 을 지정해도
+      // 보고는 기본값인 CodexBot 이름으로 나갔다 — 방장이 보기에 배분이 무시된 것처럼 보인다.
+      hydrated.push({
+        ...row,
+        payload: {
+          ...row.payload,
+          executionRequest: {
+            ...taskExecutionRequest,
+            ...(actor ? { actorId: actor.actor_id, adapterType: actor.adapter_type, reportBotRole: actor.role } : {}),
+            prompt: hint.prompt
+          }
+        }
+      });
     }
 
     return hydrated;
@@ -940,6 +985,16 @@ function nameFromTelegramUser(from: Record<string, unknown> | undefined, userId:
   return first || username || (userId ? "참여자" + userId.slice(-4) : "참여자");
 }
 
+function executionWorkerLabel(
+  role: ExecutionActorRole | undefined,
+  mode: "multi_ai_review" | undefined
+): string | undefined {
+  if (mode === "multi_ai_review") return "ClaudeBot + CodexBot";
+  if (role === "claude_leader") return "ClaudeBot";
+  if (role === "codex_leader") return "CodexBot";
+  return undefined;
+}
+
 function proposalTitleFromPayload(payload: Record<string, unknown>): string {
   const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const rawText = typeof payload.rawText === "string" ? payload.rawText.trim() : "";
@@ -967,7 +1022,14 @@ function proposalIdNeedingPromptHydration(row: {
   const executionRequest = executionRequestPayload(row.payload);
   if (!executionRequest) return undefined;
   const taskId = executionRequest.taskId;
-  if (typeof taskId !== "string" || !taskId.startsWith("proposal_")) return undefined;
+  if (typeof taskId !== "string" || !taskId) return undefined;
+  // 이미 물질화된 작업(UUID)은 프롬프트가 채워져 있다. 아직 제안 단계인 것만 채운다.
+  //
+  // 예전에는 `proposal_` 접두사로 판별했는데, Telegram 콜백 64바이트 제한 때문에
+  // 소대장 제안 id 를 `p_...` 로 줄이자 이 검사가 걸러내 실행 에이전트가
+  // 작업 명세 대신 id 만 받았다("해당 ID 를 조회할 수 없습니다"로 끝남).
+  // 접두사가 아니라 "프롬프트가 아직 비어 있는가"로 판별한다.
+  if (isUuid(taskId)) return undefined;
   const prompt = executionRequest.prompt;
   if (typeof prompt === "string" && prompt.trim() && !prompt.startsWith("Execute approved task ")) return undefined;
   return taskId;
@@ -983,7 +1045,22 @@ function proposalPromptFromPayload(payload: Record<string, unknown>): string | u
   const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const requestText = rawText || title;
   if (!requestText) return undefined;
-  return buildApprovedTelegramTaskPrompt(requestText);
+
+  // 소대장이 구조화한 것이 있으면 그대로 실행자에게 넘긴다.
+  // 특히 완료 조건은 검증자가 합격/불합격을 판정할 기준이라, 실행자가 모르면
+  // 무엇을 만족시켜야 하는지 알 수 없는 채로 일하게 된다.
+  const purpose = proposalFieldFromPayload(payload, "purpose");
+  const scope = proposalFieldFromPayload(payload, "scope");
+  const completionCriteria = proposalFieldFromPayload(payload, "completionCriteria");
+  const structured = [
+    title ? `작업: ${title}` : undefined,
+    purpose ? `목적: ${purpose}` : undefined,
+    scope ? `범위: ${scope}` : undefined,
+    completionCriteria ? `완료 조건: ${completionCriteria}` : undefined
+  ].filter(Boolean);
+
+  const body = structured.length > 1 ? structured.join("\n") : requestText;
+  return buildApprovedTelegramTaskPrompt(body);
 }
 
 function proposalActorRoleFromPayload(payload: Record<string, unknown>): ExecutionActorRole | undefined {

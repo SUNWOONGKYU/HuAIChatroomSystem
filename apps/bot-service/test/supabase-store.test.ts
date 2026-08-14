@@ -310,3 +310,56 @@ function makeOutboxCommit(idempotencyKey: string, target: any, payload: Record<s
     }
   };
 }
+
+test("소대장이 지정한 담당이 실행자와 보고자 양쪽에 반영된다", async () => {
+  // 실전에서 소대장이 "담당: ClaudeBot" 이라고 정했는데 보고는 CodexBot 이름으로 나갔다.
+  // actorId·adapterType 만 바꾸고 reportBotRole 을 두고 갔기 때문이다.
+  const proposalId = "p_032d2db23aa44bdd";
+  const taskId = "55555555-5555-4555-8555-555555555555";
+  const calls = makeSupabaseFetch([
+    jsonResponse(200, [{ payload: { proposalId, title: "로그인 세션 원인 조사", rawText: "세션 조사", requestedActorRole: "claude_leader", completionCriteria: "원인 특정" } }]),
+    jsonResponse(200, [{ actor_id: "actor-claude", role: "claude_leader", adapter_type: "claude_code" }]),
+    jsonResponse(200, []),
+    jsonResponse(201, [{ task_id: taskId }]),
+    jsonResponse(201, [])
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  await store.commitTelegramInputResult(makeOutboxCommit(
+    "gateway:execution:claude-assignee",
+    { kind: "local_gateway", gatewayId: "gateway-local" },
+    { executionRequest: { taskId: proposalId, adapterType: "codex", reportBotRole: "codex_leader", prompt: "Execute approved task " + proposalId } }
+  ));
+
+  const outboxInsert = calls.requests.find((request) => request.method === "POST" && /huai_outbox$/.test(request.url));
+  const executionRequest = outboxInsert?.body?.[0]?.payload?.executionRequest;
+  assert.equal(executionRequest?.adapterType, "claude_code", "소대장이 지정한 실행기로 바뀌어야 한다");
+  assert.equal(executionRequest?.reportBotRole, "claude_leader", "보고도 지정된 담당 이름으로 나가야 한다");
+  assert.equal(executionRequest?.actorId, "actor-claude");
+});
+
+test("제안 단계 id 형태가 바뀌어도 작업 명세가 실행자에게 전달된다", async () => {
+  // 콜백 64바이트 제한 때문에 제안 id 를 p_... 로 줄이자
+  // 프롬프트 주입기가 proposal_ 접두사만 인식해 실행자가 id 만 받았다.
+  const proposalId = "p_abcdef0123456789";
+  const taskId = "66666666-6666-4666-8666-666666666666";
+  const calls = makeSupabaseFetch([
+    jsonResponse(200, [{ payload: { proposalId, title: "세션 조사", rawText: "세션 조사", purpose: "원인 규명", scope: "토큰 만료 로직 확인", completionCriteria: "원인이 코드 근거와 함께 정리됨" } }]),
+    jsonResponse(200, []),
+    jsonResponse(201, [{ task_id: taskId }]),
+    jsonResponse(201, [])
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  await store.commitTelegramInputResult(makeOutboxCommit(
+    "gateway:execution:short-id",
+    { kind: "local_gateway", gatewayId: "gateway-local" },
+    { executionRequest: { taskId: proposalId, prompt: "Execute approved task " + proposalId } }
+  ));
+
+  const outboxInsert = calls.requests.find((request) => request.method === "POST" && /huai_outbox$/.test(request.url));
+  const prompt = String(outboxInsert?.body?.[0]?.payload?.executionRequest?.prompt ?? "");
+  assert.equal(prompt.startsWith("Execute approved task "), false, "id 만 넘기면 실행자가 할 일을 모른다");
+  assert.match(prompt, /원인이 코드 근거와 함께 정리됨/, "완료 조건이 실행자에게 전달되어야 한다");
+  assert.match(prompt, /토큰 만료 로직 확인/);
+});

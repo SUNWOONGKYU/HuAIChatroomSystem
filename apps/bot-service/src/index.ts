@@ -73,7 +73,20 @@ export function routeTelegramWebhook(
   if (!verifyTelegramSecret(botUsername, secretToken, config)) {
     return { kind: "ignored", reason: "invalid-webhook-secret" };
   }
+  return routeTelegramUpdate(botUsername, payload, config);
+}
 
+// 시크릿 검증을 뺀 공통 경로.
+//
+// webhook 은 Telegram 이 우리 URL 로 밀어넣는 방식이라 발신자를 시크릿으로 확인해야 한다.
+// long polling 은 우리가 봇 토큰으로 Telegram 에 직접 가져오는 방식이라
+// 전송 자체가 이미 인증돼 있고 시크릿이 존재하지 않는다.
+// 두 방식이 같은 판정을 쓰도록 여기서 갈라 둔다.
+export function routeTelegramUpdate(
+  botUsername: string,
+  payload: unknown,
+  config: BotServiceConfig
+): WebhookDecision {
   const bot = config.botsByUsername.get(botUsername);
   if (!bot) {
     return { kind: "ignored", reason: "unknown-bot" };
