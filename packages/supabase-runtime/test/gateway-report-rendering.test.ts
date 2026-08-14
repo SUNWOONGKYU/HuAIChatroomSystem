@@ -231,17 +231,12 @@ test("gateway report removes low-value implementation details from Telegram text
   assert.equal(text.includes("검증 제한도"), false);
 });
 test("multi AI audit is queued only after claude and codex results exist", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [{ event_id: "event-codex", room_id: "room-1", task_id: null, event_type: "meaningful_intermediate_ready", idempotency_key: "gateway-result:attempt-1-codex:completed", payload: {}, created_at: "2026-08-13T00:00:00.000Z" }]),
-    jsonResponse(201, []),
-    jsonResponse(200, [
+  const calls = makeFetchSequence(undefined, {
+    siblingEvents: [
       { event_id: "event-codex", payload: { taskId: "proposal-1", attemptId: "attempt-1-codex", status: "completed", events: [{ type: "stdout", text: '{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}' }] } },
       { event_id: "event-claude", payload: { taskId: "proposal-1", attemptId: "attempt-1-claude", status: "completed", events: [{ type: "stdout", text: "ClaudeBot 결론: 보완 필요" }] } }
-    ]),
-    jsonResponse(200, [{ gateway_id: "gateway-local", status: "offline" }]),
-    jsonResponse(201, [])
-  ]);
+    ]
+  });
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -259,13 +254,23 @@ test("multi AI audit is queued only after claude and codex results exist", async
   assert.equal(auditInsert?.body.payload.executionRequest.reportBotRole, "auditor");
 });
 
-function makeFetchSequence(responses: Response[]) {
+// 순서 고정 큐는 구현에 호출이 하나 늘 때마다 깨진다. URL 로 응답을 정한다.
+function makeFetchSequence(_responses?: Response[], options: { taskStatus?: string; siblingEvents?: unknown[] } = {}) {
   const requests: Array<{ url: string; method: string; body: any }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
-    requests.push({ url: String(input), method: String(init?.method ?? "GET"), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const response = responses.shift();
-    if (!response) throw new Error("unexpected-fetch-call");
-    return response;
+    const url = String(input);
+    const method = String(init?.method ?? "GET");
+    requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    const path = url.split("/rest/v1")[1] ?? url;
+    if (path.includes("huai_rooms")) return jsonResponse(200, [{ telegram_chat_id: "1001" }]);
+    if (path.includes("huai_tasks") && method === "GET") return jsonResponse(200, [{ status: options.taskStatus ?? "verification_pending" }]);
+    if (path.includes("huai_gateway_instances")) return jsonResponse(200, [{ gateway_id: "gw-1", status: "online" }]);
+    if (path.includes("huai_events") && method === "GET") return jsonResponse(200, options.siblingEvents ?? []);
+    if (path.includes("huai_events") && method === "POST") {
+      const key = JSON.parse(String(init?.body)).idempotency_key;
+      return jsonResponse(201, [{ event_id: "event-" + key, room_id: "room-1", task_id: null, event_type: "x", idempotency_key: key, payload: {}, created_at: "2026-08-13T00:00:00.000Z" }]);
+    }
+    return jsonResponse(200, []);
   };
   return { fetchImpl, requests };
 }

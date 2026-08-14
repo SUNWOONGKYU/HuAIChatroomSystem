@@ -24,7 +24,7 @@ test("operation ready runner stops at first failing step", () => {
       return { status: String(command).endsWith("verify:gate13") ? 1 : 0 };
     },
     retryCount: 0,
-    env: {}
+    env: { HUAI_PREBUILT: "1" }
   });
 
   assert.equal(calls.at(-1), "npm run verify:gate13");
@@ -42,7 +42,7 @@ test("operation ready runner retries a transient failing step once", () => {
       return { status: 0 };
     },
     sleepImpl() {},
-    env: {}
+    env: { HUAI_PREBUILT: "1" }
   });
 
   assert.equal(result.ok, true);
@@ -57,7 +57,7 @@ test("operation ready runner passes per-step timeout to spawned commands", () =>
       return { status: 0 };
     },
     retryCount: 0,
-    env: { OPERATION_READY_STEP_TIMEOUT_MS: "1234" }
+    env: { HUAI_PREBUILT: "1", OPERATION_READY_STEP_TIMEOUT_MS: "1234" }
   });
 
   assert.equal(result.ok, true);
@@ -72,7 +72,7 @@ test("operation ready runner maps timeout failures to status 124", () => {
         : { status: 0 };
     },
     retryCount: 0,
-    env: { OPERATION_READY_STEP_TIMEOUT_MS: "1" }
+    env: { HUAI_PREBUILT: "1", OPERATION_READY_STEP_TIMEOUT_MS: "1" }
   });
 
   assert.deepEqual(result, { ok: false, failedStep: "typecheck", status: 124 });
@@ -93,9 +93,28 @@ test("operation ready runner does not retry timed out steps", () => {
       return { status: null, signal: "SIGTERM", error: { code: "ETIMEDOUT" } };
     },
     retryCount: 2,
-    env: { OPERATION_READY_STEP_TIMEOUT_MS: "1" }
+    env: { HUAI_PREBUILT: "1", OPERATION_READY_STEP_TIMEOUT_MS: "1" }
   });
 
   assert.deepEqual(result, { ok: false, failedStep: "typecheck", status: 124 });
   assert.deepEqual(calls, ["npm run typecheck"]);
+});
+
+
+test("전체 검증은 빌드를 한 번만 하고 게이트에서는 다시 하지 않는다", () => {
+  // 게이트마다 tsc 를 돌리면 Windows 에서 dist 쓰기가 간헐 실패해
+  // 매번 다른 게이트가 깨졌다(gate12·18·20·25·30 이 번갈아).
+  const calls = [];
+  runOperationReady({
+    spawnImpl(command, options) {
+      calls.push({ command, prebuilt: options?.env?.HUAI_PREBUILT });
+      return { status: 0 };
+    },
+    retryCount: 0,
+    env: {}
+  });
+
+  assert.equal(calls[0]?.command, "npm run build:force", "맨 앞에서 한 번 빌드해야 한다");
+  assert.equal(calls.filter((call) => call.command === "npm run build:force").length, 1);
+  assert.equal(calls.slice(1).every((call) => call.prebuilt === "1"), true, "이후 게이트는 재빌드를 건너뛰어야 한다");
 });

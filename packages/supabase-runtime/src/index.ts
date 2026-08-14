@@ -132,6 +132,12 @@ export class SupabaseOutboxStore {
       }
     });
 
+    // 실행 결과를 상태기계에 반영한다.
+    //
+    // 이게 없으면 실행이 끝나도 작업이 영원히 scheduled 로 남는다.
+    // 방장이 /tasks 를 치면 이미 끝난 일이 "실행 대기"로 보인다.
+    await this.advanceTaskThroughExecution(input.request.taskId, input.status);
+
     if (input.status === "completed") {
       await this.persistCollectedArtifacts(input.request, input.events);
     }
@@ -384,6 +390,12 @@ export class SupabaseOutboxStore {
     }
 
     if (verdict === "pass") {
+      // 검증 통과 -> 소대장 완료 결정 -> 방장 최종 승인 대기.
+      // 앞의 두 단계는 시스템이 진행하고, 마지막 한 번만 방장이 누른다 (FR-015).
+      await this.advanceTaskStatus(input.request.taskId, "verification_started", { isVerifier: true, actorRole: "auditor", verifierActorId: input.request.actorId, authorActorId: "system" });
+      await this.advanceTaskStatus(input.request.taskId, "verification_passed", { isVerifier: true, actorRole: "auditor" });
+      await this.advanceTaskStatus(input.request.taskId, "commander_completion_approved", { actorRole: "platoon_leader" });
+
       await this.insertOutboxIdempotently({
         event_id: sourceEventId,
         idempotency_key: "telegram-completion-review:" + input.request.attemptId,
@@ -466,6 +478,21 @@ export class SupabaseOutboxStore {
         idempotencyKey
       }
     });
+  }
+
+  // 승인된 작업이 실행을 거쳐 검증 대기까지 스스로 이동한다.
+  // 사람이 눌러야 하는 지점은 시작 승인과 최종 완료 승인 둘뿐이다.
+  private async advanceTaskThroughExecution(taskId: string, status: "completed" | "failed" | "rejected"): Promise<void> {
+    if (!isUuid(taskId)) return;
+    // scheduled -> queued_for_gateway -> in_progress
+    await this.advanceTaskStatus(taskId, "dependencies_satisfied", {});
+    await this.advanceTaskStatus(taskId, "task_started", {});
+    if (status !== "completed") {
+      await this.advanceTaskStatus(taskId, "execution_delayed_or_failed", {});
+      return;
+    }
+    // in_progress -> verification_pending (검증 호출은 방장 결정 사항이 아니다)
+    await this.advanceTaskStatus(taskId, "meaningful_intermediate_ready", {});
   }
 
   // 게이트웨이 결과 경로에서도 상태기계를 적용한다.

@@ -23,14 +23,20 @@ export function resolveAdapterCommand(request: ExecutionRequest): readonly strin
 }
 
 export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
+  // 읽기만 허용해야 하는 실행.
+  //   감사   — 검증자는 의견서만 낸다. 직접 고치면 자기검증이 된다 (AC-07).
+  //   소대장 판단 — 아직 방장 승인 전이다. 판단하면서 파일을 고치면
+  //                "승인된 작업만 실행된다"(FR-008)가 통째로 뚫린다.
   const isAudit = request.reportBotRole === "auditor";
+  const isPlanning = request.attemptId.startsWith("leader-planning-");
+  const readOnly = isAudit || isPlanning;
   if (request.adapterType === "claude_code") {
     return platformPlan(
       "claude",
       [
         "--print",
         "--permission-mode",
-        isAudit ? "dontAsk" : "acceptEdits",
+        readOnly ? "dontAsk" : "acceptEdits",
         "--model",
         request.model ?? "sonnet",
         "--output-format",
@@ -52,7 +58,7 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
       "exec",
       "--ignore-user-config",
       "--skip-git-repo-check",
-      ...(isAudit ? ["--sandbox", "read-only"] : ["--approve-for-me"]),
+      ...(readOnly ? ["--sandbox", "read-only"] : ["--approve-for-me"]),
       "--add-dir",
       request.projectPath,
       "--json",

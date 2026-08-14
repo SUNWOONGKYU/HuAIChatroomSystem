@@ -10,19 +10,7 @@ const TASK_ID = "66666666-6666-4666-8666-666666666666";
 const AUDITOR = "77777777-7777-4777-8777-777777777777";
 
 test("검증 불합격이 보완 요청과 상태 전이를 유발한다", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [eventRow("gateway-result:attempt-fail:completed", "meaningful_intermediate_ready")]),
-    jsonResponse(201, []),                                   // 결과 보고 outbox
-    jsonResponse(200, []),                                   // 기존 verification 조회
-    jsonResponse(201, []),                                   // verification INSERT
-    jsonResponse(200, []),                                   // 기존 open revision_request 조회
-    jsonResponse(201, []),                                   // revision_request INSERT
-    jsonResponse(201, [eventRow("verification-failed:attempt-fail", "verification_failed_or_changes_requested")]),
-    jsonResponse(200, [{ status: "verification_in_progress" }]),  // 현재 상태
-    jsonResponse(200, []),                                   // PATCH huai_tasks
-    jsonResponse(201, [])                                    // 담당팀 보완 요청 outbox
-  ]);
+  const calls = makeFetchSequence();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -56,19 +44,7 @@ test("검증 불합격이 보완 요청과 상태 전이를 유발한다", async
 });
 
 test("불합격 시 완료 검토 버튼은 발행되지 않는다", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [eventRow("gateway-result:attempt-fail2:completed", "meaningful_intermediate_ready")]),
-    jsonResponse(201, []),
-    jsonResponse(200, []),
-    jsonResponse(201, []),
-    jsonResponse(200, []),
-    jsonResponse(201, []),
-    jsonResponse(201, [eventRow("verification-failed:attempt-fail2", "verification_failed_or_changes_requested")]),
-    jsonResponse(200, [{ status: "verification_in_progress" }]),
-    jsonResponse(200, []),
-    jsonResponse(201, [])
-  ]);
+  const calls = makeFetchSequence();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -82,18 +58,7 @@ test("불합격 시 완료 검토 버튼은 발행되지 않는다", async () =>
 });
 
 test("이미 열린 보완 요청이 있으면 중복 생성하지 않는다", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [eventRow("gateway-result:attempt-fail3:completed", "meaningful_intermediate_ready")]),
-    jsonResponse(201, []),
-    jsonResponse(200, []),
-    jsonResponse(201, []),
-    jsonResponse(200, [{ revision_request_id: "existing" }]),   // 이미 열린 보완 요청
-    jsonResponse(201, [eventRow("verification-failed:attempt-fail3", "verification_failed_or_changes_requested")]),
-    jsonResponse(200, [{ status: "verification_in_progress" }]),
-    jsonResponse(200, []),
-    jsonResponse(201, [])
-  ]);
+  const calls = makeFetchSequence({ openRevision: true });
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -152,13 +117,82 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function makeFetchSequence(responses: Response[]) {
+// 순서 고정 큐는 구현에 호출이 하나 추가될 때마다 깨진다(이미 네 번 깨졌다).
+// URL 로 응답을 정하면 호출 순서가 바뀌어도 테스트가 살아남고,
+// 무엇을 검증하는지도 분명해진다.
+function makeFetchSequence(options: { taskStatus?: string; openRevision?: boolean } = {}) {
+  const taskStatus = options.taskStatus ?? "verification_in_progress";
   const requests: Array<{ url: string; method: string; body: any }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
-    requests.push({ url: String(input), method: String(init?.method ?? "GET"), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const response = responses.shift();
-    if (!response) throw new Error("unexpected-fetch-call:" + String(input));
-    return response;
+    const url = String(input);
+    const method = String(init?.method ?? "GET");
+    requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+
+    const path = url.split("/rest/v1")[1] ?? url;
+    if (path.includes("huai_rooms")) return jsonResponse(200, [{ telegram_chat_id: "1001" }]);
+    if (path.includes("huai_tasks") && method === "GET") return jsonResponse(200, [{ status: taskStatus }]);
+    if (path.includes("huai_revision_requests") && method === "GET") {
+      return jsonResponse(200, options.openRevision ? [{ revision_request_id: "existing" }] : []);
+    }
+    if (path.includes("huai_events") && method === "POST") {
+      return jsonResponse(201, [eventRow(JSON.parse(String(init?.body)).idempotency_key, "x")]);
+    }
+    return jsonResponse(200, []);
   };
   return { fetchImpl, requests };
 }
+
+// 승인된 작업이 사람 손 없이 검증 대기까지 스스로 이동하는가.
+// 이게 없으면 실행이 끝나도 작업이 scheduled 로 남아 /tasks 에 "실행 대기"로 보인다.
+
+test("실행이 끝나면 작업이 스스로 검증 대기까지 이동한다", async () => {
+  const calls = makeFetchSequence({ taskStatus: "scheduled" });
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), attemptId: "attempt-auto", reportBotRole: "codex_leader" },
+    status: "completed",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "attempt-auto", text: "구현 완료. 테스트 통과." }],
+    occurredAt: "2026-08-15T00:00:00.000Z"
+  });
+
+  const patched = calls.requests
+    .filter((request) => request.method === "PATCH" && /huai_tasks/.test(request.url))
+    .map((request) => request.body.status);
+  assert.equal(patched.length > 0, true, "실행 결과가 상태기계에 반영되어야 한다");
+  assert.equal(patched.includes("queued_for_gateway"), true);
+});
+
+test("실행이 실패하면 검증 대기로 넘어가지 않는다", async () => {
+  const calls = makeFetchSequence({ taskStatus: "in_progress" });
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), attemptId: "attempt-failed", reportBotRole: "codex_leader" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [],
+    occurredAt: "2026-08-15T00:00:00.000Z"
+  });
+
+  const patched = calls.requests
+    .filter((request) => request.method === "PATCH" && /huai_tasks/.test(request.url))
+    .map((request) => request.body.status);
+  assert.equal(patched.includes("verification_pending"), false, "실패한 작업을 검증에 넘기면 안 된다");
+});
+
+test("검증 통과는 완료 승인 대기까지 스스로 이동한다 (마지막 한 번만 방장이 누른다)", async () => {
+  const calls = makeFetchSequence({ taskStatus: "verification_pending" });
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), attemptId: "attempt-pass" },
+    status: "completed",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "attempt-pass", text: "검증 통과. 문제 없음." }],
+    occurredAt: "2026-08-15T00:00:00.000Z"
+  });
+
+  const review = calls.requests.find((request) => String(request.body?.idempotency_key ?? "").startsWith("telegram-completion-review:"));
+  assert.ok(review, "방장에게 완료 승인 요청이 올라가야 한다");
+  assert.ok(review.body.payload.keyboard, "완료 버튼이 있어야 한다");
+});

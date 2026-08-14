@@ -47,6 +47,13 @@ export function parsePositiveInt(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+// 게이트마다 tsc 를 다시 돌리면 Windows 에서 dist 쓰기가 간헐 실패한다.
+// 맨 앞에서 한 번만 빌드하고 이후 게이트는 건너뛰게 한다.
+function prebuildOnce(spawnImpl, env) {
+  const result = spawnImpl("npm run build:force", { cwd: process.cwd(), env, stdio: "inherit", shell: true });
+  return result.status === 0;
+}
+
 export function runOperationReady({
   spawnImpl = spawnSync,
   env = process.env,
@@ -57,6 +64,15 @@ export function runOperationReady({
   stepTimeoutMs = parsePositiveInt(env.OPERATION_READY_STEP_TIMEOUT_MS)
 } = {}) {
   const totalStartedAt = nowImpl();
+  if (env.HUAI_PREBUILT !== "1") {
+    console.log("operation-ready prebuild-start");
+    if (!prebuildOnce(spawnImpl, env)) {
+      console.error("operation-ready prebuild-failed");
+      return { ok: false, failedStep: "build", status: 1 };
+    }
+    env = { ...env, HUAI_PREBUILT: "1" };
+    console.log("operation-ready prebuild-done (게이트별 재빌드 생략)");
+  }
   for (const step of STEPS) {
     const command = commandForStep(step);
     console.log(`\n== ${step} ==`);

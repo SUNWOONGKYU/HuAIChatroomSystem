@@ -222,6 +222,12 @@ export function transitionTaskStatus(
   if (event === "owner_verification_requested" && ["in_progress", "revision_in_progress", "reverification_pending"].includes(current) && context.isOwner) {
     return { allowed: true, nextStatus: "verification_pending" };
   }
+  // 의미 있는 산출물이 나오면 시스템이 검증을 부른다 (FR-012).
+  // 방장이 매번 "검증해줘"를 눌러야 한다면 작업이 사람 손을 떠나지 못한다.
+  // 검증 호출 자체는 방장 결정 사항이 아니다 — 완료 승인만 방장 몫이다.
+  if (event === "meaningful_intermediate_ready" && current === "in_progress") {
+    return { allowed: true, nextStatus: "verification_pending" };
+  }
   if (event === "verification_started" && current === "verification_pending" && isIndependentVerifier(context)) {
     return { allowed: true, nextStatus: "verification_in_progress" };
   }

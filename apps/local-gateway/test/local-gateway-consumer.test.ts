@@ -3,7 +3,7 @@ import test from "node:test";
 import { FakeBotServiceStore } from "../../bot-service/src/fake-store.js";
 import { runLocalGatewayConsumerOnce } from "../src/consumer.js";
 import { TelegramUpdateEnvelope, type GatewayEvent, type ExecutionRequest } from "../../../packages/contracts/src/index.js";
-import { type CommandPlan } from "../../../packages/ai-adapters/src/index.js";
+import { resolveAdapterPlan, type CommandPlan } from "../../../packages/ai-adapters/src/index.js";
 import { handleTelegramInput } from "../../../packages/orchestrator/src/index.js";
 
 test("executes allowed codex request and marks local gateway outbox sent", async () => {
@@ -439,3 +439,18 @@ function makePolicy() {
 
 
 
+
+test("소대장 판단과 감사는 읽기 전용으로 실행된다", () => {
+  // 판단은 아직 방장 승인 전이다. 판단하면서 파일을 고치면
+  // "승인된 작업만 실행된다"가 통째로 뚫린다.
+  const base = { roomId: "r", taskId: "t", actorId: "a", requestedBy: "1", projectPath: process.cwd(), prompt: "p", timeoutMs: 1000, idempotencyKey: "i", createdAt: "2026-08-15T00:00:00.000Z" } as const;
+  const writable = (request: ExecutionRequest) => {
+    const args = resolveAdapterPlan(request).args.join(" ");
+    return !args.includes("dontAsk") && !args.includes("read-only");
+  };
+
+  assert.equal(writable({ ...base, attemptId: "leader-planning-x", adapterType: "claude_code", reportBotRole: "platoon_leader" }), false);
+  assert.equal(writable({ ...base, attemptId: "leader-planning-y", adapterType: "codex", reportBotRole: "platoon_leader" }), false);
+  assert.equal(writable({ ...base, attemptId: "a1", adapterType: "claude_code", reportBotRole: "auditor" }), false, "검증자가 직접 고치면 자기검증이 된다");
+  assert.equal(writable({ ...base, attemptId: "a2", adapterType: "claude_code", reportBotRole: "claude_leader" }), true, "승인된 작업은 쓸 수 있어야 한다");
+});

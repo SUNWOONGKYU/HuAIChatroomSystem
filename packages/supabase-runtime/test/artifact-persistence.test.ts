@@ -7,16 +7,7 @@ const TASK_ID = "44444444-4444-4444-8444-444444444444";
 const ACTOR_ID = "55555555-5555-4555-8555-555555555555";
 
 test("completed gateway result inserts huai_artifacts rows and one artifact_saved event", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [eventRow("gateway-result:attempt-art:completed", "meaningful_intermediate_ready")]),
-    jsonResponse(201, []),
-    jsonResponse(200, []),
-    jsonResponse(201, []),
-    jsonResponse(200, []),
-    jsonResponse(201, []),
-    jsonResponse(201, [eventRow("artifact-saved:attempt-art", "artifact_saved")])
-  ]);
+  const calls = makeFetchSequence();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -45,12 +36,7 @@ test("completed gateway result inserts huai_artifacts rows and one artifact_save
 });
 
 test("already stored artifact is not inserted again and emits no artifact_saved event", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [eventRow("gateway-result:attempt-art:completed", "meaningful_intermediate_ready")]),
-    jsonResponse(201, []),
-    jsonResponse(200, [{ artifact_id: "existing-artifact" }])
-  ]);
+  const calls = makeFetchSequence(undefined, { existingArtifact: true });
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -65,11 +51,7 @@ test("already stored artifact is not inserted again and emits no artifact_saved 
 });
 
 test("non-uuid task ids skip artifact persistence", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [eventRow("gateway-result:attempt-art:completed", "meaningful_intermediate_ready")]),
-    jsonResponse(201, [])
-  ]);
+  const calls = makeFetchSequence();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -83,11 +65,7 @@ test("non-uuid task ids skip artifact persistence", async () => {
 });
 
 test("failed executions never persist artifacts", async () => {
-  const calls = makeFetchSequence([
-    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
-    jsonResponse(201, [eventRow("gateway-result:attempt-art:failed", "execution_delayed_or_failed")]),
-    jsonResponse(201, [])
-  ]);
+  const calls = makeFetchSequence();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
 
   await store.recordGatewayExecutionResult({
@@ -165,13 +143,24 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function makeFetchSequence(responses: Response[]) {
+// 순서 고정 큐는 구현에 호출이 하나 늘 때마다 깨진다. URL 로 응답을 정한다.
+function makeFetchSequence(_responses?: Response[], options: { existingArtifact?: boolean } = {}) {
   const requests: Array<{ url: string; method: string; body: any }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
-    requests.push({ url: String(input), method: String(init?.method ?? "GET"), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const response = responses.shift();
-    if (!response) throw new Error("unexpected-fetch-call");
-    return response;
+    const url = String(input);
+    const method = String(init?.method ?? "GET");
+    requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    const path = url.split("/rest/v1")[1] ?? url;
+    if (path.includes("huai_rooms")) return jsonResponse(200, [{ telegram_chat_id: "1001" }]);
+    if (path.includes("huai_tasks") && method === "GET") return jsonResponse(200, [{ status: "in_progress" }]);
+    if (path.includes("huai_artifacts") && method === "GET") {
+      return jsonResponse(200, options.existingArtifact ? [{ artifact_id: "existing" }] : []);
+    }
+    if (path.includes("huai_events") && method === "POST") {
+      const key = JSON.parse(String(init?.body)).idempotency_key;
+      return jsonResponse(201, [eventRow(key, "x")]);
+    }
+    return jsonResponse(200, []);
   };
   return { fetchImpl, requests };
 }
