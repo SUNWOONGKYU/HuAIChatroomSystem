@@ -132,6 +132,8 @@ async function publishNewEvents(events: GatewayEvent[], sink: GatewayEventSink, 
 
 export function classifyAgentFailure(result: ProcessRunResult, adapterType: string = "codex"): string | undefined {
   const allowUsageLimit = adapterType === "claude_code";
+  if (result.exitCode !== 0 && isAgentToolError(result.stderr)) return "agent-tool-error";
+
   const stderrFailure = classifyFailureText(result.stderr, { allowUsageLimit });
   if (stderrFailure) return stderrFailure;
 
@@ -151,7 +153,7 @@ export function classifyAgentFailure(result: ProcessRunResult, adapterType: stri
     }
   }
 
-  return classifyFailureText(result.stdout, { allowUsageLimit });
+  return adapterType === "claude_code" ? classifyFailureText(result.stdout, { allowUsageLimit }) : undefined;
 }
 
 function classifyFailureText(text: string, options: { allowUsageLimit: boolean }): string | undefined {
@@ -161,6 +163,10 @@ function classifyFailureText(text: string, options: { allowUsageLimit: boolean }
   if (/rejected by user approval settings/i.test(text)) return "agent-approval-blocked";
   if (/Unable to write|could not be created|could not be modified/i.test(text)) return "agent-reported-write-failure";
   return undefined;
+}
+
+function isAgentToolError(text: string): boolean {
+  return /codex_core::tools::router: error=|An empty pipe element is not allowed|timeout_ms must be at least 10000/i.test(text);
 }
 
 type AgentJsonEvent = {

@@ -667,10 +667,16 @@ function humanReadableGatewayError(error: string, outputSummary?: string, adapte
   if (adapterType === "claude_code" && /agent-usage-limit|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(combined)) {
     return "ClaudeBot 현재 상태: 사용 한도 초과. Claude Code 한도가 초기화된 뒤 다시 시도하거나 CodexBot으로 작업해야 합니다.";
   }
-  if (/BUTTON_DATA_INVALID/i.test(masked)) return "\uD154\uB808\uADF8\uB7A8 \uBC84\uD2BC \uB370\uC774\uD130\uAC00 \uB108\uBB34 \uAE38\uC5B4 \uC804\uC1A1\uC774 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";
-  if (/process-timeout/i.test(masked)) return "\uC791\uC5C5 \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
-  if (/spawn .*ENOENT/i.test(masked)) return "\uC2E4\uD589 \uD504\uB85C\uADF8\uB7A8\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.";
-  if (/exit-code-\d+/i.test(masked)) return "\uC2E4\uD589 \uC911 \uC624\uB958\uAC00 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4.";
+  if (/BUTTON_DATA_INVALID/i.test(masked)) return "텔레그램 버튼 데이터가 너무 길어 전송이 실패했습니다.";
+  if (/process-timeout/i.test(masked)) return "작업 시간이 초과되었습니다.";
+  if (/spawn .*ENOENT/i.test(masked)) return "실행 프로그램을 찾지 못했습니다.";
+  if (/agent-tool-error|codex_core::tools::router|An empty pipe element|timeout_ms must be at least 10000/i.test(combined)) {
+    return "CodexBot 내부 명령 실행이 실패해 결과를 확정하지 못했습니다. 작업 범위를 좁혀 다시 시도해 주세요.";
+  }
+  if (/agent-write-blocked|read-only sandbox|workspace is read-only|writing is blocked|patch rejected/i.test(combined)) {
+    return "작업자가 승인된 폴더에 쓰지 못했습니다. 로컬 게이트웨이 권한과 프로젝트 폴더 연결을 확인해 주세요.";
+  }
+  if (/exit-code-\d+/i.test(masked)) return "실행 중 오류가 발생했습니다.";
   return "실행 중 내부 오류가 발생했습니다. 상세 로그는 운영 기록에서 확인해 주세요.";
 }
 function extractCodexAgentMessage(text: string): string | undefined {

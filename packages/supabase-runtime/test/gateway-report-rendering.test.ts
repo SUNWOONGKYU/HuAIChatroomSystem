@@ -124,6 +124,23 @@ test("gateway failure report does not label Codex fixture output as Claude usage
   assert.equal(text.includes("ClaudeBot 현재 상태"), false);
 });
 
+test("gateway failure report explains Codex tool errors without raw internals", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "codex" },
+    status: "failed",
+    errorKind: "agent-tool-error",
+    events: [{
+      type: "stderr",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+      text: "codex_core::tools::router: error=Exit code: 1\nAn empty pipe element is not allowed."
+    }]
+  });
+
+  assert.match(text, /CodexBot 내부 명령 실행이 실패/);
+  assert.equal(text.includes("codex_core"), false);
+  assert.equal(text.includes("empty pipe"), false);
+});
 test("gateway failure report exposes classified Claude usage limit without raw CLI output", () => {
   const text = renderGatewayReportText({
     request: { ...makeRequest(), adapterType: "claude_code" },

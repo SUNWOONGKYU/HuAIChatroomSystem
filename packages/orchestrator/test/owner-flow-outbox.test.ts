@@ -102,6 +102,17 @@ test("bare continuation mention asks for task clarification", () => {
   assert.match(String(result.outbox[0]?.payload.text), /어느 작업을 이어갈지/);
 });
 
+test("vague actor delegation asks for concrete work instead of creating a proposal", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("@platoon_bot 그러면 코덱스에게 시켜") },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.events.length, 0);
+  assert.match(String(result.outbox[0]?.payload.text), /CodexBot에게 넘길 작업 내용/);
+});
 test("explicit proposal continuation becomes a follow-up proposal", () => {
   const result = handleTelegramInput(
     { kind: "message", envelope: envelope("@platoon_bot proposal_abc-123 계속해") },

@@ -192,6 +192,8 @@ export function routeFreeformMessage(
 ): Extract<TelegramInputHandlingResult, { accepted: true }> {
   const text = normalizeFreeformMessageText(input);
   if (isContinuationOnlyText(text)) return renderContinuationClarification(input);
+  const vagueDelegationRole = detectVagueActorDelegation(text, input);
+  if (vagueDelegationRole) return renderActorDelegationClarification(input, vagueDelegationRole);
   if (input.envelope.telegramBotRole === "auditor") return createDirectAuditRequest(input, ports, text);
   const freeformIntent = classifyFreeformIntent(text);
   if (freeformIntent === "acknowledgement") return renderAcknowledgementAnswer(input);
@@ -519,6 +521,34 @@ function isContinuationOnlyText(text: string): boolean {
   return isContinuationLikeText(text) && !extractWorkItemId(text);
 }
 
+function detectVagueActorDelegation(
+  text: string,
+  input: Extract<NormalizedTelegramInput, { kind: "message" | "command" }>
+): "claude_leader" | "codex_leader" | undefined {
+  if (extractWorkItemId(text)) return undefined;
+  const requestedActorRole = detectRequestedExecutionActorRole(text, input);
+  if (!requestedActorRole) return undefined;
+
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const withoutActor = normalized
+    .replace(/@claude_chatroom1_bot\b/gi, " ")
+    .replace(/@claude_chatroom_bot\b/gi, " ")
+    .replace(/@codex_chatroom_bot\b/gi, " ")
+    .replace(/\bclaudebot\b/g, " ")
+    .replace(/\bcodexbot\b/g, " ")
+    .replace(/\bclaude\b/g, " ")
+    .replace(/\bcodex\b/g, " ")
+    .replace(/클로드/g, " ")
+    .replace(/코덱스/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/^(그러면|그럼|그거|이거|저거|그 작업|그 일|그걸|이걸)?\s*(에게|한테|로|으로)?\s*(시켜|맡겨|넘겨|시키자|해봐|해|처리해)(줘|라|요|\.|!|\?)?$/.test(withoutActor)) {
+    return requestedActorRole;
+  }
+  return undefined;
+}
+
 function isContinuationLikeText(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
@@ -587,6 +617,28 @@ function renderContinuationClarification(
         payload: {
           text: "어느 작업을 이어갈지 확인이 필요합니다. task_id 또는 proposal_id를 붙여 다시 말하거나, 해당 작업 메시지에 답장해 주세요.",
           binding: { kind: "event", eventId: `mention-router:clarify:${input.envelope.updateId}` }
+        }
+      }
+    ]
+  };
+}
+
+function renderActorDelegationClarification(
+  input: Extract<NormalizedTelegramInput, { kind: "message" }>,
+  actorRole: "claude_leader" | "codex_leader"
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const actorLabel = actorRole === "claude_leader" ? "ClaudeBot" : "CodexBot";
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: [],
+    outbox: [
+      {
+        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        idempotencyKey: `telegram:mention-router:delegate-clarify:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
+        payload: {
+          text: `${actorLabel}에게 넘길 작업 내용을 함께 적어주세요.\n예: @leader_chatroom_bot ${actorLabel}에게 현재 오류 원인을 찾아 수정해줘`,
+          binding: { kind: "event", eventId: `mention-router:delegate-clarify:${input.envelope.updateId}` }
         }
       }
     ]

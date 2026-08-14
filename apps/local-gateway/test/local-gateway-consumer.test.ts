@@ -230,6 +230,33 @@ test("does not classify Codex stdout fixture text as Claude usage limit", async 
   assert.equal(last?.type === "failed" ? last.errorKind : "", "exit-code-1");
 });
 
+test("classifies Codex internal tool failures without masking them as generic errors", async () => {
+  const store = new FakeBotServiceStore();
+  const request = makeExecutionRequest({ projectPath: process.cwd(), adapterType: "codex" });
+  await seedLocalGatewayOutbox(store, request);
+  const events: GatewayEvent[] = [];
+
+  await runLocalGatewayConsumerOnce({
+    store,
+    policy: makePolicy(),
+    runner: {
+      async run() {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "작업을 확인하고 있습니다." } }) + "\n",
+          stderr: "codex_core::tools::router: error=Exit code: 1\nAn empty pipe element is not allowed."
+        };
+      }
+    },
+    sink: { async publish(event) { events.push(event); } },
+    limit: 10,
+    leaseUntil: "2026-08-10T00:01:00.000Z",
+    maxAttempts: 3
+  });
+
+  const last = events.at(-1);
+  assert.equal(last?.type === "failed" ? last.errorKind : "", "agent-tool-error");
+});
 test("records masked stdout stderr and retryable failure on non-zero exit", async () => {
   const store = new FakeBotServiceStore();
   const request = makeExecutionRequest({ projectPath: process.cwd(), adapterType: "codex" });

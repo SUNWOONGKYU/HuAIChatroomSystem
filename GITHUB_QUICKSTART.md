@@ -20,6 +20,15 @@
 
 네 봇은 반드시 서로 다른 Telegram bot token을 사용합니다. 통합 봇 하나가 여러 역할을 연기하는 구조는 사용하지 않습니다.
 
+권장 프로필 색상:
+
+- LeaderBot: 진한 주황 `#D9480F`, `assets/telegram-bot-profiles/leaderbot-deep-orange.png`
+- ClaudeBot: 밝은 주황 `#F59F00`, `assets/telegram-bot-profiles/claudebot-orange.png`
+- CodexBot: 보라 `#7C3AED`, `assets/telegram-bot-profiles/codexbot-purple.png`
+- AuditBot: 금색 `#F2C94C`, `assets/telegram-bot-profiles/auditbot-gold.png`
+
+Telegram 기본 이니셜 배경색은 직접 제어하지 않습니다. BotFather에서 `/setuserpic`으로 위 PNG를 각 봇 프로필 사진으로 올려 색상을 고정합니다.
+
 ## 2. 설치
 
 ```powershell
