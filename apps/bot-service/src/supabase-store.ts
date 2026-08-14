@@ -17,7 +17,7 @@ import { makeTelegramUpdateIdempotencyKey } from "./index.js";
 import { isForbiddenTransition, transitionTaskStatus, type TaskStatus, type WorkflowContext, type WorkflowEventType } from "../../../packages/workflow/src/index.js";
 import { summarizeSupabaseSendResult } from "../../../packages/supabase-runtime/src/index.js";
 import { isLeaderPlanningAttempt } from "../../../packages/orchestrator/src/index.js";
-import { buildLeaderPlanningPrompt, type RoomTurn } from "../../../packages/orchestrator/src/leader-planning.js";
+import { buildLeaderPlanningPrompt, type RoomFacts, type RoomTurn } from "../../../packages/orchestrator/src/leader-planning.js";
 
 export type SupabaseStoreConfig = {
   url: string;
@@ -302,13 +302,14 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       const telegramChatId = typeof row.payload.telegramChatId === "string" ? row.payload.telegramChatId : undefined;
       const turns = telegramChatId ? await this.fetchRecentRoomTurns(telegramChatId) : [];
       const leader = await this.fetchLeaderActor();
+      const facts = await this.fetchRoomFacts();
       hydrated.push({
         ...row,
         payload: {
           ...row.payload,
           executionRequest: {
             ...request,
-            prompt: buildLeaderPlanningPrompt({ turns, triggeringText }),
+            prompt: buildLeaderPlanningPrompt({ turns, triggeringText, facts }),
             ...(leader?.actor_id ? { actorId: leader.actor_id } : {}),
             ...(leader?.cli_session_id ? { resumeSessionId: leader.cli_session_id } : {})
           }
@@ -354,6 +355,34 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .catch(() => []);
     const value = rows[0]?.telegram_user_id;
     return value === undefined || value === null ? undefined : String(value);
+  }
+
+  // 소대장이 방에 대해 이미 알아야 하는 것.
+  // 이게 없으면 "이 방에 봇이 몇 개야?" 같은 질문에도 조사 작업을 만든다 —
+  // 자기가 모르니까 확인하겠다고 하는 것이고, 방장은 답을 원했는데 일이 하나 생긴다.
+  private async fetchRoomFacts(): Promise<RoomFacts | undefined> {
+    try {
+      const [actors, members, tasks] = await Promise.all([
+        this.client
+          .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(this.roomId) + "&status=eq.active&select=role")
+          .then((response) => response.json<Array<{ role: string }>>()),
+        this.client
+          .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(this.roomId) + "&status=eq.active&select=telegram_user_id")
+          .then((response) => response.json<Array<{ telegram_user_id: string }>>()),
+        this.client
+          .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(this.roomId) + "&status=not.in.(completed,cancelled,rejected_or_cancelled,proposal_rejected)&select=title,status&order=updated_at.desc&limit=8")
+          .then((response) => response.json<Array<{ title: string; status: string }>>())
+      ]);
+
+      return {
+        bots: actors.map((actor) => botLabelForRole(actor.role)),
+        memberCount: members.length,
+        openTasks: tasks.map((task) => ({ title: task.title, status: humanTaskStatus(task.status) }))
+      };
+    } catch {
+      // 방 정보를 못 읽어도 판단 자체는 진행한다. 맥락이 얕아질 뿐이다.
+      return undefined;
+    }
   }
 
   private async fetchLeaderActor(): Promise<{ actor_id: string; cli_session_id?: string } | undefined> {
@@ -983,6 +1012,14 @@ function nameFromTelegramUser(from: Record<string, unknown> | undefined, userId:
   const first = typeof from?.first_name === "string" ? from.first_name.trim() : "";
   const username = typeof from?.username === "string" ? from.username.trim() : "";
   return first || username || (userId ? "참여자" + userId.slice(-4) : "참여자");
+}
+
+function botLabelForRole(role: string): string {
+  if (role === "platoon_leader") return "LeaderBot(소대장)";
+  if (role === "claude_leader") return "ClaudeBot(Claude Code 실행)";
+  if (role === "codex_leader") return "CodexBot(Codex 실행)";
+  if (role === "auditor") return "AuditBot(독립 검증)";
+  return role;
 }
 
 function executionWorkerLabel(

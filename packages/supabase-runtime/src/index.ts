@@ -215,13 +215,25 @@ export class SupabaseOutboxStore {
     }
 
     if (decision.kind === "no_action") {
-      // 사람끼리 상의 중이라고 판단한 경우. 방을 어지럽히지 않고 기록만 남긴다.
       await this.insertEventIdempotently({
         room_id: input.request.roomId,
         task_id: null,
         event_type: "proposal_rejected",
         idempotency_key: "leader-no-action:" + input.request.attemptId,
         payload: { stage: "leader_no_action", reason: decision.reason, attemptId: input.request.attemptId }
+      });
+      await this.insertOutboxIdempotently({
+        event_id: sourceEventId,
+        idempotency_key: idempotencyKey,
+        target_kind: "telegram_bot",
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        payload: {
+          botRole: "platoon_leader",
+          telegramChatId,
+          text: maskSensitiveText(decision.reason || "알겠습니다.").slice(0, 500),
+          binding: { kind: "event", eventId: sourceEventId },
+          idempotencyKey
+        }
       });
       return;
     }

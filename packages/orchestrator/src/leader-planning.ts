@@ -32,16 +32,44 @@ export type LeaderDecision =
 
 const ASSIGNEES = ["claude_leader", "codex_leader", "both"] as const;
 
+// 소대장이 방에 대해 이미 알고 있어야 하는 것.
+//
+// 이것이 없으면 소대장은 백지 세션이라 "이 방에 봇이 몇 개야?" 같은 질문에도
+// "확인해서 보고하겠습니다" 하고 조사 작업을 만든다 — 방장은 답을 원했는데 작업이 하나 생긴다.
+export type RoomFacts = {
+  bots: readonly string[];
+  memberCount: number;
+  openTasks: readonly { title: string; status: string }[];
+};
+
 export function buildLeaderPlanningPrompt(input: {
   turns: readonly RoomTurn[];
   triggeringText: string;
+  facts?: RoomFacts;
 }): string {
   const transcript = input.turns.length === 0
     ? "(직전 논의 없음 — 아래 요청만 보고 판단하라)"
     : input.turns.map((turn) => `[${turn.isOwner ? "방장" : turn.speaker}] ${turn.text}`).join("\n");
 
+  const facts = input.facts;
+  const factLines = facts
+    ? [
+        "--- 네가 이미 아는 이 방의 정보 ---",
+        `이 방의 AI 봇 ${facts.bots.length}개: ${facts.bots.join(", ")}`,
+        `사람 참여자 ${facts.memberCount}명 (승인 권한은 방장에게만 있다)`,
+        facts.openTasks.length === 0
+          ? "진행 중인 작업 없음"
+          : `진행 중인 작업 ${facts.openTasks.length}건: ${facts.openTasks.map((task) => `${task.title}(${task.status})`).join(" / ")}`,
+        "이 정보로 답할 수 있는 질문에는 조사 작업을 만들지 말고 그냥 답하라.",
+        "--- 정보 끝 ---",
+        ""
+      ]
+    : [];
+
   return [
     "너는 Telegram 프로젝트방의 소대장이다. 방에는 사람 여럿과 역할별 AI 봇이 함께 있다.",
+    "",
+    ...factLines,
     "아래는 방에서 사람들이 나눈 최근 논의다. 마지막에 너를 부른 요청이 있다.",
     "",
     "--- 대화 ---",
@@ -56,6 +84,11 @@ export function buildLeaderPlanningPrompt(input: {
     "- claude_leader (Claude Code): 코드 읽기·분석·리팩터링·문서",
     "- codex_leader (Codex): 구현·수정·테스트·디버깅",
     "- 둘 다 필요하면 both",
+    "",
+    "판단 순서:",
+    "1) 위 방 정보나 대화 내용만으로 답할 수 있으면 작업을 만들지 말고 그냥 답하라.",
+    "   방장이 답을 원한 질문에 조사 작업을 만들면, 원하지도 않은 일이 하나 생기는 것이다.",
+    "2) 코드·파일·실행 결과를 실제로 열어봐야만 알 수 있는 것만 작업으로 만들어라.",
     "",
     "아래 형식으로만 답하라. 앞뒤 설명·코드펜스 금지. 값은 한 줄로 쓴다.",
     "",

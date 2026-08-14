@@ -69,11 +69,12 @@ test("판단 결과에는 아티팩트·감사 처리가 붙지 않는다", asyn
   assert.equal(calls.requests.some((request) => /huai_verifications/.test(request.url)), false);
 });
 
-test("소대장이 나설 자리가 아니라고 하면 제안을 만들지 않는다", async () => {
+test("소대장이 나설 자리가 아니라고 하면 제안을 만들지 않고 사유를 방에 올린다", async () => {
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
-    jsonResponse(201, [eventRow("leader-no-action:" + ATTEMPT)])
+    jsonResponse(201, [eventRow("leader-no-action:" + ATTEMPT)]),
+    jsonResponse(201, [])                                   // no_action 안내 outbox
   ]);
   const store = makeStore(calls.fetchImpl);
 
@@ -84,9 +85,13 @@ test("소대장이 나설 자리가 아니라고 하면 제안을 만들지 않�
     occurredAt: "2026-08-15T00:00:00.000Z"
   });
 
-  assert.equal(calls.requests.some((request) => /telegram-leader-plan/.test(String(request.body?.idempotency_key ?? ""))), false, "방을 어지럽히지 않는다");
   const record = calls.requests.find((request) => request.body?.idempotency_key === "leader-no-action:" + ATTEMPT);
-  assert.match(record?.body.payload.reason, /상의 중/, "판단 사유는 기록에 남는다");
+  assert.match(record?.body.payload.reason, /상의 중/, "판단 사유는 이벤트 기록에 남는다");
+
+  const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
+  assert.ok(message, "불렀는데 무소식이면 죽은 것처럼 보인다 — 사유를 방에 올린다");
+  assert.match(message?.body.payload.text, /상의 중/, "사유 텍스트가 메세지에 담긴다");
+  assert.equal(message?.body.payload.keyboard, undefined, "나설 자리 아니면 승인 버튼 없다");
 });
 
 test("판단을 못 하면 조용히 넘기지 않고 되묻는다", async () => {
