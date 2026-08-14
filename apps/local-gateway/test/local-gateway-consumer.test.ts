@@ -168,6 +168,27 @@ test("does not mark sent when agent reports write blocked despite zero exit", as
   assert.equal(last?.type, "failed");
   assert.equal(last?.type === "failed" ? last.errorKind : "", "agent-write-blocked");
 });
+
+test("classifies Claude usage limit reported on stderr", async () => {
+  const store = new FakeBotServiceStore();
+  const request = makeExecutionRequest({ projectPath: process.cwd(), adapterType: "claude_code" });
+  await seedLocalGatewayOutbox(store, request);
+  const events: GatewayEvent[] = [];
+
+  await runLocalGatewayConsumerOnce({
+    store,
+    policy: makePolicy(),
+    runner: { async run() { return { exitCode: 1, stdout: "", stderr: "Usage limit reached. Resets at 5:10pm." }; } },
+    sink: { async publish(event) { events.push(event); } },
+    limit: 10,
+    leaseUntil: "2026-08-10T00:01:00.000Z",
+    maxAttempts: 3
+  });
+
+  const last = events.at(-1);
+  assert.equal(last?.type === "failed" ? last.errorKind : "", "agent-usage-limit");
+});
+
 test("records masked stdout stderr and retryable failure on non-zero exit", async () => {
   const store = new FakeBotServiceStore();
   const request = makeExecutionRequest({ projectPath: process.cwd(), adapterType: "codex" });

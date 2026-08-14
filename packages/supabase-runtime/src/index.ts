@@ -656,7 +656,9 @@ function isInternalOutputLine(line: string): boolean {
 function humanReadableGatewayError(error: string, outputSummary?: string): string {
   const masked = maskSensitiveText(error);
   const combined = masked + (outputSummary ? "\n" + outputSummary : "");
-  if (/hit your session limit|session limit|resets\s+\d/i.test(combined)) return "Claude Code 사용 한도에 도달했습니다. 표시된 reset 시간 이후 다시 시도해야 합니다.";
+  if (/agent-usage-limit|hit your (?:session |usage )?limit|usage limit|session limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(combined)) {
+    return "ClaudeBot 현재 상태: 사용 한도 초과. Claude Code 한도가 초기화된 뒤 다시 시도하거나 CodexBot으로 작업해야 합니다.";
+  }
   if (/BUTTON_DATA_INVALID/i.test(masked)) return "\uD154\uB808\uADF8\uB7A8 \uBC84\uD2BC \uB370\uC774\uD130\uAC00 \uB108\uBB34 \uAE38\uC5B4 \uC804\uC1A1\uC774 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";
   if (/process-timeout/i.test(masked)) return "\uC791\uC5C5 \uC2DC\uAC04\uC774 \uCD08\uACFC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
   if (/spawn .*ENOENT/i.test(masked)) return "\uC2E4\uD589 \uD504\uB85C\uADF8\uB7A8\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.";

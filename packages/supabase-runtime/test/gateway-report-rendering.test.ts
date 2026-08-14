@@ -94,9 +94,21 @@ test("gateway failure report exposes Claude session limit clearly", () => {
   });
 
   assert.match(text, /^작업 실행 실패/);
-  assert.match(text, /Claude Code 사용 한도/);
-  assert.match(text, /reset 시간 이후/);
+  assert.match(text, /ClaudeBot 현재 상태: 사용 한도 초과/);
+  assert.match(text, /CodexBot으로 작업/);
   assert.equal(text.includes("실행 중 오류가 발생했습니다"), false);
+});
+
+test("gateway failure report exposes classified Claude usage limit without raw CLI output", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "claude_code" },
+    status: "failed",
+    errorKind: "agent-usage-limit",
+    events: []
+  });
+
+  assert.match(text, /ClaudeBot 현재 상태: 사용 한도 초과/);
+  assert.match(text, /한도가 초기화된 뒤/);
 });
 function makeRequest(): ExecutionRequest {
   return {
