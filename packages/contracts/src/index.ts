@@ -1,4 +1,4 @@
-﻿export type ActorRole =
+export type ActorRole =
   | "platoon_leader"
   | "claude_leader"
   | "codex_leader"
@@ -132,6 +132,14 @@ export type TelegramUpdate = {
     chat: { id: number | string };
     from?: { id: number | string; is_bot?: boolean; username?: string };
     text?: string;
+    caption?: string;
+    reply_to_message?: { message_id?: number | string; text?: string; caption?: string };
+    photo?: unknown;
+    document?: unknown;
+    video?: unknown;
+    animation?: unknown;
+    audio?: unknown;
+    voice?: unknown;
   };
   callback_query?: {
     id: string;
@@ -156,7 +164,10 @@ export class TelegramUpdateEnvelope {
     public readonly fromIsBot: boolean,
     public readonly messageText: string | undefined,
     public readonly callbackData: string | undefined,
-    public readonly callbackQueryId: string | undefined = undefined
+    public readonly callbackQueryId: string | undefined = undefined,
+    public readonly replyToMessageId: string | undefined = undefined,
+    public readonly replyToMessageText: string | undefined = undefined,
+    public readonly attachmentKinds: readonly string[] = []
   ) {}
 
   static parse(
@@ -177,6 +188,10 @@ export class TelegramUpdateEnvelope {
     }
 
     const userId = update.message?.from?.id ?? update.callback_query?.from?.id;
+    const messageText = update.message?.text ?? update.message?.caption;
+    const replyToMessage = update.message?.reply_to_message;
+    const replyToText = replyToMessage?.text ?? replyToMessage?.caption;
+    const attachmentKinds = attachmentKindsFromMessage(update.message);
 
     return new TelegramUpdateEnvelope(
       botId,
@@ -187,11 +202,23 @@ export class TelegramUpdateEnvelope {
       message?.message_id === undefined ? undefined : String(message.message_id),
       userId === undefined ? undefined : String(userId),
       update.message?.from?.is_bot === true,
-      update.message?.text,
+      messageText,
       update.callback_query?.data,
-      update.callback_query?.id
+      update.callback_query?.id,
+      replyToMessage?.message_id === undefined ? undefined : String(replyToMessage.message_id),
+      replyToText,
+      attachmentKinds
     );
   }
+}
+
+function attachmentKindsFromMessage(message: TelegramUpdate["message"] | undefined): readonly string[] {
+  if (!message) return [];
+  const kinds: string[] = [];
+  for (const key of ["photo", "document", "video", "animation", "audio", "voice"] as const) {
+    if (message[key] !== undefined) kinds.push(key);
+  }
+  return kinds;
 }
 
 export type NormalizedTelegramInput =

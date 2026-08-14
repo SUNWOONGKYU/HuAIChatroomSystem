@@ -1,4 +1,4 @@
-﻿# GitHub Quick Start
+# GitHub Quick Start
 
 이 문서는 HuAI Collab Chatroom System을 처음 받은 사람이 Telegram 프로젝트방 기반 운영 환경을 빠르게 구축하기 위한 절차입니다.
 
@@ -100,7 +100,25 @@ node scripts/apply-telegram-webhooks.mjs --dry-run
 node scripts/apply-telegram-webhooks.mjs --apply
 ```
 
-## 6. 서비스 실행
+## 6. Telegram 작업 지시 방식
+
+LeaderBot은 사람 말을 아래 유형으로 분류합니다. 사람끼리 하는 일반 대화는 멘션하지 않고 그냥 말하면 됩니다. AI에게 맡길 말만 `@leader_chatroom_bot`으로 보냅니다.
+
+| 지시 유형 | 예시 | 처리 |
+| --- | --- | --- |
+| 새 작업 | `@leader_chatroom_bot 버튼 오류 원인을 찾아 수정해줘` | 실행 제안을 만들고 방장 승인을 기다립니다. |
+| AI 지정 작업 | `@leader_chatroom_bot CodexBot에게 라우터 테스트를 보강해줘` | 제안에 담당 AI 힌트를 기록합니다. |
+| 여러 AI 검토 | `@leader_chatroom_bot 개선 사항 3개를 찾아 우선순위까지 검증해봐` | ClaudeBot·CodexBot 검토와 AuditBot 검증 흐름으로 분류합니다. |
+| 후속 작업 | `proposal_xxx 계속해` | 기존 작업의 후속 제안으로 묶습니다. |
+| 답장 후속 작업 | 작업 메시지에 답장으로 `진행해`, `이거 수정해` | 답장 대상의 `proposal_id/task_id`를 찾아 후속 제안으로 묶습니다. |
+| 오류 수정 | 오류 전문, 화면 캡처 caption, 또는 `proposal_id/task_id`와 함께 `이거 오류 해결해` | 실행 가능한 오류 수정 제안으로 만듭니다. |
+| 조회/상담 | `현재 진행 상황 알려줘`, `어떻게 써?` | 작업 제안 없이 바로 답합니다. |
+| 단순 확인 | `OK`, `확인`, `알겠어` | 짧게 확인만 응답합니다. |
+| 모호한 지시 | `진행해`, `그거 해`, `코덱스에게 작업시켜` | 대상이나 작업 내용이 없으면 실행하지 않고 필요한 정보를 되묻습니다. |
+
+Telegram 사진/파일 caption과 답장 대상 메시지는 라우터가 읽습니다. 단순 새 메시지로 `진행해`만 쓰면 어느 작업인지 알 수 없으므로, 작업 메시지에 답장하거나 `proposal_id/task_id`를 붙입니다.
+
+## 7. 서비스 실행
 
 운영 환경변수를 로드한 상태에서 다음 두 서비스를 실행합니다.
 
@@ -123,7 +141,7 @@ Invoke-RestMethod http://127.0.0.1:8797/healthz
 Invoke-RestMethod http://127.0.0.1:8797/readyz
 ```
 
-## 7. Telegram smoke test
+## 8. Telegram smoke test
 
 Telegram 그룹에서 다음처럼 입력합니다.
 
@@ -139,7 +157,7 @@ Telegram 그룹에서 다음처럼 입력합니다.
 4. CodexBot이 실행 결과를 보고합니다.
 5. Telegram에는 내부 JSON, hook log, token, stack trace가 노출되지 않습니다.
 
-## 8. 운영 사용법
+## 9. 운영 사용법
 
 일반 작업:
 
@@ -177,7 +195,7 @@ Telegram 그룹에서 다음처럼 입력합니다.
 - `보완`: 작업자에게 보완을 요청합니다.
 - `완료`: 방장이 최종 완료 승인합니다.
 
-## 9. 배포 전 최종 확인
+## 10. 배포 전 최종 확인
 
 ```powershell
 npm run verify:operation-ready

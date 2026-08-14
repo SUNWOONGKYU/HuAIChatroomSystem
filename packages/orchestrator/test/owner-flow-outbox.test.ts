@@ -127,6 +127,67 @@ test("context-dependent error fix request asks for the missing error context", (
   assert.match(String(result.outbox[0]?.payload.text), /어떤 오류인지 확인할 수 없습니다/);
   assert.match(String(result.outbox[0]?.payload.text), /오류 메시지/);
 });
+
+test("context-dependent fix request with attachment becomes a work proposal", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("@platoon_bot 이거 오류 해결해", undefined, "platoon_leader", "platoon_bot", { attachmentKinds: ["photo"] }) },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.events[0]?.eventType, "proposal_created");
+  assert.equal(result.events[0]?.payload.intent, "new_task");
+  assert.match(String(result.events[0]?.payload.rawText), /첨부: photo/);
+  assert.match(String(result.outbox[0]?.payload.text), /작업 제안/);
+});
+
+test("bare continuation reply to a proposal message becomes a follow-up proposal", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("진행해", undefined, "platoon_leader", "platoon_bot", { replyToMessageText: "작업 실행을 시작했습니다: proposal_abc-123" }) },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.events[0]?.eventType, "proposal_created");
+  assert.equal(result.events[0]?.payload.intent, "task_followup");
+  assert.equal(result.events[0]?.payload.targetId, "proposal_abc-123");
+  assert.match(String(result.outbox[0]?.payload.text), /후속 작업 제안/);
+});
+
+test("context-dependent fix request reply to a proposal message becomes a follow-up proposal", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("이거 오류 해결해", undefined, "platoon_leader", "platoon_bot", { replyToMessageText: "작업 실행을 시작했습니다: proposal_abc-123" }) },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.events[0]?.eventType, "proposal_created");
+  assert.equal(result.events[0]?.payload.intent, "task_followup");
+  assert.equal(result.events[0]?.payload.targetId, "proposal_abc-123");
+});
+
+test("caption text and reply context are parsed from Telegram updates", () => {
+  const parsed = TelegramUpdateEnvelope.parse("bot-platoon", "platoon_bot", "platoon_leader", {
+    update_id: 77,
+    message: {
+      message_id: 7001,
+      chat: { id: 1001 },
+      from: { id: 2001, is_bot: false },
+      caption: "@platoon_bot 이거 오류 해결해",
+      photo: [{ file_id: "photo-file" }],
+      reply_to_message: { message_id: 6001, text: "작업 실행을 시작했습니다: proposal_abc-123" }
+    }
+  });
+
+  assert.equal(parsed.messageText, "@platoon_bot 이거 오류 해결해");
+  assert.equal(parsed.replyToMessageId, "6001");
+  assert.match(parsed.replyToMessageText ?? "", /proposal_abc-123/);
+  assert.deepEqual(parsed.attachmentKinds, ["photo"]);
+});
+
 test("explicit proposal continuation becomes a follow-up proposal", () => {
   const result = handleTelegramInput(
     { kind: "message", envelope: envelope("@platoon_bot proposal_abc-123 계속해") },
@@ -141,7 +202,7 @@ test("explicit proposal continuation becomes a follow-up proposal", () => {
   assert.match(String(result.outbox[0]?.payload.text), /후속 작업 제안/);
 });
 
-function envelope(messageText?: string, callbackData?: string, botRole: "platoon_leader" | "claude_leader" | "codex_leader" | "auditor" = "platoon_leader", botUsername = "platoon_bot"): TelegramUpdateEnvelope {
+function envelope(messageText?: string, callbackData?: string, botRole: "platoon_leader" | "claude_leader" | "codex_leader" | "auditor" = "platoon_leader", botUsername = "platoon_bot", options: { replyToMessageText?: string; attachmentKinds?: readonly string[] } = {}): TelegramUpdateEnvelope {
   return new TelegramUpdateEnvelope(
     `bot-${botRole}`,
     botUsername,
@@ -152,7 +213,11 @@ function envelope(messageText?: string, callbackData?: string, botRole: "platoon
     "2001",
     false,
     messageText,
-    callbackData
+    callbackData,
+    undefined,
+    undefined,
+    options.replyToMessageText,
+    options.attachmentKinds ?? []
   );
 }
 

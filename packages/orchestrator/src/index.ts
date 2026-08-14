@@ -145,11 +145,12 @@ export function handleTelegramInput(
 
 export function createProposalFromTelegram(
   input: Extract<NormalizedTelegramInput, { kind: "message" | "command" }>,
-  ports: TelegramInputHandlingPorts
+  ports: TelegramInputHandlingPorts,
+  overrideText?: string
 ): Extract<TelegramInputHandlingResult, { accepted: true }> {
   const proposalId = ports.makeId("proposal");
-  const text = input.kind === "message" ? input.envelope.messageText ?? "" : input.command.args.join(" ");
-  const routed = routeProposalText(input, text);
+  const text = overrideText ?? (input.kind === "message" ? input.envelope.messageText ?? "" : input.command.args.join(" "));
+  const routed = routeProposalText(input, text, overrideText !== undefined);
   const title = summarizeTitle(routed.text);
   const event: OrchestratorEvent = {
     eventType: "proposal_created",
@@ -191,8 +192,19 @@ export function routeFreeformMessage(
   ports: TelegramInputHandlingPorts
 ): Extract<TelegramInputHandlingResult, { accepted: true }> {
   const text = normalizeFreeformMessageText(input);
-  if (isContinuationOnlyText(text)) return renderContinuationClarification(input);
-  if (isContextDependentFixRequest(text)) return renderContextDependentFixClarification(input);
+  const replyTargetId = extractReplyTargetId(input);
+  if (isContinuationOnlyText(text)) {
+    return replyTargetId
+      ? createProposalFromTelegram(input, ports, `${replyTargetId} ${text}`)
+      : renderContinuationClarification(input);
+  }
+  if (isContextDependentFixRequest(text)) {
+    return replyTargetId
+      ? createProposalFromTelegram(input, ports, `${replyTargetId} ${text}`)
+      : hasAttachmentContext(input)
+        ? createProposalFromTelegram(input, ports, `${text} 첨부: ${input.envelope.attachmentKinds.join(", ")}`)
+        : renderContextDependentFixClarification(input);
+  }
   const vagueDelegationRole = detectVagueActorDelegation(text, input);
   if (vagueDelegationRole) return renderActorDelegationClarification(input, vagueDelegationRole);
   if (input.envelope.telegramBotRole === "auditor") return createDirectAuditRequest(input, ports, text);
@@ -478,13 +490,14 @@ type RoutedProposalText = {
 
 function routeProposalText(
   input: Extract<NormalizedTelegramInput, { kind: "message" | "command" }>,
-  originalText: string
+  originalText: string,
+  useOriginalText = false
 ): RoutedProposalText {
-  const text = input.kind === "message" ? normalizeFreeformMessageText(input) : originalText.trim();
+  const text = useOriginalText ? originalText.trim() : input.kind === "message" ? normalizeFreeformMessageText(input) : originalText.trim();
   const targetId = extractWorkItemId(text);
   const intent = isMultiAiReviewRequest(text)
     ? "multi_ai_review"
-    : targetId && isContinuationLikeText(text) ? "task_followup" : "new_task";
+    : targetId ? "task_followup" : "new_task";
   const requestedActorRole = detectRequestedExecutionActorRole(originalText, input);
   return { text, intent, targetId, requestedActorRole };
 }
@@ -516,6 +529,14 @@ function normalizeFreeformMessageText(input: Extract<NormalizedTelegramInput, { 
   const username = input.envelope.telegramBotUsername.replace(/^@/, "");
   const mentionPattern = new RegExp("@" + username + "\\b", "gi");
   return (input.envelope.messageText ?? "").replace(mentionPattern, " ").replace(/\s+/g, " ").trim();
+}
+
+function extractReplyTargetId(input: Extract<NormalizedTelegramInput, { kind: "message" }>): string | undefined {
+  return extractWorkItemId(input.envelope.replyToMessageText ?? "");
+}
+
+function hasAttachmentContext(input: Extract<NormalizedTelegramInput, { kind: "message" }>): boolean {
+  return input.envelope.attachmentKinds.length > 0;
 }
 
 function isContinuationOnlyText(text: string): boolean {
