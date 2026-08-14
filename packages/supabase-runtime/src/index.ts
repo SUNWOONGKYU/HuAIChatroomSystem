@@ -106,6 +106,13 @@ export class SupabaseOutboxStore {
       }
     });
 
+    // 소대장 판단은 작업 실행이 아니다. "작업 실행 완료" 보고를 내보내면 방에 잡음만 남는다.
+    // 판단 결과는 아래 applyLeaderPlanningResult 가 제안 또는 답변으로 올린다.
+    if (isLeaderPlanningAttempt(input.request.attemptId)) {
+      await this.applyLeaderPlanningResult(input, telegramChatId, event.event_id);
+      return;
+    }
+
     const botRole = input.request.reportBotRole ?? (input.request.adapterType === "codex" ? "codex_leader" : "claude_leader");
     const resultSummary = summarizeGatewayOutput(input.events) ?? "";
     const text = renderGatewayReportText(input);
@@ -124,12 +131,6 @@ export class SupabaseOutboxStore {
         idempotencyKey
       }
     });
-
-    // 소대장 판단 결과는 작업 산출물이 아니라 제안이다. 여기서 갈라 처리하고 끝낸다.
-    if (isLeaderPlanningAttempt(input.request.attemptId)) {
-      await this.applyLeaderPlanningResult(input, telegramChatId, event.event_id);
-      return;
-    }
 
     if (input.status === "completed") {
       await this.persistCollectedArtifacts(input.request, input.events);
@@ -195,6 +196,24 @@ export class SupabaseOutboxStore {
       return;
     }
 
+    // 질문에는 작업 카드가 아니라 답으로 응한다.
+    if (decision.kind === "answer") {
+      await this.insertOutboxIdempotently({
+        event_id: sourceEventId,
+        idempotency_key: idempotencyKey,
+        target_kind: "telegram_bot",
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        payload: {
+          botRole: "platoon_leader",
+          telegramChatId,
+          text: maskSensitiveText(decision.text).slice(0, 3000),
+          binding: { kind: "event", eventId: sourceEventId },
+          idempotencyKey
+        }
+      });
+      return;
+    }
+
     if (decision.kind === "no_action") {
       // 사람끼리 상의 중이라고 판단한 경우. 방을 어지럽히지 않고 기록만 남긴다.
       await this.insertEventIdempotently({
@@ -208,7 +227,10 @@ export class SupabaseOutboxStore {
     }
 
     const plan = decision.plan;
-    const proposalId = "proposal_" + input.request.attemptId.replace(LEADER_PLANNING_ATTEMPT_PREFIX, "");
+    // Telegram 콜백 데이터는 64바이트가 한계다.
+    // "proposal:<id>:approve" 형태로 실려 나가므로 id 를 짧게 유지해야 한다.
+    // 처음엔 attemptId 를 그대로 붙였다가 71바이트가 되어 BUTTON_DATA_INVALID 로 죽었다.
+    const proposalId = shortProposalId(input.request.attemptId);
     await this.insertEventIdempotently({
       room_id: input.request.roomId,
       task_id: null,
@@ -621,6 +643,17 @@ export function renderLeaderPlanMessage(plan: LeaderPlan): string {
     "완료 조건: " + plan.completionCriteria,
     "담당: " + assigneeLabel + (plan.reason ? " (" + plan.reason + ")" : "")
   ].join("\n");
+}
+
+// Telegram inline keyboard 의 callback_data 는 64바이트가 한계다.
+// "proposal:<id>:approve" 로 실려 나가므로 id 는 40바이트 안쪽으로 유지한다.
+export const MAX_TELEGRAM_CALLBACK_BYTES = 64;
+
+export function shortProposalId(attemptId: string): string {
+  const raw = attemptId.replace(LEADER_PLANNING_ATTEMPT_PREFIX, "").replace(/^planning_/, "");
+  // uuid 의 앞 두 마디만 쓴다. 방 하나 안에서 충돌할 확률은 무시할 수 있다.
+  const compact = raw.replace(/-/g, "").slice(0, 16);
+  return "p_" + compact;
 }
 
 // 표시용 정리를 거치지 않은 원본 stdout. 소대장 판단 JSON 을 잃지 않으려면 필요하다.

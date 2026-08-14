@@ -219,10 +219,13 @@ export function routeFreeformMessage(
   const vagueDelegationRole = detectVagueActorDelegation(text, input);
   if (vagueDelegationRole) return renderActorDelegationClarification(input, vagueDelegationRole);
   if (input.envelope.telegramBotRole === "auditor") return createDirectAuditRequest(input, ports, text);
+
+  // 인사·감사는 판단을 돌릴 값이 없다. 여기서만 끊는다.
   const freeformIntent = classifyFreeformIntent(text);
   if (freeformIntent === "acknowledgement") return renderAcknowledgementAnswer(input);
-  if (freeformIntent === "informational_answer") return renderInformationalAnswer(input, text);
 
+  // 질문인지 작업인지는 키워드 표가 아니라 소대장이 가른다.
+  // 예전에는 "정리해줘" 같은 단어 하나로 질문으로 분류돼 작업 지시가 소대장에게 닿지 못했다.
   // 소대장이 부름을 받으면 정규식으로 제목을 고르는 대신 실제로 판단하게 한다.
   // 방의 직전 논의를 읽고 목적·범위·완료조건·담당을 재구성한다.
   // 게이트웨이 경유라 기존 Claude/Codex 구독을 그대로 쓴다.
@@ -230,7 +233,8 @@ export function routeFreeformMessage(
     return requestLeaderPlanning(input, ports, text);
   }
 
-  // 소대장 판단 경로가 없으면(게이트웨이 미설정 등) 기존 규칙 기반 제안으로 떨어진다.
+  // 소대장 판단 경로가 없으면(게이트웨이 미설정 등) 기존 규칙 기반으로 떨어진다.
+  if (freeformIntent === "informational_answer") return renderInformationalAnswer(input, text);
   return createProposalFromTelegram(input, ports);
 }
 

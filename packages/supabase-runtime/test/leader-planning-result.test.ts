@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, renderLeaderPlanMessage, sessionIdFromGatewayEvents } from "../src/index.js";
+import { MAX_TELEGRAM_CALLBACK_BYTES, SupabaseOutboxStore, renderLeaderPlanMessage, sessionIdFromGatewayEvents, shortProposalId } from "../src/index.js";
+import { buildProposalKeyboard } from "../../telegram-ui/src/index.js";
 import { type ExecutionRequest, type GatewayEvent } from "../../contracts/src/index.js";
 
 // 소대장이 대화를 읽고 내린 판단이 방장에게 승인 버튼과 함께 올라가는가.
@@ -22,7 +23,6 @@ test("소대장 판단이 제안 이벤트와 승인 버튼으로 올라간다",
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
-    jsonResponse(201, []),                                  // 실행 보고 outbox
     jsonResponse(201, [eventRow("leader-proposal:" + ATTEMPT)]),
     jsonResponse(201, [])                                   // 제안 outbox
   ]);
@@ -53,7 +53,6 @@ test("판단 결과에는 아티팩트·감사 처리가 붙지 않는다", asyn
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
-    jsonResponse(201, []),
     jsonResponse(201, [eventRow("leader-proposal:" + ATTEMPT)]),
     jsonResponse(201, [])
   ]);
@@ -74,7 +73,6 @@ test("소대장이 나설 자리가 아니라고 하면 제안을 만들지 않�
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
-    jsonResponse(201, []),
     jsonResponse(201, [eventRow("leader-no-action:" + ATTEMPT)])
   ]);
   const store = makeStore(calls.fetchImpl);
@@ -95,7 +93,6 @@ test("판단을 못 하면 조용히 넘기지 않고 되묻는다", async () =>
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
-    jsonResponse(201, []),
     jsonResponse(201, [])
   ]);
   const store = makeStore(calls.fetchImpl);
@@ -116,7 +113,6 @@ test("다음 호출에서 이어받도록 세션을 기억한다", async () => {
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
-    jsonResponse(201, []),
     jsonResponse(200, []),
     jsonResponse(201, [eventRow("leader-proposal:" + ATTEMPT)]),
     jsonResponse(201, [])
@@ -135,6 +131,39 @@ test("다음 호출에서 이어받도록 세션을 기억한다", async () => {
 
   const patch = calls.requests.find((request) => request.method === "PATCH" && /huai_ai_actors/.test(request.url));
   assert.equal(patch?.body.cli_session_id, "3bf2d064-e882-4abe-920e-5893ce0a4e59");
+});
+
+test("승인 버튼의 callback_data 가 Telegram 한계를 넘지 않는다", () => {
+  // 실전에서 71바이트가 나가 BUTTON_DATA_INVALID 로 죽었다.
+  // 소대장 제안이 방장에게 도달하지 못한 원인이었다.
+  const attempt = "leader-planning-planning_3dc08364-5a93-4dab-9c2d-875f18cd352f";
+  const keyboard = buildProposalKeyboard(shortProposalId(attempt));
+  for (const row of keyboard.inline_keyboard) {
+    for (const button of row) {
+      const bytes = Buffer.byteLength(String((button as { callback_data: string }).callback_data), "utf8");
+      assert.equal(bytes <= MAX_TELEGRAM_CALLBACK_BYTES, true, `callback_data ${bytes}바이트: ${(button as { callback_data: string }).callback_data}`);
+    }
+  }
+});
+
+test("판단 실행은 작업 실행 보고를 내보내지 않는다", async () => {
+  const calls = makeFetchSequence([
+    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
+    jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
+    jsonResponse(201, [eventRow("leader-proposal:" + ATTEMPT)]),
+    jsonResponse(201, [])
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  await store.recordGatewayExecutionResult({
+    request: makeRequest(),
+    status: "completed",
+    events: [stdout(JSON.stringify(PLAN))],
+    occurredAt: "2026-08-15T00:00:00.000Z"
+  });
+
+  const report = calls.requests.find((request) => String(request.body?.idempotency_key ?? "").startsWith("telegram-report:"));
+  assert.equal(report, undefined, "판단은 작업 실행이 아니다 — 방에 '작업 실행 완료' 를 남기면 잡음이다");
 });
 
 test("세션 id 추출", () => {

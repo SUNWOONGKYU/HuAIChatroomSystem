@@ -22,9 +22,12 @@ export type LeaderPlan = {
   reason: string;
 };
 
-// 소대장이 나설 자리가 아니라고 판단한 경우.
 export type LeaderDecision =
   | { kind: "plan"; plan: LeaderPlan }
+  // 질문이면 작업으로 만들지 않고 소대장이 직접 답한다.
+  // 이 갈래가 없으면 "질문인가 작업인가"를 다시 키워드 표가 정하게 된다.
+  | { kind: "answer"; text: string }
+  // 사람끼리 상의 중이라 나설 자리가 아닌 경우.
   | { kind: "no_action"; reason: string };
 
 const ASSIGNEES = ["claude_leader", "codex_leader", "both"] as const;
@@ -54,17 +57,84 @@ export function buildLeaderPlanningPrompt(input: {
     "- codex_leader (Codex): 구현·수정·테스트·디버깅",
     "- 둘 다 필요하면 both",
     "",
-    "작업으로 만들 것이 아니라고 판단되면(사람끼리 상의 중이거나 단순 질문이면)",
-    'noAction 에 사유를 넣고 나머지는 비워라.',
+    "아래 형식으로만 답하라. 앞뒤 설명·코드펜스 금지. 값은 한 줄로 쓴다.",
     "",
-    "반드시 아래 JSON 하나만 출력하라. 설명 금지, 코드펜스 금지.",
-    '{"noAction":"","title":"","purpose":"","scope":"","completionCriteria":"","assignee":"claude_leader|codex_leader|both","reason":""}'
+    "작업으로 만들 때:",
+    "DECISION: plan",
+    "TITLE: <작업명>",
+    "PURPOSE: <목적>",
+    "SCOPE: <범위 — 논의에서 나온 항목을 빠짐없이>",
+    "DONE: <완료 조건 — 검증자가 합격/불합격을 판정할 기준>",
+    "ASSIGNEE: claude_leader 또는 codex_leader 또는 both",
+    "REASON: <그 담당을 고른 이유>",
+    "",
+    "질문이거나 설명을 구하는 것이면:",
+    "DECISION: answer",
+    "ANSWER: <답변>",
+    "",
+    "사람끼리 상의 중이라 네가 나설 자리가 아니면:",
+    "DECISION: none",
+    "REASON: <사유>"
   ].join("\n");
 }
 
-// LLM 출력은 신뢰할 수 없다. 코드펜스·앞뒤 설명이 붙어도 살려내고,
-// 형태가 어긋나면 조용히 통과시키지 말고 실패로 돌려준다.
+// LLM 출력은 신뢰할 수 없다.
+//
+// 처음에는 JSON 으로 받았는데 실전에서 모델이 여는 따옴표를 빠뜨려
+// (`"scope":"...",completionCriteria":"..."`) 판단이 통째로 유실됐다.
+// 한글 산문을 JSON 문자열에 담으면 따옴표·이스케이프가 깨지기 쉽다.
+// 그래서 줄 단위 `KEY: 값` 을 1차 형식으로 쓰고, JSON 은 하위호환으로만 남긴다.
 export function parseLeaderDecision(raw: string): LeaderDecision | undefined {
+  return parseLineFormat(raw) ?? parseJsonFormat(raw);
+}
+
+function parseLineFormat(raw: string): LeaderDecision | undefined {
+  const fields = new Map<string, string>();
+  let currentKey: string | undefined;
+  for (const line of raw.split(/\r?\n/)) {
+    const match = /^\s*(DECISION|TITLE|PURPOSE|SCOPE|DONE|ASSIGNEE|REASON|ANSWER)\s*:\s*(.*)$/i.exec(line);
+    if (match) {
+      currentKey = match[1].toUpperCase();
+      fields.set(currentKey, match[2].trim());
+      continue;
+    }
+    // 값이 여러 줄에 걸친 경우 이어 붙인다.
+    if (currentKey && line.trim()) fields.set(currentKey, `${fields.get(currentKey) ?? ""} ${line.trim()}`.trim());
+  }
+
+  const decision = (fields.get("DECISION") ?? "").toLowerCase();
+  if (!decision) return undefined;
+
+  if (decision.startsWith("answer")) {
+    const answer = fields.get("ANSWER");
+    return answer ? { kind: "answer", text: answer } : undefined;
+  }
+  if (decision.startsWith("none") || decision.startsWith("no")) {
+    return { kind: "no_action", reason: fields.get("REASON") || "소대장이 나설 단계가 아니라고 판단했습니다." };
+  }
+  if (!decision.startsWith("plan")) return undefined;
+
+  const title = fields.get("TITLE");
+  const scope = fields.get("SCOPE");
+  const completionCriteria = fields.get("DONE");
+  if (!title || !scope || !completionCriteria) return undefined;
+
+  const assigneeRaw = (fields.get("ASSIGNEE") ?? "").toLowerCase();
+  const assignee = ASSIGNEES.find((candidate) => assigneeRaw.includes(candidate)) ?? (assigneeRaw.includes("both") ? "both" : "codex_leader");
+  return {
+    kind: "plan",
+    plan: {
+      title,
+      purpose: fields.get("PURPOSE") || title,
+      scope,
+      completionCriteria,
+      assignee,
+      reason: fields.get("REASON") ?? ""
+    }
+  };
+}
+
+function parseJsonFormat(raw: string): LeaderDecision | undefined {
   const json = extractJsonObject(raw);
   if (!json) return undefined;
 
@@ -74,6 +144,9 @@ export function parseLeaderDecision(raw: string): LeaderDecision | undefined {
   } catch {
     return undefined;
   }
+
+  const answer = text(parsed.answer);
+  if (answer) return { kind: "answer", text: answer };
 
   const noAction = text(parsed.noAction);
   if (noAction) return { kind: "no_action", reason: noAction };

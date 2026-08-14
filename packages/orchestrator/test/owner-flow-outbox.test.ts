@@ -375,19 +375,43 @@ test("task trace command includes structured DB query payload", () => {
   assert.deepEqual(result.outbox[0]?.payload.query, { kind: "trace", taskId: "22222222-2222-4222-8222-222222222222" });
 });
 
-test("leader mention informational question answers without proposal buttons", () => {
+test("질문인지 작업인지는 키워드 표가 아니라 소대장이 가른다", () => {
+  // 예전에는 "정리해줘" 같은 단어 하나로 질문으로 분류돼,
+  // 실제 작업 지시가 소대장에게 닿지 못하고 정형 답변만 나갔다.
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 설명문 관계도 흐름도 여기 채팅장에 띄워 줄 수 있나?") },
+    { kind: "message", envelope: envelope("@platoon_bot 로그인 세션이 풀리는 원인을 정리해줘") },
     ownerContext(),
     ports()
   );
 
   assert.equal(result.accepted, true);
+  const gateway = result.outbox.find((item) => item.target.kind === "local_gateway");
+  assert.ok(gateway, "판단으로 넘어가야 한다");
+  assert.equal(isLeaderPlanningAttempt((gateway.payload.executionRequest as { attemptId: string }).attemptId), true);
+  assert.equal(result.outbox.some((item) => item.payload.keyboard), false, "판단 전에는 버튼이 없다");
+});
+
+test("인사·감사는 판단을 돌리지 않는다", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("@platoon_bot 고마워") },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.outbox.some((item) => item.target.kind === "local_gateway"), false, "인사에 LLM 을 돌릴 이유가 없다");
+});
+
+test("판단 경로가 없으면 기존 정형 답변으로 떨어진다", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("@platoon_bot 설명문 관계도 흐름도 여기 채팅장에 띄워 줄 수 있나?") },
+    ownerContext(),
+    { makeId: (prefix: string) => `${prefix}-1`, now: () => "2026-08-10T00:00:00.000Z" }
+  );
+
+  assert.equal(result.accepted, true);
   assert.equal(result.events.length, 0);
-  assert.equal(result.outbox.length, 1);
   const text = String(result.outbox[0]?.payload.text);
   assert.match(text, /가능합니다/);
-  assert.equal(text.includes("/trace <task_id>"), true);
-  assert.doesNotMatch(text, /작업 제안/);
   assert.equal(result.outbox[0]?.payload.keyboard, undefined);
 });
