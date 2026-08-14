@@ -573,7 +573,15 @@ export function renderGatewayReportText(input: {
   }
 
   const outputSummary = summarizeGatewayOutput(input.events);
-  const reason = humanReadableGatewayError(input.errorKind ?? outputSummary ?? "failed", outputSummary);
+  const failureEvidence = input.events
+    .map((event) => {
+      if ((event.type === "stdout" || event.type === "stderr") && "text" in event) return event.text;
+      if (event.type === "failed" && "errorKind" in event) return event.errorKind;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+  const reason = humanReadableGatewayError(input.errorKind ?? outputSummary ?? "failed", failureEvidence || outputSummary, input.request.adapterType);
   return ["\uC791\uC5C5 \uC2E4\uD589 \uC2E4\uD328", "\uC6D0\uC778: " + reason, "\uD544\uC694\uD558\uBA74 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uAC70\uB098 \uC791\uC5C5\uC790 \uBCF4\uC644\uC744 \uC694\uCCAD\uD574 \uC8FC\uC138\uC694."].join("\n");
 }
 function summarizeGatewayOutput(events: GatewayEvent[]): string | undefined {
@@ -653,10 +661,10 @@ function isInternalOutputLine(line: string): boolean {
     /^(OUTPUT|ERROR|STDOUT|STDERR)\s*:?$/i.test(line)
   );
 }
-function humanReadableGatewayError(error: string, outputSummary?: string): string {
+function humanReadableGatewayError(error: string, outputSummary?: string, adapterType = "codex"): string {
   const masked = maskSensitiveText(error);
   const combined = masked + (outputSummary ? "\n" + outputSummary : "");
-  if (/agent-usage-limit|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(combined)) {
+  if (adapterType === "claude_code" && /agent-usage-limit|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(combined)) {
     return "ClaudeBot 현재 상태: 사용 한도 초과. Claude Code 한도가 초기화된 뒤 다시 시도하거나 CodexBot으로 작업해야 합니다.";
   }
   if (/BUTTON_DATA_INVALID/i.test(masked)) return "\uD154\uB808\uADF8\uB7A8 \uBC84\uD2BC \uB370\uC774\uD130\uAC00 \uB108\uBB34 \uAE38\uC5B4 \uC804\uC1A1\uC774 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.";

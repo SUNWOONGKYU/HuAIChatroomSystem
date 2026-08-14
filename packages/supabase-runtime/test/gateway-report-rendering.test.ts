@@ -112,6 +112,18 @@ test("gateway failure report exposes Claude weekly limit clearly", () => {
   assert.equal(text.includes("weekly limit"), false);
 });
 
+
+test("gateway failure report does not label Codex fixture output as Claude usage limit", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "codex" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "test fixture: You've hit your weekly limit · resets Aug 15, 7pm (Asia/Seoul)" }]
+  });
+
+  assert.equal(text.includes("ClaudeBot 현재 상태"), false);
+});
+
 test("gateway failure report exposes classified Claude usage limit without raw CLI output", () => {
   const text = renderGatewayReportText({
     request: { ...makeRequest(), adapterType: "claude_code" },
@@ -122,6 +134,24 @@ test("gateway failure report exposes classified Claude usage limit without raw C
 
   assert.match(text, /ClaudeBot 현재 상태: 사용 한도 초과/);
   assert.match(text, /한도가 초기화된 뒤/);
+});
+
+test("gateway failure report detects Claude limit before internal output is filtered", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "claude_code" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{
+      type: "stdout",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+      text: '{"type":"result","result":"You have reached your weekly limit. Resets tomorrow."}'
+    }]
+  });
+
+  assert.match(text, /ClaudeBot 현재 상태: 사용 한도 초과/);
+  assert.equal(text.includes('{"type":"result"'), false);
+  assert.equal(text.includes("weekly limit"), false);
 });
 function makeRequest(): ExecutionRequest {
   return {

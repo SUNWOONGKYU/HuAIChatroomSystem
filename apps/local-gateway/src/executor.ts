@@ -80,7 +80,7 @@ export async function executeGatewayRequest(input: {
       });
     }
 
-    const agentFailure = classifyAgentFailure(result);
+    const agentFailure = classifyAgentFailure(result, input.request.adapterType);
     if (result.exitCode === 0 && !agentFailure) {
       events.push({ type: "completed", taskId: input.request.taskId, attemptId: input.request.attemptId, at: now() });
       await publishNewEvents(events, input.sink, 2);
@@ -130,8 +130,9 @@ async function publishNewEvents(events: GatewayEvent[], sink: GatewayEventSink, 
 }
 
 
-export function classifyAgentFailure(result: ProcessRunResult): string | undefined {
-  const stderrFailure = classifyFailureText(result.stderr);
+export function classifyAgentFailure(result: ProcessRunResult, adapterType: string = "codex"): string | undefined {
+  const allowUsageLimit = adapterType === "claude_code";
+  const stderrFailure = classifyFailureText(result.stderr, { allowUsageLimit });
   if (stderrFailure) return stderrFailure;
 
   for (const line of result.stdout.split(/\r?\n/)) {
@@ -141,21 +142,21 @@ export function classifyAgentFailure(result: ProcessRunResult): string | undefin
       const event = JSON.parse(trimmed) as AgentJsonEvent;
       const item = event.item;
       if (event.type === "item.completed" && item?.type === "error") return "agent-reported-error";
-      const textFailure = classifyFailureText(typeof item?.text === "string" ? item.text : "");
+      const textFailure = classifyFailureText(typeof item?.text === "string" ? item.text : "", { allowUsageLimit });
       if (textFailure) return textFailure;
-      const messageFailure = classifyFailureText(typeof item?.message === "string" ? item.message : "");
+      const messageFailure = classifyFailureText(typeof item?.message === "string" ? item.message : "", { allowUsageLimit });
       if (messageFailure) return messageFailure;
     } catch {
       continue;
     }
   }
 
-  return classifyFailureText(result.stdout);
+  return classifyFailureText(result.stdout, { allowUsageLimit });
 }
 
-function classifyFailureText(text: string): string | undefined {
+function classifyFailureText(text: string, options: { allowUsageLimit: boolean }): string | undefined {
   if (!text) return undefined;
-  if (/hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(text)) return "agent-usage-limit";
+  if (options.allowUsageLimit && /hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(text)) return "agent-usage-limit";
   if (/read-only sandbox|workspace is read-only|writing is blocked|patch rejected/i.test(text)) return "agent-write-blocked";
   if (/rejected by user approval settings/i.test(text)) return "agent-approval-blocked";
   if (/Unable to write|could not be created|could not be modified/i.test(text)) return "agent-reported-write-failure";
