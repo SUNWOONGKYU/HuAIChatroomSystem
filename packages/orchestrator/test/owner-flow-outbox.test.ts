@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
 import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
 import { handleTelegramInput } from "../src/index.js";
@@ -103,15 +103,17 @@ test("bare continuation mention asks for task clarification", () => {
 });
 
 test("vague actor delegation asks for concrete work instead of creating a proposal", () => {
-  const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 그러면 코덱스에게 시켜") },
-    ownerContext(),
-    ports()
-  );
+  for (const text of ["@platoon_bot 그러면 코덱스에게 시켜", "@platoon_bot 그러면 코덱스에게 작업시켜"]) {
+    const result = handleTelegramInput(
+      { kind: "message", envelope: envelope(text) },
+      ownerContext(),
+      ports()
+    );
 
-  assert.equal(result.accepted, true);
-  assert.equal(result.events.length, 0);
-  assert.match(String(result.outbox[0]?.payload.text), /CodexBot에게 넘길 작업 내용/);
+    assert.equal(result.accepted, true);
+    assert.equal(result.events.length, 0);
+    assert.match(String(result.outbox[0]?.payload.text), /CodexBot에게 넘길 작업 내용/);
+  }
 });
 test("explicit proposal continuation becomes a follow-up proposal", () => {
   const result = handleTelegramInput(
