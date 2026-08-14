@@ -192,6 +192,7 @@ export function routeFreeformMessage(
 ): Extract<TelegramInputHandlingResult, { accepted: true }> {
   const text = normalizeFreeformMessageText(input);
   if (isContinuationOnlyText(text)) return renderContinuationClarification(input);
+  if (isContextDependentFixRequest(text)) return renderContextDependentFixClarification(input);
   const vagueDelegationRole = detectVagueActorDelegation(text, input);
   if (vagueDelegationRole) return renderActorDelegationClarification(input, vagueDelegationRole);
   if (input.envelope.telegramBotRole === "auditor") return createDirectAuditRequest(input, ports, text);
@@ -521,6 +522,12 @@ function isContinuationOnlyText(text: string): boolean {
   return isContinuationLikeText(text) && !extractWorkItemId(text);
 }
 
+function isContextDependentFixRequest(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+  if (extractWorkItemId(normalized)) return false;
+  return /^(이거|저거|그거|위\s*(오류|문제|작업)?|방금\s*(오류|문제|작업)?|아까\s*(오류|문제|작업)?|저\s*(오류|문제)|이\s*(오류|문제)|그\s*(오류|문제))\s*(오류|문제|장애)?\s*(해결|수정|고쳐|처리)(해|해줘|해라|줘|요|\.|!|\?)?$/.test(normalized);
+}
+
 function detectVagueActorDelegation(
   text: string,
   input: Extract<NormalizedTelegramInput, { kind: "message" | "command" }>
@@ -617,6 +624,26 @@ function renderContinuationClarification(
         payload: {
           text: "어느 작업을 이어갈지 확인이 필요합니다. task_id 또는 proposal_id를 붙여 다시 말하거나, 해당 작업 메시지에 답장해 주세요.",
           binding: { kind: "event", eventId: `mention-router:clarify:${input.envelope.updateId}` }
+        }
+      }
+    ]
+  };
+}
+
+function renderContextDependentFixClarification(
+  input: Extract<NormalizedTelegramInput, { kind: "message" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: [],
+    outbox: [
+      {
+        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        idempotencyKey: `telegram:mention-router:context-fix-clarify:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
+        payload: {
+          text: "어떤 오류인지 확인할 수 없습니다. 오류 메시지, 화면 캡처, 또는 proposal_id/task_id를 함께 보내주세요.",
+          binding: { kind: "event", eventId: `mention-router:context-fix-clarify:${input.envelope.updateId}` }
         }
       }
     ]
