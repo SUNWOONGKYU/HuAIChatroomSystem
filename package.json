@@ -97,7 +97,10 @@
     "verify:gate40": "npm run verify:local-runtime-miniapp-wiring",
     "verify:miniapp-web-build": "node --test scripts/build-miniapp-web.test.mjs",
     "verify:gate41": "npm run verify:miniapp-web-build",
-    "build:miniapp-web": "node scripts/build-miniapp-web.mjs"
+    "build:miniapp-web": "node scripts/build-miniapp-web.mjs",
+    "verify:stale-proposal-cleanup": "node --test scripts/cancel-stale-proposals.test.mjs",
+    "verify:operation-restart": "node --test scripts/restart-operation-services-from-live-env.test.mjs",
+    "verify:gate42": "npm run verify:stale-proposal-cleanup && npm run verify:operation-restart"
   },
   "workspaces": [
     "apps/*",
