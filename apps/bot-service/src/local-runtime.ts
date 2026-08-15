@@ -153,7 +153,8 @@ export async function buildSupabaseBotServiceRuntimeFromDatabase(
   const store = new SupabaseBotServiceStore({
     url: requiredEnv(env, "SUPABASE_URL"),
     serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY"),
-    fetchImpl: options.fetchImpl
+    fetchImpl: options.fetchImpl,
+    miniAppDirectLinkBaseUrl: env.BOT_SERVICE_MINIAPP_DIRECT_LINK || undefined
   });
 
   return {

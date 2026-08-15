@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="robots" content="noindex, nofollow" />
 <title>HuAI 작업판</title>
 <!--
   이 파일은 의도적으로 완전히 자기완결형이다 (외부 CSS/JS 파일, 번들러, 프레임워크 없음) —
@@ -71,6 +72,24 @@
     font-size: 11px;
     color: var(--hint);
   }
+  .game-link {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 10px;
+    border-radius: 12px;
+    background: #f4c95d;
+    color: #31271b;
+    font-size: 14px;
+    font-weight: 800;
+    text-decoration: none;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: transform 140ms cubic-bezier(.23, 1, .32, 1), background-color 140ms ease;
+  }
+  .game-link:active { transform: scale(.98); }
+  .game-link:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   button {
     font-family: inherit;
   }
@@ -339,6 +358,7 @@
       <button type="button" class="btn btn-ghost" id="refresh-btn">새로고침</button>
       <span id="updated-at"></span>
     </div>
+    <a class="game-link" href="./egg-game.html">첫 미니게임 · 달걀깨기</a>
   </header>
 
   <section id="proposals-section" hidden>
