@@ -60,6 +60,46 @@ export function buildCompletionKeyboard(taskId: string): InlineKeyboardMarkup {
   };
 }
 
+// "작업판 열기" 버튼. InlineKeyboardButton(위)은 callback_data 만 갖는 타입이라 재사용하지
+// 않는다 — url 버튼은 별개 필드(url)라 섞을 수 없고(Telegram 제약: 인라인 버튼 하나에
+// callback_data 와 url 을 같이 못 넣는다), 기존 InlineKeyboardButton 을 유니온으로 넓히면
+// callback-data-length.test.ts 등 기존 소비처가 `button.callback_data` 를 좁히기(narrow)
+// 없이 바로 쓰던 게 타입 에러가 난다. 그래서 별도 타입으로 둔다.
+//
+// web_app 타입 버튼이 아니라 평범한 url 버튼이다 — Telegram 공식 문서
+// (core.telegram.org/bots/api, InlineKeyboardButton.web_app) 에 "Available only in
+// private chats between a user and the bot" 라고 명시돼 있어 그룹에서 안 눌린다.
+// 대신 "Direct Link Mini App"(core.telegram.org/bots/webapps, "Mini App Bots can be
+// launched from a direct link in any chat")을 쓴다 — url 버튼으로 t.me 딥링크를 열면
+// 그룹에서도 Mini App 이 뜨고, ?startapp=<값> 이 Mini App 쪽에 start_param /
+// tgWebAppStartParam 으로 전달된다.
+export type MiniAppOpenKeyboardButton = {
+  text: string;
+  url: string;
+};
+
+export type MiniAppOpenKeyboard = {
+  inline_keyboard: MiniAppOpenKeyboardButton[][];
+};
+
+// startapp 딥링크 파라미터는 Telegram 규격상 1-64자, [A-Za-z0-9_-] 만 허용된다
+// (core.telegram.org/bots/features, "Deep Linking"). huai_rooms.room_id 는
+// gen_random_uuid() 로 만든 표준 UUID(36자, 0-9/a-f/하이픈)라 이 문자 집합에 이미
+// 들어간다 — 별도 인코딩 없이 그대로 실어도 안전하다(encodeURIComponent 는 방어적으로
+// 한 번 더 씌우지만 이 문자들엔 아무것도 안 한다).
+export function buildMiniAppDirectLink(directLinkBaseUrl: string, roomId: string): string {
+  const separator = directLinkBaseUrl.includes("?") ? "&" : "?";
+  return `${directLinkBaseUrl}${separator}startapp=${encodeURIComponent(roomId)}`;
+}
+
+export function buildMiniAppOpenKeyboard(input: { directLinkBaseUrl: string; roomId: string }): MiniAppOpenKeyboard {
+  return {
+    inline_keyboard: [
+      [{ text: "작업판 열기", url: buildMiniAppDirectLink(input.directLinkBaseUrl, input.roomId) }]
+    ]
+  };
+}
+
 export function buildProjectStatusMessage(input: {
   title: string;
   activeTasks: number;

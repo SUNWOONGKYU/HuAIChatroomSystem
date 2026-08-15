@@ -78,7 +78,7 @@
     "verify:gateway-report-rendering": "npm run build && node --test dist/packages/supabase-runtime/test/gateway-report-rendering.test.js",
     "verify:revision-loop": "npm run build && node --test dist/packages/supabase-runtime/test/revision-loop.test.js",
     "verify:gate32": "npm run verify:revision-loop && npm run verify:workflow && npm run verify:gateway-report-rendering",
-    "verify:telegram-ui": "npm run build && node --test dist/packages/telegram-ui/test/sanitize.test.js dist/packages/telegram-ui/test/callback-data-length.test.js",
+    "verify:telegram-ui": "npm run build && node --test dist/packages/telegram-ui/test/sanitize.test.js dist/packages/telegram-ui/test/callback-data-length.test.js dist/packages/telegram-ui/test/miniapp-keyboard.test.js",
     "verify:room-isolation": "npm run build && node --test dist/apps/bot-service/test/room-isolation.test.js",
     "verify:gate34": "npm run verify:room-isolation",
     "verify:task-list-rendering": "npm run build && node --test dist/apps/bot-service/test/task-list-grouping.test.js dist/apps/bot-service/test/task-list-length-and-isolation.test.js",

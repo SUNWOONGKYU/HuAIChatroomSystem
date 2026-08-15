@@ -18,6 +18,7 @@ import { isForbiddenTransition, transitionTaskStatus, type TaskStatus, type Work
 import { summarizeSupabaseSendResult } from "../../../packages/supabase-runtime/src/index.js";
 import { isLeaderPlanningAttempt } from "../../../packages/orchestrator/src/index.js";
 import { buildLeaderPlanningPrompt, type RoomFacts, type RoomTurn } from "../../../packages/orchestrator/src/leader-planning.js";
+import { buildMiniAppOpenKeyboard } from "../../../packages/telegram-ui/src/index.js";
 
 export type SupabaseStoreConfig = {
   url: string;
@@ -26,6 +27,15 @@ export type SupabaseStoreConfig = {
   // /tasks 의 경과시간 표시(Phase 3)를 테스트에서 고정 시각으로 검증할 수 있도록 주입 가능하게 뺐다.
   // 운영에서는 기본값(실제 시각)을 그대로 쓴다.
   now?: () => Date;
+  // "작업판 열기" 버튼(Direct Link Mini App, BOT_SERVICE_MINIAPP_DIRECT_LINK)의 베이스 링크.
+  // 예: https://t.me/leader_chatroom_bot/board — 미설정이면 /tasks 에 버튼을 안 붙인다
+  // (기존 동작 그대로). 값이 있는데 https://t.me/ 로 시작하지 않으면 생성자에서 던진다 —
+  // web_app 이 아니라 t.me 딥링크여야만 그룹에서 Mini App 으로 열린다(core.telegram.org/
+  // bots/api 의 InlineKeyboardButton.web_app 은 "Available only in private chats"라
+  // 그룹에서 안 눌린다). t.me 아닌 URL 을 넣으면 버튼은 눌리지만 그냥 외부 브라우저가 열려
+  // Mini App 인증(Telegram initData)이 없어 Edge Function 이 401 을 낸다 — 조용히 깨지느니
+  // 시작 시점에 던진다.
+  miniAppDirectLinkBaseUrl?: string;
 };
 
 export class SupabaseBotServiceStore implements OrchestratorPersistencePort, OutboxDispatcherStore {
@@ -34,6 +44,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // 프로세스 수명 캐시로 충분하다 (무효화 로직 없음, 방 개수 규모에서 메모리 부담도 무시 가능).
   private readonly roomIdByChatId = new Map<string, string>();
   private readonly now: () => Date;
+  private readonly miniAppDirectLinkBaseUrl: string | undefined;
 
   constructor(config: SupabaseStoreConfig) {
     this.client = new SupabaseRestClient({
@@ -42,6 +53,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       fetchImpl: config.fetchImpl
     });
     this.now = config.now ?? (() => new Date());
+    this.miniAppDirectLinkBaseUrl = config.miniAppDirectLinkBaseUrl
+      ? requireMiniAppDirectLinkBaseUrl(config.miniAppDirectLinkBaseUrl)
+      : undefined;
   }
 
   // 한 프로세스가 여러 방을 처리하므로 room_id 는 생성자 고정값이 아니라
@@ -583,7 +597,13 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
           : query.kind === "trace"
             ? await this.renderTaskTraceQuery(query.taskId, roomId)
             : await this.renderTaskDetailQuery(query.taskId, roomId);
-      hydrated.push({ ...row, payload: { ...row.payload, text } });
+      // "작업판 열기" 버튼은 /tasks 에만 붙인다(/search·/task·/trace 는 이번 범위가 아니다).
+      // BOT_SERVICE_MINIAPP_DIRECT_LINK 미설정 시 keyboard 필드 자체를 안 만든다 —
+      // 기존 payload 에 keyboard 가 없던 것과 완전히 동일하게 유지한다.
+      const keyboard = query.kind === "tasks" && this.miniAppDirectLinkBaseUrl
+        ? buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId })
+        : undefined;
+      hydrated.push({ ...row, payload: { ...row.payload, text, ...(keyboard ? { keyboard } : {}) } });
     }
     return hydrated;
   }
@@ -825,7 +845,8 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
 export function buildSupabaseBotServiceStoreFromEnv(env: NodeJS.ProcessEnv = process.env): SupabaseBotServiceStore {
   return new SupabaseBotServiceStore({
     url: requiredEnv(env, "SUPABASE_URL"),
-    serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY")
+    serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY"),
+    miniAppDirectLinkBaseUrl: env.BOT_SERVICE_MINIAPP_DIRECT_LINK || undefined
   });
 }
 
@@ -1504,6 +1525,13 @@ async function safeResponseText(response: Response): Promise<string> {
 function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
   const value = env[key];
   if (!value) throw new Error(`missing-env:${key}`);
+  return value;
+}
+
+function requireMiniAppDirectLinkBaseUrl(value: string): string {
+  if (!value.startsWith("https://t.me/")) {
+    throw new Error(`invalid-env:BOT_SERVICE_MINIAPP_DIRECT_LINK must start with https://t.me/ (got: ${maskSensitiveText(value)})`);
+  }
   return value;
 }
 

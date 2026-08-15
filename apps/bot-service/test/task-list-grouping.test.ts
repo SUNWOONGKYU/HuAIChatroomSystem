@@ -10,8 +10,8 @@ function roomResolutionResponse(): Response {
   return jsonResponse(200, [{ room_id: ROOM_ID }]);
 }
 
-function makeStore(fetchImpl: typeof fetch, now?: () => Date): SupabaseBotServiceStore {
-  return new SupabaseBotServiceStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key-for-test", fetchImpl, now });
+function makeStore(fetchImpl: typeof fetch, now?: () => Date, miniAppDirectLinkBaseUrl?: string): SupabaseBotServiceStore {
+  return new SupabaseBotServiceStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key-for-test", fetchImpl, now, miniAppDirectLinkBaseUrl });
 }
 
 function makeSupabaseFetch(responses: Response[]) {
@@ -233,4 +233,59 @@ test("표시된 것이 방의 전부일 때는 여전히 '총 N건'으로 정확
   const text = calls.requests[2]?.body[0].payload.text as string;
   assert.match(text, /총 1건/);
   assert.equal(text.includes("더 있음"), false);
+});
+
+// "작업판 열기" 버튼(Direct Link Mini App). web_app 타입이 아니라 url 타입 — Telegram 공식
+// 문서(InlineKeyboardButton.web_app: "Available only in private chats")상 web_app 버튼은
+// 그룹에서 안 눌린다. BOT_SERVICE_MINIAPP_DIRECT_LINK 로 베이스 링크를 받아 ?startapp=<roomId>
+// 를 붙인다.
+test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '작업판 열기' url 버튼이 붙는다", async () => {
+  const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
+    jsonResponseWithRange(200, [
+      { task_id: "11111111-1111-4111-8111-111111111111", title: "작업 1", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
+    ], 1),
+    jsonResponse(201, [outboxRow({ text: "placeholder" })])
+  ]);
+  const store = makeStore(calls.fetchImpl, undefined, "https://t.me/leader_chatroom_bot/board");
+
+  await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
+
+  const keyboard = calls.requests[2]?.body[0].payload.keyboard;
+  assert.ok(keyboard, "keyboard 필드가 있어야 한다");
+  const button = keyboard.inline_keyboard[0][0];
+  assert.equal(button.text, "작업판 열기");
+  assert.equal(button.url, `https://t.me/leader_chatroom_bot/board?startapp=${ROOM_ID}`);
+  assert.equal("callback_data" in button, false);
+  assert.equal("web_app" in button, false);
+});
+
+// V1 스타일 요구사항: 미설정 시 기존 동작과 완전히 동일해야 한다 — payload 에 keyboard
+// 필드 자체가 생기면 안 된다(값이 없는 게 아니라 키 자체가 없어야, 기존과 완전히
+// 같은 payload 모양이 나간다).
+test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 미설정이면 /tasks 응답에 keyboard 필드가 아예 없다 (기존 동작 완전 보존)", async () => {
+  const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
+    jsonResponseWithRange(200, [
+      { task_id: "11111111-1111-4111-8111-111111111111", title: "작업 1", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
+    ], 1),
+    jsonResponse(201, [outboxRow({ text: "placeholder" })])
+  ]);
+  const store = makeStore(calls.fetchImpl); // miniAppDirectLinkBaseUrl 안 넘김
+
+  await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
+
+  const payload = calls.requests[2]?.body[0].payload;
+  assert.equal("keyboard" in payload, false, "미설정 시 keyboard 키 자체가 없어야 한다");
+});
+
+test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 https://t.me/ 로 시작하지 않으면 생성 시점에 던진다", () => {
+  assert.throws(
+    () => new SupabaseBotServiceStore({
+      url: "https://example.supabase.co",
+      serviceRoleKey: "service-role-key-for-test",
+      miniAppDirectLinkBaseUrl: "https://example.com/miniapp"
+    }),
+    /invalid-env:BOT_SERVICE_MINIAPP_DIRECT_LINK/
+  );
 });
