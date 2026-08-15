@@ -55,6 +55,13 @@ export function resolveRoomSeedConfig(env, argv = []) {
   return { env: effectiveEnv, roomId, telegramChatId, ownerTelegramUserId, projectPath, gatewayId, machineLabel, purpose };
 }
 
+// huai_ai_actors 에는 gatewayId/projectPath 를 담을 곳이 없다 — 실행 기본값은
+// huai_gateway_instances(방마다 별도 행)와 buildExecutionDefaultsForRoom(apps/bot-service)
+// 이 담당한다. 예전엔 여기서 actorConfig(role, gatewayId, projectPath) 를 만들어
+// huai_ai_actors.config jsonb 컬럼에 실었는데, 그 컬럼이 schema.sql/라이브 DB
+// 어디에도 애초에 존재하지 않았다 — 라이브 온보딩 3건이 upsert-actors 단계에서
+// PGRST204("Could not find the 'config' column")로 전부 실패한 뒤에야 드러났다.
+// 아무도 안 읽는 것도 문제였지만, 그 이전에 쓸 컬럼 자체가 없었다.
 export function deriveActors(roomId) {
   return BOT_ROLES.map(([role]) => ({
     actorId: uuidFrom(`${roomId}:actor:${role}`),
@@ -90,11 +97,6 @@ export function deriveGateway(config) {
   const allowedAdaptersFromEnv = splitList(config.env.LOCAL_GATEWAY_ALLOWED_ADAPTERS);
   const allowedAdapters = allowedAdaptersFromEnv.length > 0 ? allowedAdaptersFromEnv : ["claude_code", "codex"];
   return { gatewayInstanceId, machineLabel: config.machineLabel, allowedProjectRoots, allowedAdapters };
-}
-
-export function actorConfig(role, gatewayId, projectPath) {
-  if (role !== "codex_leader" && role !== "claude_leader") return {};
-  return Object.fromEntries(Object.entries({ gatewayId, projectPath }).filter(([, value]) => Boolean(value)));
 }
 
 export function dedupe(values) {

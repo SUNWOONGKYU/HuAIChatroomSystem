@@ -1,5 +1,4 @@
 import {
-  actorConfig,
   deriveActors,
   deriveBots,
   deriveGateway,
@@ -19,7 +18,9 @@ export function generateSupabaseRoomSeed(env, argv = []) {
     "begin;",
     `insert into huai_rooms (room_id, telegram_chat_id, owner_telegram_user_id, purpose, status) values (${sql(config.roomId)}::uuid, ${sql(config.telegramChatId)}, ${sql(config.ownerTelegramUserId)}, ${sql(config.purpose)}, 'active') on conflict (room_id) do update set telegram_chat_id = excluded.telegram_chat_id, owner_telegram_user_id = excluded.owner_telegram_user_id, purpose = excluded.purpose, status = excluded.status;`,
     `insert into huai_room_members (room_id, telegram_user_id, role, permissions, status) values (${sql(config.roomId)}::uuid, ${sql(config.ownerTelegramUserId)}, 'owner', '{"approve":true,"final_approve":true,"manage_ai_actors":true}'::jsonb, 'active') on conflict (room_id, telegram_user_id) do update set role = excluded.role, permissions = excluded.permissions, status = excluded.status;`,
-    ...actors.map((actor) => `insert into huai_ai_actors (actor_id, room_id, role, adapter_type, status, config) values (${sql(actor.actorId)}::uuid, ${sql(config.roomId)}::uuid, ${sql(actor.role)}, ${sql(actor.adapterType)}, 'active', ${sql(JSON.stringify(actorConfig(actor.role, config.gatewayId, config.projectPath)))}::jsonb) on conflict (actor_id) do update set role = excluded.role, adapter_type = excluded.adapter_type, status = excluded.status, config = excluded.config;`),
+    // huai_ai_actors 에는 config 컬럼이 없다(schema.sql/라이브 DB 둘 다 없음 — 예전에
+    // 여기서 그 컬럼에 값을 실었다가 라이브 온보딩이 PGRST204 로 전부 실패했다).
+    ...actors.map((actor) => `insert into huai_ai_actors (actor_id, room_id, role, adapter_type, status) values (${sql(actor.actorId)}::uuid, ${sql(config.roomId)}::uuid, ${sql(actor.role)}, ${sql(actor.adapterType)}, 'active') on conflict (actor_id) do update set role = excluded.role, adapter_type = excluded.adapter_type, status = excluded.status;`),
     // conflict 타깃은 bot_username(unique) 으로 잡는다. 봇은 room 과 무관하므로
     // 여러 방을 시딩해도 같은 봇 행 하나로 수렴해야 한다. actor_id 는 이제
     // 정보성 참조일 뿐이라 다른 방의 시딩이 앞서 시딩된 방의 actor_id 를

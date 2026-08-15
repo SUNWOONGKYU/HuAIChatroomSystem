@@ -190,6 +190,79 @@ test("records bot messages as ignored without enqueue", async () => {
   } finally { await close(server); }
 });
 
+test("logs the ignore reason when a webhook update is yielded to a different bot", async () => {
+  const queued: TelegramInboundQueueMessage[] = [];
+  const recorded: string[] = [];
+  const server = createTelegramWebhookHttpServer({
+    config: twoBotConfig(),
+    ports: {
+      updates: {
+        async recordUpdateOnce(envelope, _raw, status) {
+          recorded.push(status + ":" + envelope.updateId);
+          return { inserted: true, status, idempotencyKey: makeTelegramUpdateIdempotencyKey(envelope) };
+        },
+        async markUpdateFailed() {}
+      },
+      inboundQueue: { async enqueue(message) { queued.push(message); } }
+    }
+  });
+
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (line: unknown) => { logs.push(String(line)); };
+
+  const port = await listen(server);
+  try {
+    const response = await postWebhook(port, telegramMessageUpdate("@claude_bot 이거 해줘"), "platoon-secret");
+    const ack = await response.json() as Record<string, unknown>;
+
+    // ack 자체엔 계약(TelegramWebhookRejectReason) 밖 값을 못 실어서 reason 이 빠진다 —
+    // 실제 사유는 로그로 남아야 한다(아래 확인). Telegram 은 ack body 를 읽지 않는다.
+    assert.deepEqual(ack, { httpStatus: 200, queued: false });
+    assert.equal(queued.length, 0);
+    assert.deepEqual(recorded, [], "다른 봇에게 양보한 update 는 기록 자체가 없어야 한다");
+
+    const ignoreLog = logs.find((line) => line.includes("telegram_webhook_ignored"));
+    assert.ok(ignoreLog, "무시 사유 로그가 남아야 한다");
+    const parsed = JSON.parse(ignoreLog!);
+    assert.equal(parsed.reason, "not-addressed-to-this-bot");
+    assert.equal(parsed.botUsername, "platoon_bot");
+  } finally {
+    console.log = originalLog;
+    await close(server);
+  }
+});
+
+test("does not log bot-message-ignored (already routine, would be noise)", async () => {
+  const server = createTelegramWebhookHttpServer({
+    config: botConfig(),
+    ports: {
+      updates: {
+        async recordUpdateOnce(envelope, _raw, status) {
+          return { inserted: true, status, idempotencyKey: makeTelegramUpdateIdempotencyKey(envelope) };
+        },
+        async markUpdateFailed() {}
+      },
+      inboundQueue: { async enqueue() {} }
+    }
+  });
+
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (line: unknown) => { logs.push(String(line)); };
+
+  const port = await listen(server);
+  try {
+    const update = telegramMessageUpdate("/newtask from bot");
+    update.message.from.is_bot = true;
+    await postWebhook(port, update, "platoon-secret");
+    assert.equal(logs.some((line) => line.includes("telegram_webhook_ignored")), false);
+  } finally {
+    console.log = originalLog;
+    await close(server);
+  }
+});
+
 test("returns malformed-update for invalid json body", async () => {
   const server = createTelegramWebhookHttpServer({ config: botConfig(), ports: unusedPorts() });
   const port = await listen(server);
@@ -279,6 +352,16 @@ function botConfig() {
     allowedChatIds: ["1001"],
     botsByUsername: new Map([
       ["platoon_bot", { telegramBotId: "bot-platoon", botUsername: "platoon_bot", botRole: "platoon_leader" as const, webhookSecret: "platoon-secret" }]
+    ])
+  };
+}
+
+function twoBotConfig() {
+  return {
+    allowedChatIds: ["1001"],
+    botsByUsername: new Map([
+      ["platoon_bot", { telegramBotId: "bot-platoon", botUsername: "platoon_bot", botRole: "platoon_leader" as const, webhookSecret: "platoon-secret" }],
+      ["claude_bot", { telegramBotId: "bot-claude", botUsername: "claude_bot", botRole: "claude_leader" as const, webhookSecret: "claude-secret" }]
     ])
   };
 }

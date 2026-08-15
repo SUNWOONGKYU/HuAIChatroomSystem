@@ -147,7 +147,10 @@ test("CLI args override env for room-id/chat-id/owner-id/project-path/gateway-id
   assert.match(sql, /-1009999999999/);
   assert.match(sql, /999999999/);
   assert.match(sql, /OtherProject/);
-  assert.match(sql, /gateway-other/);
+  // --gateway-id 는 여전히 유효한 인자로 받아들여져야 한다(unknown-arg 로 안 던짐).
+  // 다만 huai_ai_actors 에 config 컬럼이 없어서(라이브 온보딩이 PGRST204 로 실패한 뒤
+  // 제거했다) 이 값을 실을 곳이 없다 — SQL 어디에도 안 나타나는 게 지금은 맞는 동작이다.
+  assert.equal(sql.includes("gateway-other"), false);
   assert.equal(sql.includes(sampleEnv().BOT_SERVICE_ROOM_ID), false);
   assert.equal(sql.includes("C:/Dev/HuAIChatroomSystem"), false);
 });

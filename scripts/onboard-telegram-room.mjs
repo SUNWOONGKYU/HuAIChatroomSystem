@@ -2,7 +2,6 @@ import { existsSync, statSync } from "node:fs";
 import { applyOperationEnvFile } from "./operation-env-loader.mjs";
 import {
   BOT_ROLES,
-  actorConfig,
   deriveActors,
   deriveBots,
   deriveGateway,
@@ -122,13 +121,15 @@ export async function onboardTelegramRoom(env, argv = [], fetchImpl = fetch, fsO
     steps.push({ id: "upsert-actors", status: "would-apply" });
   } else {
     try {
+      // huai_ai_actors 에는 config 컬럼이 없다(schema.sql/라이브 DB 둘 다 없음) — 예전에
+      // 여기서 그 컬럼에 값을 실었다가 라이브 온보딩 3건이 upsert-actors 단계에서
+      // PGRST204("Could not find the 'config' column")로 전부 실패했다.
       const actorsBody = actors.map((actor) => ({
         actor_id: actor.actorId,
         room_id: config.roomId,
         role: actor.role,
         adapter_type: actor.adapterType,
-        status: "active",
-        config: actorConfig(actor.role, config.gatewayId, config.projectPath)
+        status: "active"
       }));
       await postUpsert(fetchImpl, `${baseUrl}/rest/v1/huai_ai_actors?on_conflict=actor_id`, serviceRoleKey, actorsBody);
       steps.push({ id: "upsert-actors", status: "ok" });

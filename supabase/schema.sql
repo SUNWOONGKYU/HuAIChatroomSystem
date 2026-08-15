@@ -343,8 +343,16 @@ create table if not exists huai_miniapp_decision_processed (
   outcome text not null,
   detail text,
   processed_at timestamptz not null default now(),
+  -- failed 는 일부러 뺐다. 폴러는 failed 를 기록하지 않고 다음 주기에 재시도하도록
+  -- 두는 것이 설계이고, 제약에서 빠져 있는 것이 그 설계를 강제하는 안전장치다.
   constraint huai_miniapp_decision_processed_outcome_check
-    check (outcome in ('replayed', 'skipped_duplicate', 'skipped_unsupported_stage', 'skipped_unauthorized'))
+    check (outcome in (
+      'replayed',
+      'skipped_duplicate',
+      'skipped_unsupported_stage',
+      'skipped_unauthorized',
+      'skipped_already_executed'
+    ))
 );
 
 create index if not exists huai_miniapp_decision_processed_processed_at_idx

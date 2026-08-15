@@ -90,7 +90,9 @@
     "verify:room-filter-coverage": "npm run build && node --test dist/apps/bot-service/test/room-filter-coverage-leader.test.js dist/apps/bot-service/test/room-filter-coverage-conversation.test.js",
     "verify:gate37": "npm run verify:room-filter-coverage",
     "verify:lease-formula-drift": "npm run build && node --test scripts/verify-lease-formula-drift.test.mjs",
-    "verify:gate38": "npm run verify:lease-formula-drift"
+    "verify:gate38": "npm run verify:lease-formula-drift",
+    "verify:insert-columns-against-schema": "node --test scripts/verify-insert-columns-against-schema.test.mjs",
+    "verify:gate39": "npm run verify:insert-columns-against-schema"
   },
   "workspaces": [
     "apps/*",
