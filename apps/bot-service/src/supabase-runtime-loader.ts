@@ -62,7 +62,7 @@ export async function loadSupabaseBotServiceRuntimeConfig(
   const activeActors = actors
     .filter((actor) => actor.status === "active")
     .map(toLoadedActor);
-  const bots = await loadBotsForActors(client, activeActors, config.env ?? process.env);
+  const bots = await loadBotsForRoles(client, activeActors.map((actor) => actor.role), config.env ?? process.env);
   const allowedChatIds = room.status === "active" ? [String(room.telegram_chat_id)] : [];
 
   return {
@@ -125,29 +125,30 @@ async function loadRoom(
   return room;
 }
 
-async function loadBotsForActors(
+// 봇은 room 과 무관한 공통 계정(role 하나에 실제 Telegram 봇 계정 하나)이라
+// actor_id 로는 못 찾는다. 봇 행의 actor_id 는 이제 정보성 참조일 뿐이고
+// 다른 방에서는 이 방의 actor 를 가리키지 않으므로, 이 방의 active actor
+// role 집합으로 봇을 직접 조회한다.
+async function loadBotsForRoles(
   client: SupabaseRuntimeRestClient,
-  actors: readonly LoadedAiActor[],
+  roles: readonly TelegramBotRole[],
   env: NodeJS.ProcessEnv
 ): Promise<TelegramBotRuntimeConfig[]> {
-  if (actors.length === 0) return [];
+  if (roles.length === 0) return [];
 
-  const actorRoles = new Map(actors.map((actor) => [actor.actorId, actor.role]));
-  const quotedIds = actors.map((actor) => `"${actor.actorId}"`).join(",");
+  const quotedRoles = roles.map((role) => `"${role}"`).join(",");
   const rows = await client.get<TelegramBotRow[]>(
-    `/huai_telegram_bots?actor_id=in.(${encodeURIComponent(quotedIds)})&status=eq.active&select=telegram_bot_id,bot_username,actor_id,webhook_secret_ref,status`
+    `/huai_telegram_bots?role=in.(${encodeURIComponent(quotedRoles)})&status=eq.active&select=telegram_bot_id,bot_username,role,webhook_secret_ref,status`
   );
 
-  return rows.map((row) => {
-    const role = actorRoles.get(row.actor_id);
-    if (!role) throw new Error("supabase-runtime-bot-actor-missing");
-    return validateBotConfig({
+  return rows.map((row) =>
+    validateBotConfig({
       telegramBotId: row.telegram_bot_id,
       botUsername: row.bot_username,
-      botRole: role,
+      botRole: assertBotRole(row.role),
       webhookSecret: resolveSecretRef(row.webhook_secret_ref, env)
-    });
-  });
+    })
+  );
 }
 
 function toLoadedActor(row: AiActorRow): LoadedAiActor {
@@ -296,7 +297,7 @@ type AiActorRow = {
 type TelegramBotRow = {
   telegram_bot_id: string;
   bot_username: string;
-  actor_id: string;
+  role: string;
   webhook_secret_ref: string;
   status: string;
 };

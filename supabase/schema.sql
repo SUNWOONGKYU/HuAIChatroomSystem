@@ -48,13 +48,18 @@ create table if not exists huai_telegram_bots (
   telegram_bot_user_id bigint unique,
   bot_username text not null unique,
   display_name text,
-  actor_id uuid not null references huai_ai_actors(actor_id) on delete cascade,
+  -- 공통 봇 4개는 room 과 무관하게 존재한다(같은 봇을 여러 방에 초대해 재사용).
+  -- 봇의 정체성은 role 로 직접 갖고, actor_id 는 정보성 참조로만 남긴다.
+  -- 어느 방에서 어느 actor 가 실제로 처리하는지는 huai_ai_actors 를
+  -- room_id + role 로 조회해서 얻는다.
+  role text not null,
+  actor_id uuid references huai_ai_actors(actor_id) on delete set null,
   token_secret_ref text not null,
   webhook_secret_ref text not null,
   status text not null default 'active',
   created_at timestamptz not null default now(),
   constraint huai_telegram_bots_status_check check (status in ('active', 'inactive', 'disabled')),
-  unique (actor_id)
+  constraint huai_telegram_bots_role_check check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor'))
 );
 
 create table if not exists huai_telegram_updates (

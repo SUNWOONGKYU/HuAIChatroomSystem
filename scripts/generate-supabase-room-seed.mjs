@@ -21,7 +21,10 @@ export function generateSupabaseRoomSeed(env) {
   }));
 
   const bots = BOT_ROLES.map(([role, prefix]) => ({
-    botId: uuidFrom(`${roomId}:telegram-bot:${role}`),
+    // 봇은 room 과 무관한 존재(공통 봇 4개를 여러 방에서 재사용)라
+    // botId 파생에 roomId 를 섞지 않는다. roomId 를 섞으면 두 번째 방을
+    // 시딩할 때 새 botId 가 생겨 bot_username unique 제약에 걸린다.
+    botId: uuidFrom(`telegram-bot:${role}`),
     role,
     actorId: actors.find((actor) => actor.role === role).actorId,
     username: required(env, `BOT_SERVICE_${prefix}_BOT_USERNAME`),
@@ -34,7 +37,11 @@ export function generateSupabaseRoomSeed(env) {
     `insert into huai_rooms (room_id, telegram_chat_id, owner_telegram_user_id, status) values (${sql(roomId)}::uuid, ${sql(telegramChatId)}, ${sql(ownerTelegramUserId)}, 'active') on conflict (room_id) do update set telegram_chat_id = excluded.telegram_chat_id, owner_telegram_user_id = excluded.owner_telegram_user_id, status = excluded.status;`,
     `insert into huai_room_members (room_id, telegram_user_id, role, permissions, status) values (${sql(roomId)}::uuid, ${sql(ownerTelegramUserId)}, 'owner', '{"approve":true,"final_approve":true,"manage_ai_actors":true}'::jsonb, 'active') on conflict (room_id, telegram_user_id) do update set role = excluded.role, permissions = excluded.permissions, status = excluded.status;`,
     ...actors.map((actor) => `insert into huai_ai_actors (actor_id, room_id, role, adapter_type, status, config) values (${sql(actor.actorId)}::uuid, ${sql(roomId)}::uuid, ${sql(actor.role)}, ${sql(actor.adapterType)}, 'active', ${sql(JSON.stringify(actorConfig(actor.role, gatewayId, projectPath)))}::jsonb) on conflict (actor_id) do update set role = excluded.role, adapter_type = excluded.adapter_type, status = excluded.status, config = excluded.config;`),
-    ...bots.map((bot) => `insert into huai_telegram_bots (telegram_bot_id, bot_username, actor_id, token_secret_ref, webhook_secret_ref, status) values (${sql(bot.botId)}::uuid, ${sql(bot.username)}, ${sql(bot.actorId)}::uuid, ${sql(bot.tokenSecretRef)}, ${sql(bot.webhookSecretRef)}, 'active') on conflict (telegram_bot_id) do update set bot_username = excluded.bot_username, actor_id = excluded.actor_id, token_secret_ref = excluded.token_secret_ref, webhook_secret_ref = excluded.webhook_secret_ref, status = excluded.status;`),
+    // conflict 타깃은 bot_username(unique) 으로 잡는다. 봇은 room 과 무관하므로
+    // 여러 방을 시딩해도 같은 봇 행 하나로 수렴해야 한다. actor_id 는 이제
+    // 정보성 참조일 뿐이라 다른 방의 시딩이 앞서 시딩된 방의 actor_id 를
+    // 덮어쓰면 안 되므로 update 대상에서 제외한다. telegram_bot_id 도 PK 라 제외.
+    ...bots.map((bot) => `insert into huai_telegram_bots (telegram_bot_id, bot_username, role, actor_id, token_secret_ref, webhook_secret_ref, status) values (${sql(bot.botId)}::uuid, ${sql(bot.username)}, ${sql(bot.role)}, ${sql(bot.actorId)}::uuid, ${sql(bot.tokenSecretRef)}, ${sql(bot.webhookSecretRef)}, 'active') on conflict (bot_username) do update set role = excluded.role, token_secret_ref = excluded.token_secret_ref, webhook_secret_ref = excluded.webhook_secret_ref, status = excluded.status;`),
     "commit;"
   ].join("\n");
 }
