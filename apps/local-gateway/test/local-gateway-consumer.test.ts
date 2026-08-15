@@ -71,7 +71,11 @@ test("executes allowed claude request through Windows executable path", async ()
   }
   // 프롬프트는 argv 가 아니라 stdin 으로 간다.
   // 소대장이 대화 맥락 뭉치를 실어 보내면 Windows 명령줄 길이 한계에 걸리기 때문이다.
-  assert.deepEqual(plans[0]?.args, ["--print", "--permission-mode", "acceptEdits", "--model", "sonnet", "--output-format", "text", `--add-dir=${process.cwd()}`]);
+  // acceptEdits -> bypassPermissions: packages/ai-adapters 가 codex(--approve-for-me)와
+  // 대등하게 맞춘 변경(라이브 사고 수정) — apps/local-gateway/test/../../../packages/ai-adapters
+  // 쪽 신규 테스트가 이 변경의 본체를 검증하고, 여기서는 실제 실행 경로가 그 값을 그대로
+  // 받는지만 확인한다.
+  assert.deepEqual(plans[0]?.args, ["--print", "--permission-mode", "bypassPermissions", "--model", "sonnet", "--output-format", "text", `--add-dir=${process.cwd()}`]);
   assert.equal(plans[0]?.stdinInput, "do work");
 });
 

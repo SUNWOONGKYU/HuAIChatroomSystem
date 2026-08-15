@@ -29,11 +29,32 @@
 // 전달할 이유가 없다(전달하면 오히려 "쿼리를 이 함수가 책임진다"는 잘못된 인상을 준다).
 import { corsPreflightResponse } from "../_shared/cors.ts";
 
-export type FetchHtmlResult = { ok: boolean; status: number; text?: string };
+// 실측 버그(라이브 배포 후 발견): Storage 가 이 객체를 text/plain + X-Content-Type-Options:
+// nosniff 로 서빙한다(Supabase Storage 의 기본 동작으로 보인다 — 확장자만으로 정확한
+// text/html 을 항상 보장하지 않는다). nosniff 가 붙으면 브라우저는 절대 내용을 보고
+// HTML로 추론하지 않고 그대로 평문 렌더링한다. 그래서 upstream 의 헤더는 "본문을 얻기
+// 위해 거쳐가는 것"일 뿐 우리 응답에 절대 반영하면 안 된다 — upstreamHeaders 필드는
+// 그 사실을 deps 계약에 명시하고 테스트가 "받아도 무시하는지"를 증명할 수 있게 하기
+// 위해 존재한다(실제로 이 값을 최종 응답에 쓰지 않는다 — 아래 buildResponseHeaders 참고).
+export type FetchHtmlResult = {
+  ok: boolean;
+  status: number;
+  text?: string;
+  upstreamHeaders?: Record<string, string>;
+};
 
 export type BoardHandlerDeps = {
   fetchHtml(): Promise<FetchHtmlResult>;
 };
+
+// 이 함수가 최종 응답에 실제로 쓰는 헤더는 이 두 개뿐이다 — upstream(Storage)이 무엇을
+// 보내든 절대 안 섞는다(실측 버그의 직접적인 수정). cache-control: no-store 는 이 버그를
+// 조사하며 확인된 GET/HEAD 응답 불일치 가능성(CDN·엣지 캐시가 메서드별로 다른 상태를
+// 오래 들고 있을 수 있다)을 원천 차단하기 위해 추가했다 — 이 페이지는 방장이 열 때마다
+// Storage 원본을 그대로 반영해야 하므로 애초에 캐시할 이유가 없다.
+function boardResponseHeaders(): HeadersInit {
+  return { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" };
+}
 
 export async function handleBoardRequest(req: Request, deps: BoardHandlerDeps): Promise<Response> {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -49,12 +70,12 @@ export async function handleBoardRequest(req: Request, deps: BoardHandlerDeps): 
     // 이 문구를 실제로 렌더링하게 한다.
     return new Response("<!doctype html><meta charset=utf-8><p>작업판을 잠시 불러올 수 없습니다. 잠시 후 다시 열어주세요.</p>", {
       status: 502,
-      headers: { "content-type": "text/html; charset=utf-8" }
+      headers: boardResponseHeaders()
     });
   }
 
   return new Response(upstream.text, {
     status: 200,
-    headers: { "content-type": "text/html; charset=utf-8" }
+    headers: boardResponseHeaders()
   });
 }

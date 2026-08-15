@@ -94,7 +94,10 @@
     "verify:insert-columns-against-schema": "node --test scripts/verify-insert-columns-against-schema.test.mjs",
     "verify:gate39": "npm run verify:insert-columns-against-schema",
     "verify:local-runtime-miniapp-wiring": "npm run build && node --test dist/apps/bot-service/test/local-runtime-miniapp-wiring.test.js",
-    "verify:gate40": "npm run verify:local-runtime-miniapp-wiring"
+    "verify:gate40": "npm run verify:local-runtime-miniapp-wiring",
+    "verify:miniapp-web-build": "node --test scripts/build-miniapp-web.test.mjs",
+    "verify:gate41": "npm run verify:miniapp-web-build",
+    "build:miniapp-web": "node scripts/build-miniapp-web.mjs"
   },
   "workspaces": [
     "apps/*",

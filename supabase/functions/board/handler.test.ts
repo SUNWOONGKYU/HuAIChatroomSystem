@@ -2,8 +2,11 @@
 // 주석 참고(스크래치 디렉터리 복사 + .ts 확장자 제거 + tsc + node --test).
 //
 // 핵심 회귀 대상(팀장님 지시 그대로):
-//   - Content-Type: text/html 로 응답한다
-//   - 업스트림(Storage)이 준 HTML 본문을 그대로(변형 없이) 돌려준다
+//   - Content-Type: text/html 로 응답한다 — GET 과 HEAD 둘 다 각각 확인한다(실측 버그가
+//     정확히 이 둘의 불일치였다 — GET 은 text/plain+nosniff, HEAD 는 text/html)
+//   - upstream(Storage)이 어떤 헤더를 실어 보내도(text/plain, X-Content-Type-Options:
+//     nosniff 포함) 최종 응답 헤더에는 절대 안 섞인다
+//   - 업스트림이 준 HTML 본문을 그대로(변형 없이) 돌려준다
 //   - 요청 URL에 쿼리 파라미터(tgWebAppStartParam 등)가 있어도 정상 200 — 그리고 그
 //     쿼리 유무가 응답에 어떤 영향도 안 준다(이 함수가 쿼리를 읽지 않는다는 것의 증명)
 //   - 인증 헤더 없이 200 — 이 함수에 auth 게이트가 없다는 것의 증명
@@ -11,7 +14,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { handleBoardRequest, type BoardHandlerDeps } from "./handler";
+import { handleBoardRequest, type BoardHandlerDeps, type FetchHtmlResult } from "./handler";
 
 // __dirname 은 CommonJS 전역이다(이 파일은 node --test 실행을 위해 CommonJS 로 컴파일된다 —
 // proposal-payload.test.ts 상단 주석의 실행 절차 참고). import.meta.url 은 module 옵션이
@@ -20,11 +23,19 @@ declare const __dirname: string;
 
 const SAMPLE_HTML = "<!doctype html><html><body>테스트 작업판</body></html>";
 
+// 실측 버그를 그대로 재현하는 "적대적" 업스트림 응답 — Storage 가 실제로 이 헤더를 보낸다.
+// nosniff 가 붙으면 브라우저가 절대 HTML 로 추론하지 않으므로, 이게 최종 응답에 안 섞이는
+// 것이 이번 수정의 핵심이다.
+const HOSTILE_UPSTREAM_HEADERS = { "content-type": "text/plain; charset=UTF-8", "x-content-type-options": "nosniff" };
+
 function makeDeps(overrides: Partial<BoardHandlerDeps> = {}): BoardHandlerDeps {
-  return {
-    fetchHtml: async () => ({ ok: true, status: 200, text: SAMPLE_HTML }),
-    ...overrides
-  };
+  const fetchHtml: () => Promise<FetchHtmlResult> = async () => ({
+    ok: true,
+    status: 200,
+    text: SAMPLE_HTML,
+    upstreamHeaders: HOSTILE_UPSTREAM_HEADERS
+  });
+  return { fetchHtml, ...overrides };
 }
 
 function req(url: string, init: RequestInit = {}): Request {
@@ -37,9 +48,34 @@ test("인증 헤더 없이 200을 반환한다 (이 함수엔 auth 게이트가 
   assert.equal(res.status, 200);
 });
 
-test("Content-Type: text/html 로 응답한다", async () => {
-  const res = await handleBoardRequest(req("https://x/board"), makeDeps());
+// ── 실측 버그(GET 은 text/plain+nosniff, HEAD 는 text/html) 직접 재현 + 수정 증명 ──
+// makeDeps() 의 기본 fetchHtml 이 이미 HOSTILE_UPSTREAM_HEADERS(text/plain+nosniff)를
+// 싣고 있다 — 즉 "upstream 이 나쁜 헤더를 줘도" 라는 전제가 모든 테스트에 깔려 있다.
+
+test("GET — Content-Type: text/html, upstream의 nosniff가 안 섞인다", async () => {
+  const res = await handleBoardRequest(req("https://x/board", { method: "GET" }), makeDeps());
+  assert.match(res.headers.get("content-type") ?? "", /^text\/html/, "GET 응답이 upstream의 text/plain을 물려받으면 안 된다(실측 버그 그 자체)");
+  assert.equal(res.headers.get("x-content-type-options"), null, "nosniff가 섞이면 브라우저가 절대 HTML로 렌더링하지 않는다");
+});
+
+test("HEAD — Content-Type: text/html, upstream의 nosniff가 안 섞인다 (GET과 동일해야 한다)", async () => {
+  const res = await handleBoardRequest(req("https://x/board", { method: "HEAD" }), makeDeps());
   assert.match(res.headers.get("content-type") ?? "", /^text\/html/);
+  assert.equal(res.headers.get("x-content-type-options"), null);
+});
+
+test("GET과 HEAD는 완전히 같은 헤더를 낸다 (이번 버그의 본질 — 둘이 갈리면 안 된다)", async () => {
+  const deps = makeDeps();
+  const getRes = await handleBoardRequest(req("https://x/board", { method: "GET" }), deps);
+  const headRes = await handleBoardRequest(req("https://x/board", { method: "HEAD" }), deps);
+  assert.equal(getRes.headers.get("content-type"), headRes.headers.get("content-type"));
+  assert.equal(getRes.headers.get("x-content-type-options"), headRes.headers.get("x-content-type-options"));
+  assert.equal(getRes.status, headRes.status);
+});
+
+test("cache-control: no-store — 방장이 열 때마다 최신 Storage 원본을 반영해야 한다(캐시로 인한 GET/HEAD 상태 불일치 재발 방지)", async () => {
+  const res = await handleBoardRequest(req("https://x/board", { method: "GET" }), makeDeps());
+  assert.equal(res.headers.get("cache-control"), "no-store");
 });
 
 test("업스트림 HTML 본문을 그대로(가공 없이) 돌려준다", async () => {

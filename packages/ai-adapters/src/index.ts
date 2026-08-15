@@ -36,7 +36,19 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
       [
         "--print",
         "--permission-mode",
-        readOnly ? "dontAsk" : "acceptEdits",
+        // 읽기 전용(dontAsk)은 그대로 둔다 — 검증자·소대장 판단이 파일을 고치면
+        // AC-07/FR-008 이 뚫린다(위 readOnly 주석 참고).
+        //
+        // 비-읽기전용(승인된 실행)은 이전엔 acceptEdits 였는데, 이건 파일 편집과
+        // mkdir/touch/rm/rmdir/mv/cp/sed 같은 극히 일부 파일시스템 Bash 명령만
+        // 자동 승인하고 그 외 Bash(빌드, curl, 브라우저 자동화 스크립트 등)는 여전히
+        // 승인을 묻는다 — --print 비대화형 세션엔 응답자가 없어 그 자리에서 막힌다
+        // (실제로 ClaudeBot 이 실행 승인 대기로 멈춰 정적 분석만 하고 끝난 라이브 사고).
+        // codex 는 같은 "승인된 작업" 분류에서 --approve-for-me 로 전부 자동 승인받는데
+        // claude_code 만 손발이 묶여 있었다 — bypassPermissions 로 맞춰 대등하게 만든다.
+        // 근거는 codex 와 동일하다: 방장이 이미 명시 승인했고, 게이트웨이가 projectPath 를
+        // allowedProjectRoots 안으로 이미 제한한다.
+        readOnly ? "dontAsk" : "bypassPermissions",
         "--model",
         request.model ?? "sonnet",
         "--output-format",
