@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deriveProposalStructure } from "../src/index.js";
+import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
+import { deriveProposalStructure, handleTelegramInput } from "../src/index.js";
 
 // FR-007 / AC-03: 제안은 목적·범위·완료 조건으로 구조화되어야 한다.
 // 완료 조건이 특히 중요하다 — 검증자가 무엇으로 합격/불합격을 판정할지가 여기서 정해진다.
@@ -68,3 +69,99 @@ test("빈 요청도 구조를 잃지 않는다", () => {
   assert.equal(structure.scope, "새 작업");
   assert.equal(structure.completionCriteria.length > 0, true);
 });
+
+// 제목 식별력 회귀 — 라이브에서 나온 실제 결함.
+//
+// 한 방의 제안 150건이 제목 66개로 뭉쳤다. 원인은 요청을 13개 고정 라벨 중 하나에
+// 떨어뜨리던 키워드 사다리였다. "요청 처리" 25건, "Telegram 사용자 경험 개선" 6건이
+// 작업판에 나란히 쌓여 서로 구분이 안 됐다. 아래 문구들은 그때 실제로 같은 라벨로
+// 뭉갰던 요청들이다 — 서로 다른 제목이 나와야 한다.
+test("서로 다른 요청은 서로 다른 제목을 받는다 (고정 라벨 뭉침 회귀)", () => {
+  const requests = [
+    "좋았어. 그러면 그 작업해 봐",
+    "실행 버튼이 눌러지지도 않고 작업도 안 되고 있어",
+    "로그인 세션이 반복적으로 풀리는 문제의 원인 파악",
+    "최근 커밋 3개 요약",
+    "방 가동 봇 개수 확인 및 보고"
+  ];
+  const titles = requests.map((text) => titleOf(text));
+
+  assert.equal(new Set(titles).size, requests.length, `제목이 뭉쳤다: ${titles.join(" / ")}`);
+  for (const title of titles) {
+    assert.equal(title, title.trim());
+    assert.equal(title.length > 0, true);
+  }
+});
+
+test("제목은 요청자의 말에서 나온다 — 분류 라벨로 갈아치우지 않는다", () => {
+  // 예전 사다리가 "버튼"만 보고 "Telegram 사용자 경험 개선"으로 바꿔치기하던 요청.
+  const title = titleOf("실행 버튼이 눌러지지도 않고 작업도 안 되고 있어");
+  assert.match(title, /실행 버튼/);
+  assert.equal(title.includes("Telegram 사용자 경험 개선"), false);
+});
+
+test("긴 요청은 잘리되 어디서 잘렸는지 보인다", () => {
+  const long = "배포 파이프라인에서 캐시가 무효화되지 않아 이전 빌드 산출물이 그대로 나가는 문제를 조사하고 원인을 규명한 다음 재발 방지책까지 함께 보고";
+  const title = titleOf(long);
+
+  assert.equal(title.length <= 61, true, `제목이 너무 길다(${title.length}): ${title}`);
+  assert.equal(title.endsWith("…"), true);
+  assert.match(title, /^배포 파이프라인/);
+});
+
+test("빈 요청은 제목 자리를 비워두지 않는다", () => {
+  assert.equal(titleOf(""), "새 작업");
+  assert.equal(titleOf("   "), "새 작업");
+  // 요청이 어미뿐이면(필러 제거 후 남는 게 없으면) 같은 자리를 지킨다.
+  assert.equal(titleOf("해줘"), "새 작업");
+});
+
+// summarizeTitle 은 내보내지 않는다. 실제 경로(/newtask → createProposalFromTelegram)가
+// payload 에 싣는 title 을 그대로 읽어야 "테스트는 통과하는데 화면은 그대로"를 막을 수 있다.
+function titleOf(text: string): string {
+  const args = text.trim() ? text.trim().split(/\s+/) : [];
+  const result = handleTelegramInput(
+    { kind: "command", envelope: proposalEnvelope(`/newtask ${text}`), command: { name: "/newtask", args } },
+    {
+      memberships: [
+        { telegramChatId: "1001", telegramUserId: "2001", role: "owner" as const, permissions: [], status: "active" as const }
+      ]
+    },
+    {
+      makeId: (prefix: string) => `${prefix}-1`,
+      now: () => "2026-08-10T00:00:00.000Z",
+      executionDefaults: {
+        roomId: "room-1",
+        actorId: "actor-codex",
+        adapterType: "codex" as const,
+        projectPath: "C:\\Dev\\HuAIChatroomSystem",
+        timeoutMs: 600000,
+        gatewayId: "gateway-1"
+      }
+    }
+  );
+
+  assert.equal(result.accepted, true, `제안이 만들어지지 않았다: ${text}`);
+  const event = result.accepted ? result.events.find((e) => e.eventType === "proposal_created") : undefined;
+  assert.ok(event, `proposal_created 이벤트가 없다: ${text}`);
+  return String((event.payload as Record<string, unknown>).title);
+}
+
+function proposalEnvelope(messageText: string): TelegramUpdateEnvelope {
+  return new TelegramUpdateEnvelope(
+    "bot-platoon_leader",
+    "platoon_bot",
+    "platoon_leader",
+    "77",
+    "1001",
+    "7001",
+    "2001",
+    false,
+    messageText,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    []
+  );
+}

@@ -973,23 +973,36 @@ function stripRequestFiller(text: string): string {
     .replace(/(?:해줘|해주세요|해봐|해 보라|해 보세요|찾아봐|보고해봐|보고해 줘|진행해|수정해|만들어줘|검토해봐)[.!?\s]*$/i, "")
     .trim();
 }
+// 제목 한 줄로 "이게 무슨 요청인지" 알아볼 수 있어야 한다.
+//
+// 예전에는 한글 키워드 사다리로 요청을 13개 고정 라벨 중 하나에 떨어뜨렸다. 그 결과가
+// 라이브에서 드러났다 — 한 방의 제안 150건이 제목 66개로 뭉쳤고, "요청 처리" 25건,
+// "Telegram 사용자 경험 개선" 6건처럼 서로 구분이 안 되는 덩어리가 생겼다. 작업판이
+// 생겨서 제안이 목록으로 쌓이기 전까지는 안 보이던 문제다(Telegram 은 한 건씩 흘러가서
+// 같은 제목이 25개 있다는 걸 알 수 없었다).
+//
+// 라벨은 분류지 식별자가 아니다. 어느 라벨을 붙일지 규칙으로 맞히려는 시도 자체가
+// 틀렸다 — 요청자가 이미 자기 말로 무슨 일인지 말했으므로 그 말을 그대로 쓴다.
+// (라벨은 표시 전용이었다. 라우팅 intent 는 routeProposalText 가 따로 판정하고,
+//  deriveProposalStructure 는 본문이 비었을 때의 대체값으로만 title 을 쓴다.)
+const TITLE_MAX_LENGTH = 60;
+
 function summarizeTitle(text: string): string {
   const normalized = stripRequestFiller(text);
   if (!normalized) return "새 작업";
-  if (normalized.includes("추가로 개선할 사항") || normalized.includes("개선할 사항") || normalized.includes("개선 사항") || normalized.includes("보완점")) return "개선 사항 도출";
-  if (normalized.includes("완성도") || normalized.includes("평가")) return "완성도 평가";
-  if (isMultiAiReviewRequest(normalized)) return "다중 AI 검토";
-  if (normalized.includes("자동감사") || normalized.includes("오딧") || normalized.includes("감사")) return "감사 흐름 조정";
-  if (normalized.includes("권한") || normalized.includes("쓰기") || normalized.includes("write")) return "실행 권한 보정";
-  if (normalized.includes("안됨") || normalized.includes("안 되") || normalized.includes("오류") || normalized.includes("반응")) return "장애 원인 수정";
-  if (normalized.includes("진행 상황") || normalized.includes("진도")) return "진행 상황 보고";
-  if (normalized.includes("보안") || normalized.includes("검증")) return "검증 및 감사";
-  if (normalized.includes("버튼") || normalized.includes("화면") || normalized.includes("문구") || normalized.includes("텔레그램")) return "Telegram 사용자 경험 개선";
-  if (normalized.includes("문서") || normalized.includes("설명") || normalized.includes("관계도") || normalized.includes("흐름도")) return "문서 및 다이어그램 갱신";
-  if (normalized.includes("수정") || normalized.includes("고쳐") || normalized.includes("개선")) return "수정 작업";
-  if (normalized.includes("구현") || normalized.includes("만들")) return "구현 작업";
-  if (normalized.includes("테스트")) return "테스트 작업";
-  return "요청 처리";
+  return truncateTitle(normalized);
+}
+
+function truncateTitle(text: string): string {
+  if (text.length <= TITLE_MAX_LENGTH) return text;
+
+  // 자를 자리를 찾을 땐 문장·어절 경계를 우선한다. 단어 한가운데서 끊으면 남은 앞부분
+  // 만으로는 무슨 요청인지 못 읽는 경우가 생긴다. 다만 경계가 너무 앞이면(제목이
+  // 지나치게 짧아지면) 식별력이 떨어지므로 그땐 그냥 길이로 자른다.
+  const head = text.slice(0, TITLE_MAX_LENGTH);
+  const boundary = Math.max(head.lastIndexOf(". "), head.lastIndexOf(" "), head.lastIndexOf(", "));
+  const cut = boundary >= Math.floor(TITLE_MAX_LENGTH * 0.6) ? head.slice(0, boundary) : head;
+  return `${cut.trimEnd()}…`;
 }
 
 function commandNameToOwnerAction(commandName: "/approve" | "/reject" | "/done" | "/cancel" | "/verify"): WorkflowEventName {
