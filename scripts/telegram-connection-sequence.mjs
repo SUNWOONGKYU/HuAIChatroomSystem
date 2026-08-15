@@ -1,37 +1,34 @@
 import { buildWebhookPlan, formatWebhookPlan } from "./apply-telegram-webhooks.mjs";
 import { validateOperationEnv } from "./verify-operation-env.mjs";
 
-const REQUIRED_ROOM_KEYS = [
-  "BOT_SERVICE_TELEGRAM_CHAT_ID",
-  "BOT_SERVICE_OWNER_TELEGRAM_USER_ID"
-];
-
 export function buildTelegramConnectionSequence(env) {
   const envErrors = validateOperationEnv(env, "all");
-  const roomErrors = [];
-  for (const key of REQUIRED_ROOM_KEYS) {
-    if (!env[key]) roomErrors.push(`missing-env:${key}`);
-  }
 
-  const ready = envErrors.length === 0 && roomErrors.length === 0;
+  // 다방화 이후 BOT_SERVICE_TELEGRAM_CHAT_ID/BOT_SERVICE_OWNER_TELEGRAM_USER_ID 는 이 전체
+  // 시퀀스의 readiness 를 막을 이유가 없다 — 운영 env 파일 하나가 여러 방을 동시에 섬기고,
+  // 새로 붙일 특정 방의 chat id/owner id 는 onboard-telegram-room.mjs 호출 시
+  // --chat-id/--owner-id 인자로(또는 그 호출 한정 env 로) 넘긴다. 그래서 더 이상
+  // roomErrors 를 ready 판정에 섞지 않는다. discover-ids 단계가 이미 "지금 알고
+  // 있는지" 를 비차단 정보로 보여주므로 중복 차단할 이유도 없다.
+  const ready = envErrors.length === 0;
   const steps = [
     {
       id: "fill-env",
       status: ready ? "ready" : "blocked",
       command: "Load real values from .env.operation.example into the process environment.",
-      note: "Bot tokens, webhook secrets, Supabase service role, chat id, owner id, and gateway roots are required."
+      note: "Bot tokens, webhook secrets, Supabase service role, and gateway roots are required. Per-room chat id/owner id are supplied per onboarding call (see seed-room below), not globally."
     },
     {
       id: "discover-ids",
       status: env.BOT_SERVICE_TELEGRAM_CHAT_ID && env.BOT_SERVICE_OWNER_TELEGRAM_USER_ID ? "ready" : "blocked",
       command: "node scripts/discover-telegram-ids.mjs",
-      note: "Use only before webhook activation after sending one human message in the target private group."
+      note: "Optional shortcut before onboarding a specific room, after sending one human message in the target private group. Not required globally: onboard-telegram-room.mjs also accepts --chat-id/--owner-id directly."
     },
     {
       id: "seed-room",
       status: ready ? "ready" : "blocked",
-      command: "node scripts/generate-supabase-room-seed.mjs",
-      note: "Apply generated SQL to Supabase after confirming role bot actor mapping."
+      command: "node scripts/onboard-telegram-room.mjs --room-id <uuid> --chat-id <id> --owner-id <id> --project-path <path>",
+      note: "Onboards one Telegram group as an operational room by upserting Supabase rows (idempotent, safe to re-run per room). Use scripts/generate-supabase-room-seed.mjs instead only when you want to eyeball the SQL before applying it by hand."
     },
     {
       id: "dry-run-webhooks",
@@ -61,7 +58,7 @@ export function buildTelegramConnectionSequence(env) {
 
   return {
     ready,
-    errors: [...envErrors, ...roomErrors],
+    errors: envErrors,
     webhookPlan: canBuildWebhookPlan(env) ? buildWebhookPlan(env) : [],
     steps
   };

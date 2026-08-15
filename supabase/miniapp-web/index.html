@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>HuAI 작업판</title>
+<!--
+  이 파일은 의도적으로 완전히 자기완결형이다 (외부 CSS/JS 파일, 번들러, 프레임워크 없음) —
+  호스팅 방식이 아직 정해지지 않았고(작업 4), 파일 하나로 여는 게 가장 유연하기 때문이다.
+
+  유일한 예외: 아래 telegram-web-app.js. Telegram Mini App 은 이 스크립트를
+  Telegram 공식 도메인에서 직접 로드하는 것이 플랫폼 요구사항이다(자체 호스팅/미러링을
+  Telegram 이 권장하지 않는다 — 봇 플랫폼이 이 스크립트를 계속 갱신하고, initData 발급이
+  이 스크립트의 동작에 묶여 있다). "외부 CDN 의존 금지" 규칙의 취지는 UI 라이브러리를
+  임의의 3rd-party CDN 에서 끌어오지 말라는 것이지, Mini App 이 존재하기 위한 필수
+  플랫폼 SDK 까지 막는 것은 아니라고 판단해 이 한 줄만 예외로 두었다. 이견 있으면 알려달라.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --bg-secondary: #f5f5f7;
+    --text: #1c1c1e;
+    --text-secondary: #6b6b70;
+    --hint: #8e8e93;
+    --border: #e2e2e5;
+    --accent: #2563eb;
+    --card-bg: #ffffff;
+    --danger: #ef4444;
+    --success: #10b981;
+    --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+    min-height: 100vh;
+  }
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 16px;
+  }
+  header h1 {
+    font-size: 16px;
+    margin: 0 0 2px;
+    font-weight: 700;
+  }
+  header p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .refresh-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+  .refresh-row span {
+    font-size: 11px;
+    color: var(--hint);
+  }
+  button {
+    font-family: inherit;
+  }
+  .btn {
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .btn-ghost { background: transparent; }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 10px 16px 0;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .tab[aria-selected="true"] {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .tab .count { opacity: 0.75; margin-left: 4px; }
+
+  main { padding: 12px 16px 32px; }
+
+  #state-message {
+    padding: 40px 16px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .board-columns {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 8px;
+  }
+  .board-column {
+    flex: 0 0 82%;
+    scroll-snap-align: start;
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 10px;
+    min-height: 120px;
+  }
+  .board-column h2 {
+    font-size: 13px;
+    margin: 2px 4px 8px;
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-secondary);
+  }
+  .board-column .empty {
+    font-size: 12px;
+    color: var(--hint);
+    padding: 16px 4px;
+    text-align: center;
+  }
+
+  .task-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    display: block;
+    width: 100%;
+    text-align: left;
+    color: inherit;
+  }
+  .task-card .title {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    line-height: 1.4;
+  }
+  .task-card .meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .pill.decidable { background: var(--warn); color: #1c1c1e; }
+  .pill.priority-urgent { background: var(--danger); color: #fff; }
+  .pill.priority-high { background: var(--warn); color: #1c1c1e; }
+
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: none;
+    z-index: 20;
+  }
+  #overlay.open { display: block; }
+  #detail-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-width: 480px;
+    margin: 0 auto;
+    background: var(--bg);
+    border-radius: 16px 16px 0 0;
+    padding: 16px 16px 24px;
+    max-height: 82vh;
+    overflow-y: auto;
+    transform: translateY(100%);
+    transition: transform 0.2s ease-out;
+  }
+  #overlay.open #detail-sheet { transform: translateY(0); }
+  #detail-sheet h3 {
+    margin: 4px 0 8px;
+    font-size: 15px;
+  }
+  #detail-sheet .field {
+    margin-bottom: 12px;
+  }
+  #detail-sheet .field label {
+    display: block;
+    font-size: 11px;
+    color: var(--hint);
+    margin-bottom: 2px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  #detail-sheet .field p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+  .action-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .action-row .btn { flex: 1 1 auto; }
+  #decision-note {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: none;
+  }
+  #decision-note.show { display: block; }
+
+  /* 제안 섹션 — huai_tasks 기반 작업판과 성격이 달라(아직 실행 시작 전) 탭/칸반과
+     분리된 별도 섹션으로 둔다. 접었다 펼 수 있게 해서 제안이 없을 때 화면을 안 잡아먹는다. */
+  #proposals-section {
+    padding: 10px 16px 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  #proposals-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: none;
+    border: none;
+    padding: 6px 0;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  #proposals-toggle .badge {
+    background: var(--accent);
+    color: #fff;
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 11px;
+    margin-left: 6px;
+  }
+  #proposals-toggle .chevron { transition: transform 0.15s; color: var(--hint); }
+  #proposals-section.collapsed #proposals-toggle .chevron { transform: rotate(-90deg); }
+  #proposals-section.collapsed #proposals-list { display: none; }
+  #proposals-list { padding: 4px 0 10px; }
+  .proposal-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .proposal-card .title { font-size: 13px; font-weight: 600; margin: 0 0 4px; line-height: 1.4; }
+  .proposal-card .desc { font-size: 12px; color: var(--text-secondary); margin: 0 0 6px; line-height: 1.5; }
+  .proposal-card .meta { font-size: 11px; color: var(--hint); display: flex; gap: 8px; flex-wrap: wrap; }
+  #detail-hint {
+    margin: 4px 0 10px;
+    font-size: 12px;
+    color: var(--hint);
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 8px 10px;
+    line-height: 1.5;
+  }
+  .proposal-card .hint {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--hint);
+    border-top: 1px dashed var(--border);
+    padding-top: 6px;
+  }
+  .proposal-card .action-row { margin-top: 8px; }
+  .proposal-card .proposal-note {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: none;
+  }
+  .proposal-card .proposal-note.show { display: block; }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1e;
+      --bg-secondary: #2c2c2e;
+      --text: #f2f2f2;
+      --text-secondary: #a0a0a5;
+      --hint: #7c7c80;
+      --border: #38383a;
+      --card-bg: #2c2c2e;
+    }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="room-title">HuAI 작업판</h1>
+    <p id="room-subtitle">불러오는 중…</p>
+    <div class="refresh-row">
+      <button type="button" class="btn btn-ghost" id="refresh-btn">새로고침</button>
+      <span id="updated-at"></span>
+    </div>
+  </header>
+
+  <section id="proposals-section" hidden>
+    <button type="button" id="proposals-toggle" aria-expanded="true">
+      <span>제안 (아직 시작 안 됨)<span class="badge" id="proposals-count">0</span></span>
+      <span class="chevron">▾</span>
+    </button>
+    <div id="proposals-list"></div>
+  </section>
+
+  <nav class="tabs" id="tabs" role="tablist" aria-label="상태별 보기" hidden></nav>
+
+  <main>
+    <div id="state-message"></div>
+    <div class="board-columns" id="board" hidden></div>
+  </main>
+
+  <div id="overlay">
+    <div id="detail-sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+      <h3 id="detail-title"></h3>
+      <div class="field">
+        <label>상태</label>
+        <p id="detail-status"></p>
+      </div>
+      <div class="field">
+        <label>목적</label>
+        <p id="detail-purpose"></p>
+      </div>
+      <div class="field">
+        <label>범위</label>
+        <p id="detail-scope"></p>
+      </div>
+      <div class="field">
+        <label>완료 기준</label>
+        <p id="detail-criteria"></p>
+      </div>
+      <div class="field" id="detail-assignee-field" hidden>
+        <label>담당</label>
+        <p id="detail-assignee"></p>
+      </div>
+      <p id="detail-hint" class="hint" hidden></p>
+      <div class="action-row" id="action-row" hidden></div>
+      <div id="decision-note"></div>
+      <div class="action-row">
+        <button type="button" class="btn btn-ghost" id="close-detail-btn" style="flex:1 1 100%;">닫기</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── 배포 시 채워야 하는 값. 자리표시자 그대로 두면 이 페이지는 아무 데이터도
+  // 받아오지 못하고 명확한 에러 상태만 보여준다(조용히 실패하지 않는다).
+  var CONFIG = {
+    // 예: "https://YOUR_PROJECT.functions.supabase.co"
+    functionsBaseUrl: "__MINIAPP_FUNCTIONS_BASE_URL__"
+  };
+
+  var qs = new URLSearchParams(window.location.search);
+  // fn 쿼리 파라미터로 오버라이드 가능 — 같은 파일을 여러 Supabase 프로젝트에 재사용할 때 유용.
+  var functionsBaseUrl = qs.get("fn") || CONFIG.functionsBaseUrl;
+  // roomId 는 서명 검증 대상이 아니라 조회 키일 뿐이다. 서버(miniapp-tasks)가
+  // huai_room_members 로 실제 접근 권한을 다시 확인하므로, 이 값이 위조되어도
+  // 안전하다(위조하면 그냥 자기가 속하지 않은 방이라 403을 받는다).
+  var roomId = qs.get("room") || qs.get("roomId") || "";
+
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var initData = (tg && tg.initData) || "";
+
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    applyTelegramTheme();
+    tg.onEvent && tg.onEvent("themeChanged", applyTelegramTheme);
+  }
+
+  function applyTelegramTheme() {
+    var p = tg && tg.themeParams;
+    if (!p) return;
+    var root = document.documentElement.style;
+    if (p.bg_color) root.setProperty("--bg", "#" + normalizeHex(p.bg_color));
+    if (p.secondary_bg_color) root.setProperty("--bg-secondary", "#" + normalizeHex(p.secondary_bg_color));
+    if (p.text_color) root.setProperty("--text", "#" + normalizeHex(p.text_color));
+    if (p.hint_color) root.setProperty("--hint", "#" + normalizeHex(p.hint_color));
+    if (p.hint_color) root.setProperty("--text-secondary", "#" + normalizeHex(p.hint_color));
+    if (p.button_color) root.setProperty("--accent", "#" + normalizeHex(p.button_color));
+  }
+  function normalizeHex(v) { return String(v).replace(/^#/, ""); }
+
+  var BUCKET_ORDER = [
+    { id: "needs_decision", label: "승인 필요" },
+    { id: "in_progress", label: "진행 중" },
+    { id: "backlog", label: "대기" },
+    { id: "stopped", label: "중단" },
+    { id: "done", label: "완료" }
+  ];
+
+  var stateEl = document.getElementById("state-message");
+  var boardEl = document.getElementById("board");
+  var tabsEl = document.getElementById("tabs");
+  var titleEl = document.getElementById("room-title");
+  var subtitleEl = document.getElementById("room-subtitle");
+  var updatedAtEl = document.getElementById("updated-at");
+  var refreshBtn = document.getElementById("refresh-btn");
+  var overlayEl = document.getElementById("overlay");
+  var closeDetailBtn = document.getElementById("close-detail-btn");
+
+  var lastTasks = [];
+  var activeBucket = "needs_decision";
+  var pollTimer = null;
+
+  function showState(message) {
+    stateEl.textContent = message;
+    stateEl.style.display = "block";
+    boardEl.hidden = true;
+    tabsEl.hidden = true;
+  }
+
+  function apiFetch(path, options) {
+    if (!functionsBaseUrl || functionsBaseUrl.indexOf("__") === 0) {
+      return Promise.reject(new Error("functions-base-url-not-configured"));
+    }
+    if (!initData) {
+      return Promise.reject(new Error("no-telegram-init-data"));
+    }
+    options = options || {};
+    options.headers = Object.assign({}, options.headers, {
+      authorization: "tma " + initData
+    });
+    return fetch(functionsBaseUrl.replace(/\/$/, "") + path, options).then(function (res) {
+      return res.json().then(function (body) {
+        if (!res.ok) {
+          var err = new Error((body && body.error) || ("http-" + res.status));
+          err.status = res.status;
+          throw err;
+        }
+        return body;
+      });
+    });
+  }
+
+  function friendlyErrorMessage(err) {
+    if (err && err.message === "functions-base-url-not-configured") {
+      return "이 작업판은 아직 배포 설정이 끝나지 않았습니다. (functionsBaseUrl 미설정)";
+    }
+    if (err && err.message === "no-telegram-init-data") {
+      return "Telegram 앱에서 열어야 합니다. 일반 브라우저에서는 사용할 수 없습니다.";
+    }
+    if (err && err.status === 401) return "인증에 실패했습니다. Telegram 앱을 다시 열어 시도해주세요.";
+    if (err && err.status === 403) return "이 방의 작업판을 볼 권한이 없습니다.";
+    if (err && err.status === 404) return "방을 찾을 수 없습니다.";
+    return "작업 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
+  }
+
+  function loadTasks(isBackground) {
+    if (!roomId) {
+      showState("작업판을 열 방이 지정되지 않았습니다. 방의 대화에서 제공된 버튼으로 다시 열어주세요.");
+      return;
+    }
+    if (!isBackground) showState("불러오는 중…");
+    apiFetch("/miniapp-tasks?roomId=" + encodeURIComponent(roomId), { method: "GET" })
+      .then(function (data) {
+        stateEl.style.display = "none";
+        tabsEl.hidden = false;
+        boardEl.hidden = false;
+        titleEl.textContent = (data.room && data.room.purpose) || "HuAI 작업판";
+        subtitleEl.textContent = "작업 " + (data.tasks ? data.tasks.length : 0) + "건";
+        updatedAtEl.textContent = data.generatedAt ? "갱신 " + formatTime(data.generatedAt) : "";
+        lastTasks = data.tasks || [];
+        renderTabs();
+        renderBoard();
+      })
+      .catch(function (err) {
+        if (isBackground) return; // 백그라운드 폴링 실패는 조용히 넘어간다 (다음 주기에 재시도).
+        showState(friendlyErrorMessage(err));
+      });
+  }
+
+  // 제안(아직 huai_tasks 행이 없는, 실행을 시작시키는 승인 대상)은 작업 목록과 성격이
+  // 달라 별도 섹션에 그린다. miniapp-approve 가 이제 proposalId 기반 결정도 받아주므로
+  // owner 에게는 결정 버튼을 보여준다(owner 가 아니면 서버가 항상 403 을 낼 것이므로
+  // 버튼 자체를 렌더링하지 않는다 — task 상세 시트의 decidable 패턴과 동일).
+  var proposalsSection = document.getElementById("proposals-section");
+  var proposalsToggle = document.getElementById("proposals-toggle");
+  var proposalsList = document.getElementById("proposals-list");
+  var proposalsCount = document.getElementById("proposals-count");
+  var proposalsCollapsedByUser = false;
+  var lastProposalsViewerRole = "";
+
+  proposalsToggle.addEventListener("click", function () {
+    proposalsCollapsedByUser = !proposalsSection.classList.contains("collapsed");
+    proposalsSection.classList.toggle("collapsed");
+    proposalsToggle.setAttribute("aria-expanded", String(!proposalsSection.classList.contains("collapsed")));
+  });
+
+  function loadProposals(isBackground) {
+    if (!roomId) return;
+    apiFetch("/miniapp-proposals?roomId=" + encodeURIComponent(roomId), { method: "GET" })
+      .then(function (data) {
+        var proposals = data.proposals || [];
+        lastProposalsViewerRole = data.viewerRole || "";
+        proposalsSection.hidden = proposals.length === 0;
+        proposalsCount.textContent = String(proposals.length);
+        // 처음 뜰 때는 펼쳐 보여주되, 사용자가 접었으면 백그라운드 갱신이 다시 펴지 않는다.
+        if (proposals.length > 0 && !proposalsCollapsedByUser) proposalsSection.classList.remove("collapsed");
+        renderProposals(proposals);
+      })
+      .catch(function () {
+        // 제안 조회 실패는 작업판 자체를 못 쓰게 만들 이유가 아니다 — 섹션을 그냥 숨긴다.
+        if (!isBackground) proposalsSection.hidden = true;
+      });
+  }
+
+  function renderProposals(proposals) {
+    proposalsList.innerHTML = "";
+    proposals.forEach(function (p) {
+      var card = document.createElement("div");
+      card.className = "proposal-card";
+      var title = document.createElement("p");
+      title.className = "title";
+      title.textContent = p.title || "(제목 없음)";
+      card.appendChild(title);
+      if (p.purpose) {
+        var desc = document.createElement("p");
+        desc.className = "desc";
+        desc.textContent = p.purpose;
+        card.appendChild(desc);
+      }
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      meta.appendChild(pill("담당 " + (p.assigneeDisplay || "미정")));
+      meta.appendChild(pill(formatTime(p.createdAt) || "방금"));
+      card.appendChild(meta);
+
+      if (lastProposalsViewerRole === "owner") {
+        var pActionRow = document.createElement("div");
+        pActionRow.className = "action-row";
+        var pNote = document.createElement("div");
+        pNote.className = "proposal-note";
+        [
+          { action: "approve", label: "승인", cls: "btn-accent" },
+          { action: "request_revision", label: "보완 요청", cls: "" },
+          { action: "reject", label: "거부", cls: "btn-danger" }
+        ].forEach(function (a) {
+          var pBtn = document.createElement("button");
+          pBtn.type = "button";
+          pBtn.className = "btn " + a.cls;
+          pBtn.textContent = a.label;
+          pBtn.addEventListener("click", function () { submitProposalDecision(p, a.action, pBtn); });
+          pActionRow.appendChild(pBtn);
+        });
+        card.appendChild(pActionRow);
+        card.appendChild(pNote);
+      } else {
+        var hint = document.createElement("p");
+        hint.className = "hint";
+        hint.textContent = "Telegram 방에서 이 제안에 달린 버튼으로 승인/거부할 수 있습니다.";
+        card.appendChild(hint);
+      }
+
+      proposalsList.appendChild(card);
+    });
+  }
+
+  // 제안 카드는 detail 시트의 action-row/decision-note 처럼 DOM 에 하나만 있는 싱글턴이
+  // 아니라 카드마다 새로 만들어지므로, 버튼을 클릭한 triggerBtn 을 기준으로 같은 카드
+  // 안의 버튼 행(부모)과 상태 메시지(그 다음 형제 요소)를 찾아 쓴다.
+  function submitProposalDecision(proposal, action, triggerBtn) {
+    var rowEl = triggerBtn.parentNode;
+    var noteEl = rowEl.nextElementSibling;
+    var buttons = rowEl.querySelectorAll("button");
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+    noteEl.className = "proposal-note show";
+    noteEl.textContent = "처리 중…";
+
+    // "이유" 입력란은 일부러 안 둔다 — huai_approvals.reason 을 지금 소비하는 코드가
+    // 어디에도 없어서(팀장님이 Alpha 조사로 확인: owner_supplement_requested 이벤트 payload에
+    // reason 필드 자체가 없고, Telegram 콜백도 64바이트 제한상 자유 텍스트를 못 싣는다),
+    // 입력란을 두면 "적었으니 전달됐겠지"라는 거짓 안심만 준다. 대신 성공 메시지에서
+    // Telegram 방에 직접 알려야 한다고 명시적으로 안내한다(decisionSuccessNote).
+
+    // task 결정과 동일한 패턴: 세션 내 고정된 idempotency 키로 중복 클릭을 막는다.
+    // proposalId 와 taskId 는 서로 다른 채번 체계라 이 키 공간에서 충돌하지 않는다.
+    var key = proposal.proposalId + ":" + action;
+    if (!submittedKeys[key]) {
+      submittedKeys[key] = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
+    }
+
+    var body = { proposalId: proposal.proposalId, action: action, idempotencyKey: submittedKeys[key] };
+
+    apiFetch("/miniapp-approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(function (res) {
+        noteEl.textContent = decisionSuccessNote(action, res);
+        tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
+        // 결정된 제안은 서버에서 목록 조인이 바뀌며 곧 사라진다 — 그대로 두고 목록만 새로고침한다.
+        setTimeout(function () { loadProposals(true); }, 900);
+      })
+      .catch(function (err) {
+        noteEl.textContent = decisionErrorMessage(err, "이미 다른 경로로 결정된 제안입니다. 새로고침해주세요.");
+        tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("error");
+        for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
+      });
+  }
+
+  function formatTime(iso) {
+    try {
+      var d = new Date(iso);
+      return d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function countByBucket(bucketId) {
+    return lastTasks.filter(function (t) { return t.bucket === bucketId; }).length;
+  }
+
+  function renderTabs() {
+    tabsEl.innerHTML = "";
+    BUCKET_ORDER.forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tab";
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", String(b.id === activeBucket));
+      btn.innerHTML = b.label + '<span class="count">' + countByBucket(b.id) + "</span>";
+      btn.addEventListener("click", function () {
+        activeBucket = b.id;
+        renderTabs();
+        renderBoard();
+      });
+      tabsEl.appendChild(btn);
+    });
+  }
+
+  function renderBoard() {
+    boardEl.innerHTML = "";
+    var bucketDef = BUCKET_ORDER.filter(function (b) { return b.id === activeBucket; })[0] || BUCKET_ORDER[0];
+    var column = document.createElement("div");
+    column.className = "board-column";
+    var tasksInBucket = lastTasks.filter(function (t) { return t.bucket === bucketDef.id; });
+
+    var heading = document.createElement("h2");
+    heading.textContent = bucketDef.label;
+    column.appendChild(heading);
+
+    if (tasksInBucket.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "이 칼럼에는 작업이 없습니다.";
+      column.appendChild(empty);
+    } else {
+      tasksInBucket.forEach(function (task) {
+        column.appendChild(renderCard(task));
+      });
+    }
+    boardEl.appendChild(column);
+  }
+
+  function renderCard(task) {
+    var card = document.createElement("button");
+    card.type = "button";
+    card.className = "task-card";
+    var title = document.createElement("p");
+    title.className = "title";
+    title.textContent = task.title || "(제목 없음)";
+    var meta = document.createElement("div");
+    meta.className = "meta";
+    meta.appendChild(pill(task.statusLabel));
+    if (task.priority && task.priority !== "normal") {
+      meta.appendChild(pill(task.priority, "priority-" + task.priority));
+    }
+    if (task.decidable) meta.appendChild(pill("결정 필요", "decidable"));
+    card.appendChild(title);
+    card.appendChild(meta);
+    card.addEventListener("click", function () { openDetail(task); });
+    return card;
+  }
+
+  function pill(text, extraClass) {
+    var span = document.createElement("span");
+    span.className = "pill" + (extraClass ? " " + extraClass : "");
+    span.textContent = text;
+    return span;
+  }
+
+  // ── 상세 시트 ──
+  var detailTitle = document.getElementById("detail-title");
+  var detailStatus = document.getElementById("detail-status");
+  var detailPurpose = document.getElementById("detail-purpose");
+  var detailScope = document.getElementById("detail-scope");
+  var detailCriteria = document.getElementById("detail-criteria");
+  var detailAssigneeField = document.getElementById("detail-assignee-field");
+  var detailAssignee = document.getElementById("detail-assignee");
+  var actionRow = document.getElementById("action-row");
+  var decisionNote = document.getElementById("decision-note");
+  var detailHint = document.getElementById("detail-hint");
+
+  function openDetail(task) {
+    detailTitle.textContent = task.title || "(제목 없음)";
+    detailStatus.textContent = task.statusLabel + " (" + task.status + ")";
+    detailPurpose.textContent = task.purpose || "-";
+    detailScope.textContent = task.scope || "-";
+    detailCriteria.textContent = task.completionCriteria || "-";
+    if (task.assignee && task.assignee.role) {
+      detailAssigneeField.hidden = false;
+      detailAssignee.textContent = task.assignee.role + " (" + task.assignee.adapter_type + ")";
+    } else {
+      detailAssigneeField.hidden = true;
+    }
+    decisionNote.className = "";
+    decisionNote.textContent = "";
+    renderActions(task);
+    overlayEl.classList.add("open");
+  }
+
+  function closeDetail() {
+    overlayEl.classList.remove("open");
+  }
+  closeDetailBtn.addEventListener("click", closeDetail);
+  overlayEl.addEventListener("click", function (e) {
+    if (e.target === overlayEl) closeDetail();
+  });
+
+  // 완료 단계(completion_approval_pending·commander_completion_pending)만 결정 가능하고
+  // 둘 다 같은 결정(stage='final_approval')이라 버튼 구성도 같다 — Telegram 완료 게이트
+  // (rv/rr/fa)에 맞춰 최종승인/보완요청만 두고 거부는 없다(팀장님 확정 사항).
+  var FINAL_APPROVAL_ACTIONS = [
+    { action: "final_approve", label: "최종 승인", cls: "btn-accent" },
+    { action: "request_revision", label: "보완 요청", cls: "" }
+  ];
+
+  function renderActions(task) {
+    actionRow.innerHTML = "";
+    if (!task.decidable) {
+      actionRow.hidden = true;
+      // decidable=false 인데 needs_decision 버킷(mid_approval_pending 등)이면 "왜 버튼이
+      // 없는지"를 hint 로 설명한다 — 조용히 버튼만 없으면 방치된 것처럼 보인다.
+      if (task.hint) {
+        detailHint.textContent = task.hint;
+        detailHint.hidden = false;
+      } else {
+        detailHint.hidden = true;
+      }
+      return;
+    }
+    detailHint.hidden = true;
+    actionRow.hidden = false;
+    var actions = FINAL_APPROVAL_ACTIONS;
+    actions.forEach(function (a) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn " + a.cls;
+      btn.textContent = a.label;
+      btn.addEventListener("click", function () { submitDecision(task, a.action, btn); });
+      actionRow.appendChild(btn);
+    });
+  }
+
+  var submittedKeys = {};
+
+  function submitDecision(task, action, triggerBtn) {
+    var buttons = actionRow.querySelectorAll("button");
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+    decisionNote.className = "show";
+    decisionNote.textContent = "처리 중…";
+
+    // 같은 카드에서 같은 액션을 여러 번 눌러도 서버에는 한 번만 기록되도록
+    // 세션 내 고정된 idempotency 키를 사용한다.
+    var key = task.taskId + ":" + action;
+    if (!submittedKeys[key]) {
+      submittedKeys[key] = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
+    }
+
+    apiFetch("/miniapp-approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ taskId: task.taskId, action: action, idempotencyKey: submittedKeys[key] })
+    })
+      .then(function (res) {
+        decisionNote.textContent = decisionSuccessNote(action, res);
+        tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
+        loadTasks(true);
+        setTimeout(closeDetail, 900);
+      })
+      .catch(function (err) {
+        decisionNote.textContent = decisionErrorMessage(err);
+        tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("error");
+        for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
+      });
+  }
+
+  // 보완 요청은 버튼을 누르는 것만으로는 아무것도 반영되지 않는다 — huai_approvals.reason 을
+  // 지금 소비하는 코드가 없어서(팀장님 확인: orchestrator 어디에도 이 값을 읽는 곳이 없다),
+  // "무엇을 고칠지"는 Telegram 방에서 사람이 직접 다시 말해야만 실제로 반영된다. 입력란을
+  // 없앤 대신(입력란이 있으면 "적었으니 전달됐겠지"라는 거짓 안심을 준다) 성공 메시지에서
+  // 다음 행동을 명시적으로 안내한다.
+  function decisionSuccessNote(action, res) {
+    if (action === "request_revision") {
+      return "보완 요청이 기록되었습니다. 무엇을 고쳐야 하는지는 Telegram 방에 직접 남겨주세요 — 버튼만으로는 반영되지 않습니다.";
+    }
+    return (res && res.note) || "결정이 기록되었습니다.";
+  }
+
+  function decisionErrorMessage(err, staleMessage) {
+    if (err && err.status === 403) return "이 결정을 내릴 권한이 없습니다.";
+    if (err && err.status === 409) return staleMessage || "이 작업은 더 이상 이 결정을 받을 수 있는 상태가 아닙니다. 새로고침해주세요.";
+    return "기록에 실패했습니다. 다시 시도해주세요.";
+  }
+
+  refreshBtn.addEventListener("click", function () { loadTasks(false); loadProposals(false); });
+
+  // 실시간 대신 짧은 주기 폴링 — 인증 모델(작업 2)로 Realtime 을 쓰지 않기로 한
+  // 데 따른 절충이다. Mini App 세션은 보통 짧으므로 5초 주기면 충분히 "실시간처럼" 느껴진다.
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(function () { loadTasks(true); loadProposals(true); }, 5000);
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { if (pollTimer) clearInterval(pollTimer); }
+    else { loadTasks(true); loadProposals(true); startPolling(); }
+  });
+
+  loadTasks(false);
+  loadProposals(false);
+  startPolling();
+})();
+</script>
+</body>
+</html>

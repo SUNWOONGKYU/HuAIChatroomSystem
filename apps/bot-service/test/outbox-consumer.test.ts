@@ -187,6 +187,122 @@ test("marks outbox dead when max attempts is reached and masks bot tokens", asyn
   assert.equal(row?.lastError?.includes("bot<redacted>"), true);
 });
 
+test("429 rate limit retries instead of exhausting attempts, even at maxAttempts", async () => {
+  const store = await seededOutboxStore("send me");
+
+  const dispatch = await runOutboxConsumerOnce({
+    store,
+    telegram: failingTelegram("telegram-api-error:429:too many requests"),
+    limit: 10,
+    leaseMs: 30_000,
+    intervalMs: 1_000,
+    maxAttempts: 1,
+    now: () => new Date("2026-08-05T00:00:00.000Z")
+  });
+
+  assert.equal(dispatch.dead, 0, "429는 영구 실패가 아니므로 dead 로 가면 안 된다");
+  assert.equal(dispatch.retried, 1);
+  const row = store.snapshot().outbox[0];
+  assert.equal(row?.status, "retry_pending");
+  assert.equal(row?.lastError, "telegram-api-error:429:too many requests");
+});
+
+// V1 검증에서 지적된 문제: lease_huai_outbox 는 리스마다(429 로 인한 재시도 포함) DB
+// attempts 를 무조건 올린다. 위 테스트는 "429 자체가 dead 로 안 간다"만 증명했지,
+// "429 가 남긴 attempts 부풀림이 그 다음 진짜 오류를 즉사시키지 않는다"는 증명하지
+// 못했다 — 429 를 여러 번 겪은 뒤 DB attempts 가 이미 maxAttempts 근처까지 올라가
+// 있으면, 그 다음 일시적 500 단 한 번에 재시도 예산이 남았음에도 markDead 로 간다.
+test("429 를 여러 번 겪어도 그 뒤에 오는 첫 진짜 오류의 재시도 예산은 온전하다", async () => {
+  const store = await seededOutboxStore("send me");
+  const maxAttempts = 5;
+
+  for (let round = 0; round < 5; round += 1) {
+    const dispatch = await runOutboxConsumerOnce({
+      store,
+      telegram: failingTelegram("telegram-api-error:429:too many requests"),
+      limit: 10,
+      leaseMs: 30_000,
+      intervalMs: 1_000,
+      maxAttempts,
+      now: () => new Date("2026-08-05T00:00:00.000Z")
+    });
+    assert.equal(dispatch.dead, 0, `round ${round}: 429 만으로는 죽으면 안 된다`);
+    assert.equal(dispatch.retried, 1, `round ${round}`);
+  }
+
+  const afterRealFailure = await runOutboxConsumerOnce({
+    store,
+    telegram: failingTelegram("telegram-api-error:500:temporary"),
+    limit: 10,
+    leaseMs: 30_000,
+    intervalMs: 1_000,
+    maxAttempts,
+    now: () => new Date("2026-08-05T00:00:00.000Z")
+  });
+
+  assert.equal(afterRealFailure.dead, 0, "429 5회 뒤에 온 첫 진짜 오류만으로 즉시 죽으면 안 된다(회귀 지점)");
+  assert.equal(afterRealFailure.retried, 1, "429 이력이 있어도 진짜 오류는 재시도 예산이 남아있어야 한다");
+  assert.equal(store.snapshot().outbox[0]?.status, "retry_pending");
+});
+
+test("429 가 연속으로 여러 번(리스 횟수 > maxAttempts) 와도 계속 재시도된다", async () => {
+  const store = await seededOutboxStore("send me");
+
+  for (let round = 0; round < 10; round += 1) {
+    const dispatch = await runOutboxConsumerOnce({
+      store,
+      telegram: failingTelegram("telegram-api-error:429:too many requests"),
+      limit: 10,
+      leaseMs: 30_000,
+      intervalMs: 1_000,
+      maxAttempts: 1,
+      now: () => new Date("2026-08-05T00:00:00.000Z")
+    });
+    assert.equal(dispatch.dead, 0, `round ${round}`);
+    assert.equal(dispatch.retried, 1, `round ${round}`);
+  }
+
+  assert.equal(store.snapshot().outbox[0]?.status, "retry_pending");
+});
+
+// 과잉 수정 방지 가드: 429 를 겪었더라도, 그 뒤에 반복되는 "진짜" 오류는 예산을 다
+// 쓰면 여전히 죽어야 한다. 429 예외 처리를 잘못 넓혀서 모든 오류를 무제한 재시도로
+// 만들어버리면 이 테스트가 잡는다.
+test("429 이력이 있어도 그 뒤 반복되는 진짜 오류는 예산 소진 시 결국 죽는다(무한 재시도 아님)", async () => {
+  const store = await seededOutboxStore("send me");
+  const maxAttempts = 3;
+
+  for (let round = 0; round < 2; round += 1) {
+    await runOutboxConsumerOnce({
+      store,
+      telegram: failingTelegram("telegram-api-error:429:too many requests"),
+      limit: 10,
+      leaseMs: 30_000,
+      intervalMs: 1_000,
+      maxAttempts,
+      now: () => new Date("2026-08-05T00:00:00.000Z")
+    });
+  }
+
+  let deadCount = 0;
+  for (let round = 0; round < maxAttempts + 2; round += 1) {
+    const dispatch = await runOutboxConsumerOnce({
+      store,
+      telegram: failingTelegram("telegram-api-error:500:persistent"),
+      limit: 10,
+      leaseMs: 30_000,
+      intervalMs: 1_000,
+      maxAttempts,
+      now: () => new Date("2026-08-05T00:00:00.000Z")
+    });
+    deadCount += dispatch.dead;
+    if (dispatch.dead > 0) break;
+  }
+
+  assert.equal(deadCount, 1, "429 를 겪었더라도 진짜 오류가 예산을 다 쓰면 결국 죽어야 한다");
+  assert.equal(store.snapshot().outbox[0]?.status, "dead");
+});
+
 async function seededOutboxStore(text: string): Promise<FakeBotServiceStore> {
   const store = new FakeBotServiceStore();
   const message = makeInboundMessage(text);

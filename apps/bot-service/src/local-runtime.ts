@@ -12,10 +12,11 @@ import {
   type TelegramInboundQueueMessage,
   type TelegramUpdateReceipt
 } from "../../../packages/contracts/src/index.js";
-import { processTelegramInboundWithPersistence } from "./persistence.js";
+import { processTelegramInboundWithPersistence, type OrchestratorPersistencePort } from "./persistence.js";
 import { SupabaseBotServiceStore, buildSupabaseBotServiceStoreFromEnv } from "./supabase-store.js";
-import { loadSupabaseBotServiceRuntimeConfig } from "./supabase-runtime-loader.js";
+import { loadSupabaseBotServiceRuntimeConfig, type LoadedSupabaseRoom } from "./supabase-runtime-loader.js";
 import { type OutboxDispatcherStore } from "./outbox.js";
+import { type MiniAppDecisionPollerRoom } from "./miniapp-decision-poller.js";
 
 export type LocalBotServiceRuntime = {
   config: BotServiceConfig;
@@ -23,6 +24,19 @@ export type LocalBotServiceRuntime = {
   processQueuedInputs(): TelegramInboundQueueMessage[] | Promise<TelegramInboundQueueMessage[]>;
   storeKind: "local" | "supabase";
   outboxStore?: OutboxDispatcherStore;
+  // Mini App 승인 폴러(server.ts 가 실제 주기 루프를 돈다)가 필요로 하는 것들.
+  // supabase 모드에서만 채워진다 — local 모드는 방 개념이 없다.
+  miniAppDecisionPolling?: MiniAppDecisionPollingSupport;
+};
+
+export type MiniAppDecisionPollingSupport = {
+  url: string;
+  serviceRoleKey: string;
+  fetchImpl?: typeof fetch;
+  rooms: readonly MiniAppDecisionPollerRoom[];
+  authorization: TelegramInboundProcessorPorts["authorization"];
+  executionDefaultsByChatId: ReadonlyMap<string, TelegramInboundProcessorPorts["orchestrator"]["executionDefaults"]>;
+  persistence: OrchestratorPersistencePort;
 };
 
 export function buildBotServiceRuntimeFromEnv(env: NodeJS.ProcessEnv = process.env): LocalBotServiceRuntime {
@@ -118,16 +132,27 @@ export async function buildSupabaseBotServiceRuntimeFromDatabase(
   const loaded = await loadSupabaseBotServiceRuntimeConfig({
     url: requiredEnv(env, "SUPABASE_URL"),
     serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY"),
-    roomId: env.BOT_SERVICE_ROOM_ID,
-    telegramChatId: env.BOT_SERVICE_TELEGRAM_CHAT_ID,
     fetchImpl: options.fetchImpl,
     env
   });
+
+  // 방마다 실행 기본값(actor/gateway/project path)이 다르므로 telegram_chat_id 로
+  // 큐 메시지를 다시 그 방으로 되돌려 찾는다. TelegramInboundQueueMessage 계약은
+  // 바꾸지 않았으므로(다른 패키지 파급 방지) roomId 를 메시지에 실어 보내지 않고,
+  // 여기서 부팅 시점에 한 번 만든 조회 테이블로 해결한다.
+  const executionDefaultsByChatId = new Map(
+    loaded.rooms.map((room) => [room.telegramChatId, buildExecutionDefaultsForRoom(env, room)])
+  );
+
   const queue: TelegramInboundQueueMessage[] = [];
+  // Bravo(다방 store 재설계)가 SupabaseStoreConfig 에서 roomId 필드를 제거한다.
+  // 프로세스 하나가 여러 방을 처리하므로 store 는 이제 room 고정이 아니라
+  // 각 호출(이벤트/아웃박스 행)에 실린 room_id 로 스스로 방을 구분해야 한다.
+  // 그 작업이 아직 이 브랜치에 반영되지 않았다면 아래에서 필수 필드 누락
+  // 타입 에러가 난다 — 의도된 신호이며 Bravo 작업 완료 후 사라진다.
   const store = new SupabaseBotServiceStore({
     url: requiredEnv(env, "SUPABASE_URL"),
     serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY"),
-    roomId: loaded.roomId,
     fetchImpl: options.fetchImpl
   });
 
@@ -143,18 +168,43 @@ export async function buildSupabaseBotServiceRuntimeFromDatabase(
     },
     async processQueuedInputs() {
       const drained = queue.splice(0, queue.length);
-      const ports = buildSupabaseInboundProcessorPorts(env, loaded);
       for (const message of drained) {
-        await processTelegramInboundWithPersistence({
-          message,
-          processorPorts: ports,
-          persistence: store
-        });
+        const executionDefaults = executionDefaultsByChatId.get(message.input.envelope.telegramChatId);
+        const ports = buildSupabaseInboundProcessorPorts(env, loaded.authorization, executionDefaults);
+        try {
+          await processTelegramInboundWithPersistence({
+            message,
+            processorPorts: ports,
+            persistence: store
+          });
+        } catch (error) {
+          // 메시지 하나(네트워크 장애, orchestrator 예외 등 이유 불문)가 여기서 던지면,
+          // 예전엔 이 for 루프 전체가 멈춰서 이미 큐에서 빠져나온(drained) 뒤쪽 메시지 —
+          // 다른 방의 것일 수도 있다 — 가 재시도 없이 통째로 유실됐다. 방 하나의 실패가
+          // 다른 방을 끌고 죽으면 A-5 의 격리 목적 자체가 무너지므로, 메시지 단위로 잡아
+          // 로그만 남기고 드레인을 계속한다. processTelegramInboundWithPersistence 내부에서
+          // 이미 markTelegramUpdateFailed 를 호출했으므로 실패 상태는 DB 에도 남는다.
+          console.error(JSON.stringify({
+            type: "bot_service_message_processing_failed",
+            telegramChatId: message.input.envelope.telegramChatId,
+            idempotencyKey: message.idempotencyKey,
+            reason: maskRuntimeError(error)
+          }));
+        }
       }
       return drained;
     },
     storeKind: "supabase",
-    outboxStore: store
+    outboxStore: store,
+    miniAppDecisionPolling: {
+      url: requiredEnv(env, "SUPABASE_URL"),
+      serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY"),
+      fetchImpl: options.fetchImpl,
+      rooms: loaded.rooms.map((room) => ({ roomId: room.roomId, telegramChatId: room.telegramChatId })),
+      authorization: loaded.authorization,
+      executionDefaultsByChatId,
+      persistence: store
+    }
   };
 }
 export function buildLocalBotServiceConfig(env: NodeJS.ProcessEnv = process.env): BotServiceConfig {
@@ -193,10 +243,11 @@ export function buildLocalInboundProcessorPorts(env: NodeJS.ProcessEnv = process
 
 function buildSupabaseInboundProcessorPorts(
   env: NodeJS.ProcessEnv,
-  loaded: Awaited<ReturnType<typeof loadSupabaseBotServiceRuntimeConfig>>
+  authorization: TelegramInboundProcessorPorts["authorization"],
+  executionDefaults: TelegramInboundProcessorPorts["orchestrator"]["executionDefaults"]
 ): TelegramInboundProcessorPorts {
   return {
-    authorization: loaded.authorization,
+    authorization,
     orchestrator: {
       makeId(prefix) {
         return `${prefix}_${randomUUID()}`;
@@ -204,30 +255,43 @@ function buildSupabaseInboundProcessorPorts(
       now() {
         return new Date().toISOString();
       },
-      executionDefaults: buildExecutionDefaultsFromEnv(env, loaded)
+      executionDefaults
     }
   };
 }
 
-function buildExecutionDefaultsFromEnv(
+// 방 하나의 실행 기본값(소대장 판단 자동 호출에 쓰는 actor/gateway/project path)을 만든다.
+// 예전에는 이 함수가 actor 를 못 찾으면 던졌고, 그 예외가 부팅 경로를 타면 프로세스 전체가
+// 죽었다 — 다방에서는 방 하나가 잘못 시딩됐다고 나머지 19개 방까지 멈추면 안 된다.
+// 이제는 던지지 않고 undefined 를 돌려준다: 그 방은 실행 기본값 없이(=소대장 자동 판단 없이,
+// 규칙 기반 경로로만) 계속 동작하고, 다른 방은 영향받지 않는다. 놓치면 안 되므로 로그는 남긴다.
+export function buildExecutionDefaultsForRoom(
   env: NodeJS.ProcessEnv,
-  loaded: Awaited<ReturnType<typeof loadSupabaseBotServiceRuntimeConfig>>
+  room: LoadedSupabaseRoom
 ): TelegramInboundProcessorPorts["orchestrator"]["executionDefaults"] {
   const actorRole = env.BOT_SERVICE_EXECUTION_ACTOR_ROLE ?? "codex_leader";
-  const actor = loaded.actors.find((candidate) => candidate.role === actorRole);
-  if (!actor) throw new Error(`missing-runtime-actor:${actorRole}`);
+  const actor = room.actors.find((candidate) => candidate.role === actorRole);
+  if (!actor) {
+    console.error(JSON.stringify({
+      type: "bot_service_room_execution_defaults_unavailable",
+      roomId: room.roomId,
+      reason: `missing-runtime-actor:${actorRole}`
+    }));
+    return undefined;
+  }
 
-  const configuredGatewayId = env.BOT_SERVICE_EXECUTION_GATEWAY_ID;
-  const configuredProjectPath = env.BOT_SERVICE_EXECUTION_PROJECT_PATH;
-  const gateway = configuredGatewayId
-    ? loaded.gateways.find((candidate) => candidate.gatewayId === configuredGatewayId)
-    : loaded.gateways.find((candidate) => candidate.status === "online") ?? loaded.gateways[0];
-  const gatewayId = configuredGatewayId ?? gateway?.gatewayId;
-  const projectPath = configuredProjectPath ?? gateway?.allowedProjectRoots[0];
+  // 게이트웨이/프로젝트 경로는 이 방 자신의 huai_gateway_instances 를 우선한다.
+  // "고객 A 방은 고객 A 폴더" 가 다방 지원의 존재 이유이므로, 여기서 env 값이
+  // DB 값을 덮어써 버리면 모든 방이 같은 게이트웨이·같은 폴더에서 실행되는
+  // 회귀가 생긴다. env 오버라이드는 이 방의 DB 게이트웨이 정보가 아예 없을 때만
+  // 쓰는 기본값으로 격하한다(예: 게이트웨이 테이블 시딩 전 단일 방 로컬 테스트).
+  const dbGateway = room.gateways.find((candidate) => candidate.status === "online") ?? room.gateways[0];
+  const gatewayId = dbGateway?.gatewayId ?? env.BOT_SERVICE_EXECUTION_GATEWAY_ID;
+  const projectPath = dbGateway?.allowedProjectRoots[0] ?? env.BOT_SERVICE_EXECUTION_PROJECT_PATH;
   if (!gatewayId || !projectPath) return undefined;
 
   return {
-    roomId: loaded.roomId,
+    roomId: room.roomId,
     actorId: actor.actorId,
     adapterType: actor.adapterType,
     projectPath,
@@ -285,6 +349,14 @@ function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
     throw new Error(`missing-env:${key}`);
   }
   return value;
+}
+
+function maskRuntimeError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text
+    .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot<redacted>")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer <redacted>")
+    .replace(/(apikey|authorization|service_role)(["':\s]+)([A-Za-z0-9._-]+)/gi, "$1$2<redacted>");
 }
 
 function hasAnySupabaseRuntimeEnv(env: NodeJS.ProcessEnv): boolean {

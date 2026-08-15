@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
 import {
   SupabaseBotServiceStore,
   approvalDeciderFromPayload,
@@ -11,6 +12,12 @@ import {
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const TASK_ID = "22222222-2222-4222-8222-222222222222";
 const OWNER = "5001";
+const CHAT_ID = "1001";
+
+// commitTelegramInputResult 는 매 호출마다 telegram_chat_id 로 room_id 를 먼저 해석한다.
+function roomResolutionResponse(): Response {
+  return jsonResponse(200, [{ room_id: ROOM_ID }]);
+}
 
 test("3단계 완료 게이트의 각 결정이 승인 단계로 매핑된다", () => {
   assert.deepEqual(approvalRecordForEvent("owner_task_approved"), { stage: "task_approval", decision: "approved" });
@@ -43,6 +50,7 @@ test("사유에 담긴 민감정보는 원장에 남기지 않는다", () => {
 
 test("방장 승인이 huai_approvals 에 append-only 로 기록된다", async () => {
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [eventRow("owner_task_approved:bot-1:9:proposal_0001")]),
     jsonResponse(201, []),                       // POST /huai_approvals
     jsonResponse(200, [{ status: "proposal_pending" }]),
@@ -71,6 +79,7 @@ test("방장 승인이 huai_approvals 에 append-only 로 기록된다", async (
 
 test("대상이 이미 task UUID 면 task_id 를 채운다", async () => {
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [eventRow("owner_final_approved:bot-1:12:" + TASK_ID)]),
     jsonResponse(201, []),
     jsonResponse(200, [{ status: "completion_approval_pending" }]),
@@ -93,6 +102,7 @@ test("대상이 이미 task UUID 면 task_id 를 채운다", async () => {
 
 test("승인 기록은 상태 전이보다 먼저 기록된다 (전이 실패해도 승인 사실은 남는다)", async () => {
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [eventRow("owner_task_approved:bot-1:31:" + TASK_ID)]),
     jsonResponse(201, []),
     // 이미 완료된 작업에 승인 이벤트가 다시 들어오면 금지 전이로 차단된다.
@@ -115,6 +125,7 @@ test("승인 기록은 상태 전이보다 먼저 기록된다 (전이 실패해
 
 test("같은 update 재처리 시 승인 원장이 중복되지 않는다 (409 정상 흡수)", async () => {
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [eventRow("owner_task_approved:bot-1:9:proposal_0001")]),
     jsonResponse(409, { message: "duplicate key value violates unique constraint" }),
     jsonResponse(200, [{ status: "proposal_pending" }]),
@@ -134,6 +145,7 @@ test("같은 update 재처리 시 승인 원장이 중복되지 않는다 (409 �
 
 test("결정자를 알 수 없는 이벤트는 원장에 남기지 않는다", async () => {
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [eventRow("owner_task_approved:bot-1:40:proposal_0010")]),
     jsonResponse(200, [{ status: "proposal_pending" }]),
     jsonResponse(200, [{ task_id: TASK_ID }]),
@@ -154,14 +166,20 @@ function makeStore(fetchImpl: typeof fetch) {
   return new SupabaseBotServiceStore({
     url: "https://example.supabase.co",
     serviceRoleKey: "service-role-key",
-    roomId: ROOM_ID,
     fetchImpl
   });
 }
 
 function makeCommit(event: { eventType: string; idempotencyKey: string; payload: Record<string, unknown> }) {
   return {
-    message: { input: { kind: "message" as const, envelope: undefined as never }, idempotencyKey: "update-1", receivedAt: "2026-08-14T21:00:00.000Z" },
+    message: {
+      input: {
+        kind: "message" as const,
+        envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "1", CHAT_ID, "10", OWNER, false, undefined, undefined)
+      },
+      idempotencyKey: "update-1",
+      receivedAt: "2026-08-14T21:00:00.000Z"
+    },
     result: {
       accepted: true as const,
       authorization: { allowed: true as const },

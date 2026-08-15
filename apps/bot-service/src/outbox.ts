@@ -4,7 +4,7 @@ import {
 } from "../../../packages/telegram-ui/src/sanitize.js";
 import { Api, GrammyError } from "grammy";
 
-const TELEGRAM_TEXT_CHUNK_LIMIT = 3900;
+export const TELEGRAM_TEXT_CHUNK_LIMIT = 3900;
 const DEFAULT_TELEGRAM_FETCH_TIMEOUT_MS = 10_000;
 
 import {
@@ -25,7 +25,11 @@ export type OutboxDispatchResult = {
 export type OutboxDispatcherStore = {
   leasePending(limit: number, leaseUntil: string): Promise<OutboxRecord[]>;
   markSent(outboxId: string, result: TelegramSendResult): Promise<void>;
-  markRetry(outboxId: string, error: string, nextAttemptAt: string): Promise<void>;
+  // attemptsOverride: lease_huai_outbox 는 리스마다 attempts 를 무조건 올린다. 429(rate
+  // limit)는 우리 예산을 쓴 게 아니므로, 이번 리스가 attempts 에 더한 +1 을 되돌려야
+  // 다음 "진짜" 오류의 소진 판정이 429 이력에 오염되지 않는다 — 생략하면(undefined)
+  // 기존과 동일하게 DB 가 이미 갖고 있는 attempts 를 그대로 둔다.
+  markRetry(outboxId: string, error: string, nextAttemptAt: string, attemptsOverride?: number): Promise<void>;
   markDead(outboxId: string, error: string): Promise<void>;
 };
 
@@ -140,11 +144,20 @@ export async function dispatchOutboxBatch(input: {
         result.sent += 1;
         continue;
       }
-      if (row.attempts + 1 >= input.maxAttempts) {
+      // Telegram 429(rate limit)는 우리 잘못이 아니라 우리가 너무 빨리 보냈다는 신호일 뿐이다.
+      // attempts 소진으로 markDead 시키면 재시도 몇 번 만에 메시지가 영구 소실된다.
+      // 잘못된 chat_id 같은 영구 실패만 attempts 를 소진해야 한다.
+      const rateLimited = isRateLimitedTelegramError(message);
+      if (!rateLimited && row.attempts + 1 >= input.maxAttempts) {
         await input.store.markDead(row.outboxId, message);
         result.dead += 1;
       } else {
-        await input.store.markRetry(row.outboxId, message, nextRetryAt(input.now(), row.attempts, error));
+        // 429 는 exhaustion 판정에서만 빠지는 게 아니라, DB attempts 자체도 이번 리스가
+        // 더한 +1 을 되돌려야 한다. 그래야 429 를 몇 번 겪었든 그 다음에 오는 진짜 오류
+        // (예: 일시적 500)가 온전한 재시도 예산을 본다 — 안 그러면 attempts 만 계속
+        // 쌓이다가 첫 비-429 실패에서 즉시 소진 판정을 맞아 markDead 로 죽는다(관찰됨).
+        const attemptsOverride = rateLimited ? Math.max(0, row.attempts - 1) : undefined;
+        await input.store.markRetry(row.outboxId, message, nextRetryAt(input.now(), row.attempts, error), attemptsOverride);
         result.retried += 1;
       }
     }
@@ -260,7 +273,10 @@ async function editTelegramTextChunks(
   return result;
 }
 
-function splitTelegramText(text: string): string[] {
+// V1 지적: task-list-length-and-isolation.test.ts 가 이 로직을 수동으로 복제해 테스트하고
+// 있었다 — 오늘은 같아도 이 함수가 바뀌면 그 테스트는 계속 초록으로 남는다. export 해서
+// 테스트가 실물을 쓰게 한다.
+export function splitTelegramText(text: string): string[] {
   if (text.length <= TELEGRAM_TEXT_CHUNK_LIMIT) return [text];
   const chunks: string[] = [];
   let remaining = text;
@@ -338,6 +354,13 @@ function requireString(value: unknown, name: string): string {
     throw new Error(`missing-${name}`);
   }
   return value;
+}
+
+// TelegramApiError / normalizeTelegramError 는 항상 "telegram-api-error:<status>:..." 형태의
+// 메시지를 만든다(masking 은 bot 토큰/Bearer 값만 지우므로 상태 코드는 그대로 남는다).
+// 429 는 rate limit — 영구 실패가 아니므로 attempts 소진 대상에서 제외한다.
+function isRateLimitedTelegramError(maskedMessage: string): boolean {
+  return /^telegram-api-error:429:/.test(maskedMessage);
 }
 
 function isExpiredCallbackAnswer(row: OutboxRecord, errorMessage: string): boolean {

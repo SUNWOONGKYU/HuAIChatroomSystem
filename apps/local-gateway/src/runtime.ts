@@ -9,6 +9,7 @@ import { createArtifactCollector, type ArtifactCollector } from "./artifact-coll
 export type LocalGatewayRuntimeConfig = {
   intervalMs: number;
   limit: number;
+  concurrency: number;
   maxAttempts: number;
   leaseMs: number;
   maxConsecutiveErrors: number;
@@ -42,6 +43,7 @@ export async function runLocalGatewayLoop(
         sink: deps.sink,
         artifacts: deps.artifacts,
         limit: config.limit,
+        concurrency: config.concurrency,
         leaseUntil: new Date(now.getTime() + config.leaseMs).toISOString(),
         maxAttempts: config.maxAttempts,
         now: () => deps.now().toISOString()
@@ -79,13 +81,27 @@ export function parseLocalGatewayRuntimeConfig(env: NodeJS.ProcessEnv): LocalGat
   if (allowedProjectRoots.length === 0) throw new Error("missing-env:LOCAL_GATEWAY_ALLOWED_ROOTS");
   if (allowedAdapters.length === 0) throw new Error("missing-env:LOCAL_GATEWAY_ALLOWED_ADAPTERS");
 
+  const limit = parsePositiveInteger(env.LOCAL_GATEWAY_LIMIT ?? "5", "LOCAL_GATEWAY_LIMIT");
+  // 뜨문뜨문 20방 / 동시 3방 요구를 맞추려면 배치 안의 행을 순차가 아니라 동시에 처리해야 한다.
+  // 기본값 3 = "동시 사용 3방" 요구를 그대로 반영한 값. env로 조절 가능.
+  const concurrency = parsePositiveInteger(env.LOCAL_GATEWAY_CONCURRENCY ?? "3", "LOCAL_GATEWAY_CONCURRENCY");
   const maxRuntimeMs = parsePositiveInteger(env.LOCAL_GATEWAY_MAX_RUNTIME_MS ?? "1800000", "LOCAL_GATEWAY_MAX_RUNTIME_MS");
-  const leaseMs = parsePositiveInteger(env.LOCAL_GATEWAY_LEASE_MS ?? String(maxRuntimeMs + 60_000), "LOCAL_GATEWAY_LEASE_MS");
-  if (leaseMs <= maxRuntimeMs) throw new Error("invalid-env:LOCAL_GATEWAY_LEASE_MS:must-exceed-LOCAL_GATEWAY_MAX_RUNTIME_MS");
+
+  // 배치 limit 개 행을 동시성 concurrency로 나눠 처리하면, 최악의 경우
+  // ceil(limit / concurrency) "라운드"가 필요하고 각 라운드는 최대 maxRuntimeMs 걸릴 수 있다.
+  // lease가 이보다 짧으면 아직 실행 중인 행의 locked_until이 만료돼 재리스 → 같은 CLI가 중복 실행된다.
+  const worstCaseBatchMs = maxRuntimeMs * Math.ceil(limit / concurrency);
+  const leaseMs = parsePositiveInteger(env.LOCAL_GATEWAY_LEASE_MS ?? String(worstCaseBatchMs + 60_000), "LOCAL_GATEWAY_LEASE_MS");
+  if (leaseMs <= worstCaseBatchMs) {
+    throw new Error(
+      "invalid-env:LOCAL_GATEWAY_LEASE_MS:must-exceed-LOCAL_GATEWAY_MAX_RUNTIME_MS-times-ceil(LOCAL_GATEWAY_LIMIT/LOCAL_GATEWAY_CONCURRENCY)"
+    );
+  }
 
   return {
     intervalMs: parsePositiveInteger(env.LOCAL_GATEWAY_INTERVAL_MS ?? "5000", "LOCAL_GATEWAY_INTERVAL_MS"),
-    limit: parsePositiveInteger(env.LOCAL_GATEWAY_LIMIT ?? "5", "LOCAL_GATEWAY_LIMIT"),
+    limit,
+    concurrency,
     maxAttempts: parsePositiveInteger(env.LOCAL_GATEWAY_MAX_ATTEMPTS ?? "3", "LOCAL_GATEWAY_MAX_ATTEMPTS"),
     leaseMs,
     maxConsecutiveErrors: parsePositiveInteger(

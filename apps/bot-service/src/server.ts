@@ -4,6 +4,7 @@ import { buildBotServiceRuntimeFromEnvAsync } from "./local-runtime.js";
 import { buildTelegramBotTokenResolverFromEnv } from "./bot-token-resolver.js";
 import { createTelegramFetchSender, createTelegramGrammySender } from "./outbox.js";
 import { startOutboxConsumerLoop, type OutboxConsumerHandle } from "./consumer.js";
+import { startMiniAppDecisionPollerLoop, type MiniAppDecisionPollerHandle } from "./miniapp-decision-poller.js";
 
 export type BotServiceServerHandle = {
   close(): Promise<void>;
@@ -36,6 +37,7 @@ export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.en
   drainQueuedInputs();
 
   const outboxLoop = maybeStartOutboxLoop(env, runtime);
+  const miniAppDecisionPolling = maybeStartMiniAppDecisionPolling(env, runtime);
   const polling = await maybeStartTelegramPolling(env, runtime);
 
   await new Promise<void>((resolve) => {
@@ -47,6 +49,7 @@ export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.en
     close() {
       clearInterval(inboundTimer);
       outboxLoop?.stop();
+      miniAppDecisionPolling?.stop();
       polling?.stop();
       return new Promise((resolve, reject) => {
         server.close((error) => {
@@ -139,6 +142,39 @@ function maybeStartOutboxLoop(
     allowedChatIds: runtime.config.allowedChatIds,
     onError(error) {
       console.error(`bot-service-outbox-dispatch-error:${maskServerError(error)}`);
+    }
+  });
+}
+
+// Mini App 승인 버튼은 huai_approvals 에 기록만 남기고 그 자체로는 아무 실행도
+// 일으키지 않는다 — 유일한 실행 트리거는 huai_outbox 의 local_gateway pending 행이고,
+// 그건 SupabaseBotServiceStore.commitTelegramInputResult(= Telegram 경로)만 만든다.
+// bot-service 는 이미 인바운드 드레인(100ms)·아웃박스 루프를 상주 프로세스로 돌리므로,
+// 폴러 하나 더 추가하는 비용은 사실상 0 이고 아웃바운드 방향이라 공개 URL·방화벽 개방이
+// 필요 없다(server.ts:42 가 127.0.0.1 bind 라 클라우드 Edge Function 에서 직접 못 부른다 —
+// 그래서 로컬 PC 를 여는 대신 이 폴러가 대신 당겨온다).
+function maybeStartMiniAppDecisionPolling(
+  env: NodeJS.ProcessEnv,
+  runtime: Awaited<ReturnType<typeof buildBotServiceRuntimeFromEnvAsync>>
+): MiniAppDecisionPollerHandle | undefined {
+  if (!runtime.miniAppDecisionPolling || env.BOT_SERVICE_MINIAPP_POLL_ENABLED === "false") return undefined;
+
+  return startMiniAppDecisionPollerLoop({
+    ...runtime.miniAppDecisionPolling,
+    limit: parsePositiveInteger(env.BOT_SERVICE_MINIAPP_POLL_LIMIT ?? "20", "BOT_SERVICE_MINIAPP_POLL_LIMIT"),
+    intervalMs: parsePositiveInteger(env.BOT_SERVICE_MINIAPP_POLL_MS ?? "3000", "BOT_SERVICE_MINIAPP_POLL_MS"),
+    onDecisionOutcome(event) {
+      // 실행까지 이어진 것과, 의도적으로 건너뛴 것과, 못 정한 것(재시도 대상)을
+      // 로그에서 구분할 수 있어야 한다 — "결정 하나가 조용히 죽어 있는데 아무도
+      // 모르는" 상황을 여기서도 반복하지 않기 위해서다.
+      if (event.outcome === "failed" || event.outcome === "skipped_unauthorized") {
+        console.error(JSON.stringify({ type: "bot_service_miniapp_decision_outcome", ...event }));
+      } else {
+        console.log(JSON.stringify({ type: "bot_service_miniapp_decision_outcome", ...event }));
+      }
+    },
+    onError(error) {
+      console.error(`bot-service-miniapp-decision-poll-error:${maskServerError(error)}`);
     }
   });
 }

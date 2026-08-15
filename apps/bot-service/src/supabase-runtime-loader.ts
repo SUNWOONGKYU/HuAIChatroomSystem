@@ -15,18 +15,29 @@ import {
 export type SupabaseRuntimeLoadConfig = {
   url: string;
   serviceRoleKey: string;
-  roomId?: string;
-  telegramChatId?: string;
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
 };
 
-export type LoadedSupabaseBotServiceRuntime = {
+// 방 하나의 런타임 스냅샷. 다방 지원 전에는 이 모양이 최상위 반환값이었다 —
+// 지금은 활성 방마다 하나씩 만들어져 LoadedSupabaseBotServiceRuntime.rooms 에 담긴다.
+export type LoadedSupabaseRoom = {
   roomId: string;
-  config: BotServiceConfig;
+  telegramChatId: string;
   authorization: RoomAuthorizationContext;
   actors: readonly LoadedAiActor[];
   gateways: readonly LoadedGatewayInstance[];
+};
+
+export type LoadedSupabaseBotServiceRuntime = {
+  rooms: readonly LoadedSupabaseRoom[];
+  // 아웃박스 리스는 room 조건 없이 전역이다(lease_huai_outbox). allowedChatIds 가
+  // 활성 방 전체의 합집합이 아니면, 방을 늘리는 순간 다른 방으로 나갈 메시지가
+  // 전부 unauthorized-outbound-chat 으로 영구 폐기된다 — 반드시 합집합을 유지한다.
+  config: BotServiceConfig;
+  // 인증은 telegramChatId + telegramUserId 로 매칭되므로(authorizeTelegramInput),
+  // 방마다 나눌 필요 없이 전체 방의 멤버십을 평평하게 합쳐도 안전하다.
+  authorization: RoomAuthorizationContext;
 };
 
 export type LoadedAiActor = {
@@ -47,35 +58,60 @@ export async function loadSupabaseBotServiceRuntimeConfig(
   config: SupabaseRuntimeLoadConfig
 ): Promise<LoadedSupabaseBotServiceRuntime> {
   const client = new SupabaseRuntimeRestClient(config);
-  const room = await loadRoom(client, config);
-  const [members, actors, gateways] = await Promise.all([
-    client.get<RoomMemberRow[]>(
-      `/huai_room_members?room_id=eq.${encodeURIComponent(room.room_id)}&select=telegram_user_id,role,permissions,status`
-    ),
-    client.get<AiActorRow[]>(
-      `/huai_ai_actors?room_id=eq.${encodeURIComponent(room.room_id)}&select=actor_id,role,adapter_type,status`
-    ),
-    client.get<GatewayInstanceRow[]>(
-      `/huai_gateway_instances?room_id=eq.${encodeURIComponent(room.room_id)}&select=gateway_id,status,allowed_project_roots,allowed_adapters&order=created_at.asc`
-    )
-  ]);
-  const activeActors = actors
-    .filter((actor) => actor.status === "active")
-    .map(toLoadedActor);
-  const bots = await loadBotsForRoles(client, activeActors.map((actor) => actor.role), config.env ?? process.env);
-  const allowedChatIds = room.status === "active" ? [String(room.telegram_chat_id)] : [];
+  const activeRoomRows = await loadActiveRooms(client);
+
+  if (activeRoomRows.length === 0) {
+    return {
+      rooms: [],
+      config: { allowedChatIds: [], botsByUsername: new Map() },
+      authorization: { memberships: [] }
+    };
+  }
+
+  const roomIds = activeRoomRows.map((room) => room.room_id);
+  const { members, actors, gateways } = await loadRoomScopedRows(client, roomIds);
+  const membersByRoom = groupByRoomId(members);
+  const actorsByRoom = groupByRoomId(actors);
+  const gatewaysByRoom = groupByRoomId(gateways);
+
+  // 봇은 room 과 무관한 공통 계정(role 하나에 실제 Telegram 봇 계정 하나)이라
+  // actor_id 로는 못 찾는다. 다방에서는 "이 방의 active actor role" 이 아니라
+  // "활성 방 전체의 active actor role 합집합" 으로 넓혀야 한다 — 방 A 에만
+  // codex_leader 가 있고 방 B 에는 없어도, 방 B 의 codex_bot 웹훅은 여전히
+  // 열려 있어야 한다(다른 방이 그 role 을 쓰고 있으므로).
+  const activeRoleUnion = new Set<TelegramBotRole>();
+  const rooms: LoadedSupabaseRoom[] = activeRoomRows.map((room) => {
+    const roomActors = (actorsByRoom.get(room.room_id) ?? [])
+      .filter((actor) => actor.status === "active")
+      .map(toLoadedActor);
+    for (const actor of roomActors) activeRoleUnion.add(actor.role);
+
+    return {
+      roomId: room.room_id,
+      telegramChatId: String(room.telegram_chat_id),
+      authorization: {
+        memberships: (membersByRoom.get(room.room_id) ?? []).map((member) => toRoomMembership(member, room.telegram_chat_id))
+      },
+      actors: roomActors,
+      gateways: (gatewaysByRoom.get(room.room_id) ?? [])
+        .filter((gateway) => gateway.status !== "disabled")
+        .map(toLoadedGateway)
+    };
+  });
+
+  const bots = await loadBotsForRoles(client, [...activeRoleUnion], config.env ?? process.env);
 
   return {
-    roomId: room.room_id,
+    rooms,
     config: {
-      allowedChatIds,
+      // 뜨문뜨문 20방 / 동시 3방 목표: 아웃박스 리스가 전역이라 여기서 좁히면
+      // 그 순간 다른 방들의 발신이 전부 dead 로 떨어진다(위 타입 주석 참고).
+      allowedChatIds: rooms.map((room) => room.telegramChatId),
       botsByUsername: new Map(bots.map((bot) => [bot.botUsername, bot]))
     },
     authorization: {
-      memberships: members.map((member) => toRoomMembership(member, room.telegram_chat_id))
-    },
-    actors: activeActors,
-    gateways: gateways.filter((gateway) => gateway.status !== "disabled").map(toLoadedGateway)
+      memberships: rooms.flatMap((room) => room.authorization.memberships)
+    }
   };
 }
 
@@ -105,30 +141,42 @@ class SupabaseRuntimeRestClient {
   }
 }
 
-async function loadRoom(
-  client: SupabaseRuntimeRestClient,
-  config: SupabaseRuntimeLoadConfig
-): Promise<RoomRow> {
-  const selector = config.roomId
-    ? `room_id=eq.${encodeURIComponent(config.roomId)}`
-    : config.telegramChatId
-      ? `telegram_chat_id=eq.${encodeURIComponent(config.telegramChatId)}`
-      : undefined;
-  if (!selector) {
-    throw new Error("missing-env:BOT_SERVICE_ROOM_ID");
-  }
-
-  const rows = await client.get<RoomRow[]>(`/huai_rooms?${selector}&select=room_id,telegram_chat_id,status`);
-  const room = rows[0];
-  if (!room) throw new Error("supabase-runtime-room-not-found");
-  if (room.status !== "active") throw new Error("supabase-runtime-room-inactive");
-  return room;
+async function loadActiveRooms(client: SupabaseRuntimeRestClient): Promise<RoomRow[]> {
+  return client.get<RoomRow[]>("/huai_rooms?status=eq.active&select=room_id,telegram_chat_id,status");
 }
 
-// 봇은 room 과 무관한 공통 계정(role 하나에 실제 Telegram 봇 계정 하나)이라
-// actor_id 로는 못 찾는다. 봇 행의 actor_id 는 이제 정보성 참조일 뿐이고
-// 다른 방에서는 이 방의 actor 를 가리키지 않으므로, 이 방의 active actor
-// role 집합으로 봇을 직접 조회한다.
+// 멤버십·actor·게이트웨이는 방마다 왕복하지 않고 활성 방 id 전체를 한 번에
+// in.() 으로 묶어 조회한다. 20방 규모에서 방마다 3건씩 왕복하면 60건이 되고,
+// 그만큼 부팅이 느려지고 부분 실패 지점도 늘어난다.
+async function loadRoomScopedRows(
+  client: SupabaseRuntimeRestClient,
+  roomIds: readonly string[]
+): Promise<{ members: RoomMemberRow[]; actors: AiActorRow[]; gateways: GatewayInstanceRow[] }> {
+  const quotedRoomIds = roomIds.map((id) => `"${escapePostgrestInValue(id)}"`).join(",");
+  const [members, actors, gateways] = await Promise.all([
+    client.get<RoomMemberRow[]>(
+      `/huai_room_members?room_id=in.(${encodeURIComponent(quotedRoomIds)})&select=room_id,telegram_user_id,role,permissions,status`
+    ),
+    client.get<AiActorRow[]>(
+      `/huai_ai_actors?room_id=in.(${encodeURIComponent(quotedRoomIds)})&select=room_id,actor_id,role,adapter_type,status`
+    ),
+    client.get<GatewayInstanceRow[]>(
+      `/huai_gateway_instances?room_id=in.(${encodeURIComponent(quotedRoomIds)})&select=room_id,gateway_id,status,allowed_project_roots,allowed_adapters&order=created_at.asc`
+    )
+  ]);
+  return { members, actors, gateways };
+}
+
+function groupByRoomId<T extends { room_id: string }>(rows: readonly T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const bucket = grouped.get(row.room_id);
+    if (bucket) bucket.push(row);
+    else grouped.set(row.room_id, [row]);
+  }
+  return grouped;
+}
+
 async function loadBotsForRoles(
   client: SupabaseRuntimeRestClient,
   roles: readonly TelegramBotRole[],
@@ -274,6 +322,14 @@ function maskSensitiveText(text: string): string {
     .replace(/(apikey|authorization|service_role)(["':\s]+)([A-Za-z0-9._-]+)/gi, "$1$2<redacted>");
 }
 
+// PostgREST in.() 필터에서 값 하나가 콤마·괄호·따옴표를 포함해도 안전하도록
+// 항상 큰따옴표로 감싸고 그 안의 특수문자를 이스케이프한다. room_id 는 UUID 라
+// 지금은 이런 문자가 나올 일이 없지만, 다른 in.() 사용처(예: role 목록)와
+// 동일한 방식으로 통일해 둔다.
+function escapePostgrestInValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 type RoomRow = {
   room_id: string;
   telegram_chat_id: string | number;
@@ -281,6 +337,7 @@ type RoomRow = {
 };
 
 type RoomMemberRow = {
+  room_id: string;
   telegram_user_id: string | number;
   role: string;
   permissions: unknown;
@@ -288,6 +345,7 @@ type RoomMemberRow = {
 };
 
 type AiActorRow = {
+  room_id: string;
   actor_id: string;
   role: string;
   adapter_type: string;
@@ -303,6 +361,7 @@ type TelegramBotRow = {
 };
 
 type GatewayInstanceRow = {
+  room_id: string;
   gateway_id: string;
   status: string;
   allowed_project_roots: unknown;

@@ -10,6 +10,15 @@ test("operation ready runner keeps gates ordered", () => {
   assert.equal(steps.at(-1), "verify:secrets");
 });
 
+test("multi-room offline gate is wired in, before the terminal secrets scan", () => {
+  const steps = operationReadySteps();
+  assert.equal(steps.includes("verify:multiroom"), true);
+  assert.equal(steps.includes("verify:multiroom-offline"), true);
+  // verify:secrets 는 마지막 관문이어야 한다 — 그 뒤에 들어가면 실질적으로 검증 안 된
+  // 상태로 "ready" 처리될 수 있다.
+  assert.ok(steps.indexOf("verify:multiroom-offline") < steps.indexOf("verify:secrets"));
+});
+
 test("operation ready runner uses direct node commands for terminal checks", () => {
   assert.equal(commandForStep("verify:structure"), "node scripts/verify-structure.mjs");
   assert.equal(commandForStep("verify:secrets"), "node scripts/verify-no-secrets.mjs");

@@ -41,6 +41,38 @@ test("builds startup commands and health checks for both operation services", ()
   ]);
 });
 
+test("is ready without a room selector (multi-room boot, inherited from verify-operation-env)", () => {
+  // service-startup-preflight 는 validateOperationEnv() 를 그대로 호출하므로,
+  // 다방화 이후 room selector 완화가 여기까지 자동 전파돼야 한다 — 별도 코드
+  // 변경 없이도 이 케이스가 통과함을 확인한다.
+  const env = { ...completeEnv };
+  delete env.BOT_SERVICE_ROOM_ID;
+  delete env.BOT_SERVICE_TELEGRAM_CHAT_ID;
+
+  const preflight = buildServiceStartupPreflight(env);
+  assert.equal(preflight.ready, true);
+});
+
+test("blocks startup when LOCAL_GATEWAY_LEASE_MS violates the lease formula (inherited from verify-operation-env)", () => {
+  // service-startup-preflight 는 validateOperationEnv() 를 그대로 호출하므로, 신규 lease
+  // 부등식 교차검증도 별도 코드 변경 없이 여기까지 전파돼야 한다 — 팀장이 명시적으로
+  // 확인하라고 지시한 경로다.
+  const env = {
+    ...completeEnv,
+    LOCAL_GATEWAY_LIMIT: "5",
+    LOCAL_GATEWAY_CONCURRENCY: "1",
+    LOCAL_GATEWAY_MAX_RUNTIME_MS: "900000",
+    LOCAL_GATEWAY_LEASE_MS: "1860000" // concurrency=3 기준 값 — concurrency=1 에는 부족하다
+  };
+
+  const preflight = buildServiceStartupPreflight(env);
+  assert.equal(preflight.ready, false);
+  assert.equal(
+    preflight.errors.some((error) => error.startsWith("invalid-env:LOCAL_GATEWAY_LEASE_MS:must-exceed")),
+    true
+  );
+});
+
 test("blocks startup when required env or port values are invalid", () => {
   const preflight = buildServiceStartupPreflight({ BOT_SERVICE_PORT: "not-a-port" });
 

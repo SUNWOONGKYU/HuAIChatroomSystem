@@ -22,21 +22,40 @@ import { buildLeaderPlanningPrompt, type RoomFacts, type RoomTurn } from "../../
 export type SupabaseStoreConfig = {
   url: string;
   serviceRoleKey: string;
-  roomId: string;
   fetchImpl?: typeof fetch;
+  // /tasks 의 경과시간 표시(Phase 3)를 테스트에서 고정 시각으로 검증할 수 있도록 주입 가능하게 뺐다.
+  // 운영에서는 기본값(실제 시각)을 그대로 쓴다.
+  now?: () => Date;
 };
 
 export class SupabaseBotServiceStore implements OrchestratorPersistencePort, OutboxDispatcherStore {
   private readonly client: SupabaseRestClient;
-  private readonly roomId: string;
+  // chat_id -> room_id. huai_rooms.telegram_chat_id 는 unique not null 이고 실질 불변이라
+  // 프로세스 수명 캐시로 충분하다 (무효화 로직 없음, 방 개수 규모에서 메모리 부담도 무시 가능).
+  private readonly roomIdByChatId = new Map<string, string>();
+  private readonly now: () => Date;
 
   constructor(config: SupabaseStoreConfig) {
-    this.roomId = config.roomId;
     this.client = new SupabaseRestClient({
       url: config.url,
       serviceRoleKey: config.serviceRoleKey,
       fetchImpl: config.fetchImpl
     });
+    this.now = config.now ?? (() => new Date());
+  }
+
+  // 한 프로세스가 여러 방을 처리하므로 room_id 는 생성자 고정값이 아니라
+  // 요청마다 chat_id 로 해석한다. 모르는 chat_id 는 조용히 아무 방에나 쓰지 않고 실패시킨다.
+  private async resolveRoomIdByChatId(telegramChatId: string): Promise<string> {
+    const cached = this.roomIdByChatId.get(telegramChatId);
+    if (cached) return cached;
+    const rows = await this.client
+      .request("GET", "/huai_rooms?telegram_chat_id=eq." + encodeURIComponent(telegramChatId) + "&select=room_id&limit=1")
+      .then((response) => response.json<Array<{ room_id: string }>>());
+    const roomId = rows[0]?.room_id;
+    if (!roomId) throw new Error(`room-not-found-for-chat:${telegramChatId}`);
+    this.roomIdByChatId.set(telegramChatId, roomId);
+    return roomId;
   }
 
   async recordUpdateOnce(
@@ -80,13 +99,15 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   async commitTelegramInputResult(input: Parameters<OrchestratorPersistencePort["commitTelegramInputResult"]>[0]) {
     const createdAt = new Date().toISOString();
     const eventsToPersist = input.result.events;
+    // 프로세스 1개가 여러 방을 처리한다. 이 요청이 어느 방 것인지는 telegram_chat_id 로만 알 수 있다.
+    const roomId = await this.resolveRoomIdByChatId(input.message.input.envelope.telegramChatId);
 
     const eventRows = eventsToPersist.length === 0
       ? []
       : await this.client
           .request("POST", "/huai_events", {
             body: eventsToPersist.map((event) => ({
-              room_id: this.roomId,
+              room_id: roomId,
               task_id: taskIdFromEventPayload(event.payload) ?? null,
               event_type: event.eventType,
               idempotency_key: event.idempotencyKey,
@@ -99,10 +120,11 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     const persistedEvents = eventRows.map(toPersistedEvent);
     // 승인 기록은 상태 전이보다 먼저 남긴다. 전이나 아웃박스 hydration 이 실패해도
     // "누가 무엇을 승인했는가"는 사실로서 보존되어야 한다 (NFR-02).
-    await this.recordApprovals(eventsToPersist);
-    await this.applyTaskTransitions(eventsToPersist);
+    await this.recordApprovals(eventsToPersist, roomId);
+    await this.applyTaskTransitions(eventsToPersist, roomId);
     const fallbackEventId = persistedEvents[0]?.eventId;
     const outboxRows = input.result.outbox.map((item, index) => ({
+      room_id: roomId,
       event_id: eventIdForOutbox(item.payload.binding, persistedEvents) ?? fallbackEventId,
       idempotency_key: item.idempotencyKey,
       target_kind: item.target.kind,
@@ -110,10 +132,10 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       payload: item.payload
     }));
 
-    const startedHydratedRows = await this.hydrateExecutionStartedMessages(outboxRows);
-    const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows);
-    const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows);
-    const hydratedOutboxRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows);
+    const startedHydratedRows = await this.hydrateExecutionStartedMessages(outboxRows, roomId);
+    const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows, roomId);
+    const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows, roomId);
+    const hydratedOutboxRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
     const insertedOutbox = await this.insertOutboxRowsIdempotently(hydratedOutboxRows);
 
     return {
@@ -177,7 +199,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // 방장·소대장의 결정을 append-only 원장에 남긴다.
   // 승인 시점 대상은 proposal 일 수도 task 일 수도 있으므로 받은 식별자를 entity_ref 에 그대로 보존하고,
   // task UUID 를 이미 아는 경우에만 task_id 를 채운다. 이 테이블은 이후 절대 UPDATE 하지 않는다.
-  private async recordApprovals(events: readonly OrchestratorPersistencePortEvent[]): Promise<void> {
+  private async recordApprovals(events: readonly OrchestratorPersistencePortEvent[], roomId: string): Promise<void> {
     const rows = events
       .map((event) => {
         const mapping = approvalRecordForEvent(event.eventType);
@@ -186,7 +208,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         const deciderId = approvalDeciderFromPayload(event.payload);
         if (!entityRef || !deciderId) return undefined;
         return {
-          room_id: this.roomId,
+          room_id: roomId,
           task_id: isUuid(entityRef) ? entityRef : null,
           entity_ref: entityRef,
           stage: mapping.stage,
@@ -209,23 +231,26 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     }
   }
 
-  private async fetchApprovalIdForEntity(entityRef: string, stage: ApprovalStage): Promise<string | undefined> {
+  private async fetchApprovalIdForEntity(entityRef: string, stage: ApprovalStage, roomId: string): Promise<string | undefined> {
     const rows = await this.client
       .request(
         "GET",
         "/huai_approvals?entity_ref=eq." + encodeURIComponent(entityRef) +
           "&stage=eq." + encodeURIComponent(stage) +
+          "&room_id=eq." + encodeURIComponent(roomId) +
           "&decision=eq.approved&select=approval_id&order=created_at.asc&limit=1"
       )
       .then((response) => response.json<Array<{ approval_id: string }>>());
     return rows[0]?.approval_id;
   }
 
-  private async applyTaskTransitions(events: readonly OrchestratorPersistencePortEvent[]): Promise<void> {
+  private async applyTaskTransitions(events: readonly OrchestratorPersistencePortEvent[], roomId: string): Promise<void> {
     for (const event of events) {
       const taskId = taskIdFromEventPayload(event.payload);
       if (!taskId) continue;
-      const current = await this.fetchTaskStatus(taskId);
+      // 다른 방의 task_id 가 콜백에 실려 오면 room_id 불일치로 조회 자체가 비어,
+      // 아래의 "존재하지 않는 task" 경로와 동일하게 조용히 건너뛴다.
+      const current = await this.fetchTaskStatus(taskId, roomId);
       if (!current) continue;
       // 명시적 금지 전이를 먼저 차단한다. 화이트리스트만으로도 막히지만,
       // 금지 사유를 구분해 보고해야 승인 전 실행 시도를 운영 기록에서 식별할 수 있다.
@@ -234,20 +259,20 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       }
       const decision = transitionTaskStatus(current, event.eventType as WorkflowEventType, workflowContextFromEvent(event));
       if (!decision.allowed) throw new Error(`task-transition-not-allowed:${event.eventType}:${current}:${decision.reason}`);
-      await this.patchTaskStatus(taskId, decision.nextStatus);
+      await this.patchTaskStatus(taskId, decision.nextStatus, roomId);
     }
   }
 
-  private async fetchTaskStatus(taskId: string): Promise<TaskStatus | undefined> {
+  private async fetchTaskStatus(taskId: string, roomId: string): Promise<TaskStatus | undefined> {
     const rows = await this.client
-      .request("GET", `/huai_tasks?task_id=eq.${encodeURIComponent(taskId)}&select=task_id,status`)
+      .request("GET", `/huai_tasks?task_id=eq.${encodeURIComponent(taskId)}&room_id=eq.${encodeURIComponent(roomId)}&select=task_id,status`)
       .then((response) => response.json<Array<{ task_id: string; status: TaskStatus }>>());
     return rows[0]?.status;
   }
 
-  private async patchTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
+  private async patchTaskStatus(taskId: string, status: TaskStatus, roomId: string): Promise<void> {
     await this.client
-      .request("PATCH", `/huai_tasks?task_id=eq.${encodeURIComponent(taskId)}`, {
+      .request("PATCH", `/huai_tasks?task_id=eq.${encodeURIComponent(taskId)}&room_id=eq.${encodeURIComponent(roomId)}`, {
         body: { status, updated_at: new Date().toISOString() },
         prefer: "return=representation"
       })
@@ -260,12 +285,12 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // "작업 실행을 시작했습니다: p_032d2db2..." 처럼 내부 id 만 보여주면
   // 방장은 무슨 작업이 시작됐는지, 누가 하는지 알 수 없다.
   // 소대장이 이미 제목과 담당을 정해뒀으니 그것을 실어 보낸다.
-  private async hydrateExecutionStartedMessages(rows: OutboxInsertRow[]): Promise<OutboxInsertRow[]> {
+  private async hydrateExecutionStartedMessages(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
     const targets = rows.filter((row) => row.idempotency_key.startsWith("telegram:execution-started:"));
     if (targets.length === 0) return rows;
 
     const proposalIds = Array.from(new Set(targets.map((row) => row.idempotency_key.split(":")[2]).filter(Boolean)));
-    const hints = await this.fetchProposalExecutionHints(proposalIds);
+    const hints = await this.fetchProposalExecutionHints(proposalIds, roomId);
 
     return rows.map((row) => {
       if (!row.idempotency_key.startsWith("telegram:execution-started:")) return row;
@@ -290,7 +315,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
 
   // 소대장 판단 요청에 방의 직전 논의를 실어준다.
   // 오케스트레이터는 순수 함수라 DB 를 못 읽으므로 여기서 채운다.
-  private async hydrateLeaderPlanningRows(rows: OutboxInsertRow[]): Promise<OutboxInsertRow[]> {
+  private async hydrateLeaderPlanningRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
     const hydrated: OutboxInsertRow[] = [];
     for (const row of rows) {
       const request = executionRequestPayload(row.payload);
@@ -300,9 +325,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       }
       const triggeringText = typeof row.payload.triggeringText === "string" ? row.payload.triggeringText : "";
       const telegramChatId = typeof row.payload.telegramChatId === "string" ? row.payload.telegramChatId : undefined;
-      const turns = telegramChatId ? await this.fetchRecentRoomTurns(telegramChatId) : [];
-      const leader = await this.fetchLeaderActor();
-      const facts = await this.fetchRoomFacts();
+      const turns = telegramChatId ? await this.fetchRecentRoomTurns(telegramChatId, roomId) : [];
+      const leader = await this.fetchLeaderActor(roomId);
+      const facts = await this.fetchRoomFacts(roomId);
       hydrated.push({
         ...row,
         payload: {
@@ -321,9 +346,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
 
   // 직전 논의 뭉치 — 마지막으로 작업이 만들어진 시점 이후의 방 대화.
   // 그 시점을 못 찾으면 최근 40건으로 자른다.
-  private async fetchRecentRoomTurns(telegramChatId: string): Promise<RoomTurn[]> {
-    const since = await this.fetchLastWorkCreatedAt();
-    const ownerId = await this.fetchOwnerTelegramUserId();
+  private async fetchRecentRoomTurns(telegramChatId: string, roomId: string): Promise<RoomTurn[]> {
+    const since = await this.fetchLastWorkCreatedAt(roomId);
+    const ownerId = await this.fetchOwnerTelegramUserId(roomId);
     const filter = since ? "&received_at=gt." + encodeURIComponent(since) : "";
     const rows = await this.client
       .request(
@@ -340,17 +365,17 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .reverse();
   }
 
-  private async fetchLastWorkCreatedAt(): Promise<string | undefined> {
+  private async fetchLastWorkCreatedAt(roomId: string): Promise<string | undefined> {
     const rows = await this.client
-      .request("GET", "/huai_events?room_id=eq." + encodeURIComponent(this.roomId) + "&event_type=eq.owner_task_approved&select=created_at&order=created_at.desc&limit=1")
+      .request("GET", "/huai_events?room_id=eq." + encodeURIComponent(roomId) + "&event_type=eq.owner_task_approved&select=created_at&order=created_at.desc&limit=1")
       .then((response) => response.json<Array<{ created_at?: string }>>())
       .catch(() => []);
     return rows[0]?.created_at;
   }
 
-  private async fetchOwnerTelegramUserId(): Promise<string | undefined> {
+  private async fetchOwnerTelegramUserId(roomId: string): Promise<string | undefined> {
     const rows = await this.client
-      .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(this.roomId) + "&role=eq.owner&select=telegram_user_id&limit=1")
+      .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&role=eq.owner&select=telegram_user_id&limit=1")
       .then((response) => response.json<Array<{ telegram_user_id: string | number }>>())
       .catch(() => []);
     const value = rows[0]?.telegram_user_id;
@@ -360,24 +385,27 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // 소대장이 방에 대해 이미 알아야 하는 것.
   // 이게 없으면 "이 방에 봇이 몇 개야?" 같은 질문에도 조사 작업을 만든다 —
   // 자기가 모르니까 확인하겠다고 하는 것이고, 방장은 답을 원했는데 일이 하나 생긴다.
-  private async fetchRoomFacts(): Promise<RoomFacts | undefined> {
+  private async fetchRoomFacts(roomId: string): Promise<RoomFacts | undefined> {
     try {
       const [actors, members, tasks] = await Promise.all([
         this.client
-          .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(this.roomId) + "&status=eq.active&select=role")
+          .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.active&select=role")
           .then((response) => response.json<Array<{ role: string }>>()),
         this.client
-          .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(this.roomId) + "&status=eq.active&select=telegram_user_id")
+          .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.active&select=telegram_user_id")
           .then((response) => response.json<Array<{ telegram_user_id: string }>>()),
         this.client
-          .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(this.roomId) + "&status=not.in.(completed,cancelled,rejected_or_cancelled,proposal_rejected)&select=title,status&order=updated_at.desc&limit=8")
-          .then((response) => response.json<Array<{ title: string; status: string }>>())
+          .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&status=not.in.(completed,cancelled,rejected_or_cancelled,proposal_rejected)&select=title,status&order=updated_at.desc&limit=8")
+          .then((response) => response.json<Array<{ title: string; status: TaskStatus }>>())
       ]);
 
       return {
         bots: actors.map((actor) => botLabelForRole(actor.role)),
         memberCount: members.length,
-        openTasks: tasks.map((task) => ({ title: task.title, status: humanTaskStatus(task.status) }))
+        // TASK_STATUS_META 가 단일 출처다 — 별도 상태 라벨표를 여기 두지 않는다.
+        // 이 결과는 소대장 판단 프롬프트(buildLeaderPlanningPrompt)에 순수 텍스트로만
+        // 들어간다: `${title}(${status})`. 파싱하는 코드는 없다(packages/orchestrator/src/leader-planning.ts 확인).
+        openTasks: tasks.map((task) => ({ title: task.title, status: taskStatusMeta(task.status).label }))
       };
     } catch {
       // 방 정보를 못 읽어도 판단 자체는 진행한다. 맥락이 얕아질 뿐이다.
@@ -385,40 +413,22 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     }
   }
 
-  private async fetchLeaderActor(): Promise<{ actor_id: string; cli_session_id?: string } | undefined> {
+  private async fetchLeaderActor(roomId: string): Promise<{ actor_id: string; cli_session_id?: string } | undefined> {
     const rows = await this.client
-      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(this.roomId) + "&role=eq.platoon_leader&select=actor_id,cli_session_id&limit=1")
+      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&role=eq.platoon_leader&select=actor_id,cli_session_id&limit=1")
       .then((response) => response.json<Array<{ actor_id: string; cli_session_id?: string }>>())
       .catch(() => []);
     return rows[0];
   }
 
-  private async hydrateExecutionOutboxPrompts(rows: Array<{
-    event_id: string | undefined;
-    idempotency_key: string;
-    target_kind: OutboxRow["target_kind"];
-    target: string;
-    payload: Record<string, unknown>;
-  }>): Promise<Array<{
-    event_id: string | undefined;
-    idempotency_key: string;
-    target_kind: OutboxRow["target_kind"];
-    target: string;
-    payload: Record<string, unknown>;
-  }>> {
+  private async hydrateExecutionOutboxPrompts(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
     const proposalIds = Array.from(new Set(rows.map((row) => proposalIdNeedingPromptHydration(row)).filter((value): value is string => Boolean(value))));
     if (proposalIds.length === 0) return rows;
 
-    const hintsByProposalId = await this.fetchProposalExecutionHints(proposalIds);
+    const hintsByProposalId = await this.fetchProposalExecutionHints(proposalIds, roomId);
     const requestedRoles = Array.from(new Set(Array.from(hintsByProposalId.values()).flatMap((hint) => requestedExecutionRolesForHint(hint))));
-    const actorsByRole = await this.fetchActiveExecutionActorsByRole(requestedRoles);
-    const hydrated: Array<{
-      event_id: string | undefined;
-      idempotency_key: string;
-      target_kind: OutboxRow["target_kind"];
-      target: string;
-      payload: Record<string, unknown>;
-    }> = [];
+    const actorsByRole = await this.fetchActiveExecutionActorsByRole(requestedRoles, roomId);
+    const hydrated: OutboxInsertRow[] = [];
 
     for (const row of rows) {
       const proposalId = proposalIdNeedingPromptHydration(row);
@@ -435,7 +445,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       const primaryActor = hint.executionMode === "multi_ai_review"
         ? actorsByRole.get("codex_leader") ?? actorsByRole.get("claude_leader")
         : hint.requestedActorRole ? actorsByRole.get(hint.requestedActorRole) : undefined;
-      const taskId = await this.ensureApprovedProposalTask(proposalId, hint, primaryActor?.actor_id);
+      const taskId = await this.ensureApprovedProposalTask(proposalId, hint, primaryActor?.actor_id, roomId);
       const taskExecutionRequest = { ...executionRequest, taskId, sourceProposalId: proposalId };
       if (hint.executionMode === "multi_ai_review") {
         hydrated.push(...buildMultiAiExecutionRows(row, taskExecutionRequest, hint, actorsByRole));
@@ -461,10 +471,12 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return hydrated;
   }
 
-  private async fetchProposalExecutionHints(proposalIds: readonly string[]): Promise<Map<string, ProposalExecutionHint>> {
+  private async fetchProposalExecutionHints(proposalIds: readonly string[], roomId: string): Promise<Map<string, ProposalExecutionHint>> {
     if (proposalIds.length === 0) return new Map();
+    // room_id 필터 없이 전역 최근 200건만 보면, 방이 늘수록 이 창이 남의 방 제안으로
+    // 차서 자기 방 제안을 못 찾는다(approved-task-materialization-missing).
     const rows = await this.client
-      .request("GET", "/huai_events?event_type=eq.proposal_created&select=payload,created_at&order=created_at.desc&limit=200")
+      .request("GET", "/huai_events?event_type=eq.proposal_created&room_id=eq." + encodeURIComponent(roomId) + "&select=payload,created_at&order=created_at.desc&limit=200")
       .then((response) => response.json<Array<{ payload: Record<string, unknown> }>>());
     const wanted = new Set(proposalIds);
     const hints = new Map<string, ProposalExecutionHint>();
@@ -477,25 +489,25 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return hints;
   }
 
-  private async fetchActiveExecutionActorsByRole(roles: readonly ExecutionActorRole[]): Promise<Map<ExecutionActorRole, ExecutionActorRow>> {
+  private async fetchActiveExecutionActorsByRole(roles: readonly ExecutionActorRole[], roomId: string): Promise<Map<ExecutionActorRole, ExecutionActorRow>> {
     if (roles.length === 0) return new Map();
     const quoted = roles.map((role) => '"' + escapePostgrestInValue(role) + '"').join(",");
     const rows = await this.client
-      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(this.roomId) + "&role=in.(" + encodeURIComponent(quoted) + ")&status=eq.active&select=actor_id,role,adapter_type")
+      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&role=in.(" + encodeURIComponent(quoted) + ")&status=eq.active&select=actor_id,role,adapter_type")
       .then((response) => response.json<ExecutionActorRow[]>());
     return new Map(rows.map((row) => [row.role, row]));
   }
 
-  private async ensureApprovedProposalTask(proposalId: string, hint: ProposalExecutionHint, assigneeActorId: string | undefined): Promise<string> {
+  private async ensureApprovedProposalTask(proposalId: string, hint: ProposalExecutionHint, assigneeActorId: string | undefined, roomId: string): Promise<string> {
     const proposalUuid = uuidFromProposalId(proposalId);
     const existing = proposalUuid ? await this.fetchTaskByProposalId(proposalUuid) : undefined;
     if (existing) return existing.task_id;
 
     if (proposalUuid) {
-      await this.insertProposalIfMissing(proposalUuid, hint);
+      await this.insertProposalIfMissing(proposalUuid, hint, roomId);
     }
 
-    const taskRows = await this.insertTaskForProposal(proposalId, proposalUuid, hint, assigneeActorId);
+    const taskRows = await this.insertTaskForProposal(proposalId, proposalUuid, hint, assigneeActorId, roomId);
     return taskRows[0]?.task_id ?? await this.fetchTaskIdByIdempotencyKey(taskIdempotencyKey(proposalId));
   }
 
@@ -515,11 +527,11 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return taskId;
   }
 
-  private async insertProposalIfMissing(proposalUuid: string, hint: ProposalExecutionHint): Promise<void> {
+  private async insertProposalIfMissing(proposalUuid: string, hint: ProposalExecutionHint, roomId: string): Promise<void> {
     const response = await this.client.request("POST", "/huai_task_proposals", {
       body: {
         proposal_id: proposalUuid,
-        room_id: this.roomId,
+        room_id: roomId,
         title: hint.title,
         purpose: hint.purpose ?? hint.title,
         scope: hint.scope ?? hint.rawText ?? hint.title,
@@ -532,13 +544,13 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     if (response.status !== 409) await response.expectOk();
   }
 
-  private async insertTaskForProposal(proposalId: string, proposalUuid: string | undefined, hint: ProposalExecutionHint, assigneeActorId: string | undefined): Promise<Array<{ task_id: string }>> {
+  private async insertTaskForProposal(proposalId: string, proposalUuid: string | undefined, hint: ProposalExecutionHint, assigneeActorId: string | undefined, roomId: string): Promise<Array<{ task_id: string }>> {
     // 승인 원장은 절대 수정하지 않는다. 대신 task 를 만들 때 그 task 가 어느 승인으로 생겼는지를
     // 여기서 한 번 연결한다 (AC-08 "완료 전 3단계 승인 증거").
-    const approvalId = await this.fetchApprovalIdForEntity(proposalId, "task_approval");
+    const approvalId = await this.fetchApprovalIdForEntity(proposalId, "task_approval", roomId);
     const response = await this.client.request("POST", "/huai_tasks", {
       body: {
-        room_id: this.roomId,
+        room_id: roomId,
         proposal_id: proposalUuid ?? null,
         approved_by_approval_id: approvalId ?? null,
         assignee_actor_id: assigneeActorId ?? null,
@@ -555,7 +567,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return response.json<Array<{ task_id: string }>>();
   }
 
-  private async hydrateTaskQueryOutboxRows(rows: OutboxInsertRow[]): Promise<OutboxInsertRow[]> {
+  private async hydrateTaskQueryOutboxRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
     const hydrated: OutboxInsertRow[] = [];
     for (const row of rows) {
       const query = taskQueryPayload(row.payload);
@@ -565,59 +577,126 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       }
 
       const text = query.kind === "tasks"
-        ? await this.renderTaskListQuery(query.limit)
+        ? await this.renderTaskListQuery(query.limit, roomId)
         : query.kind === "search"
-          ? await this.renderTaskSearchQuery(query.term)
+          ? await this.renderTaskSearchQuery(query.term, roomId)
           : query.kind === "trace"
-            ? await this.renderTaskTraceQuery(query.taskId)
-            : await this.renderTaskDetailQuery(query.taskId);
+            ? await this.renderTaskTraceQuery(query.taskId, roomId)
+            : await this.renderTaskDetailQuery(query.taskId, roomId);
       hydrated.push({ ...row, payload: { ...row.payload, text } });
     }
     return hydrated;
   }
 
-  private async renderTaskListQuery(limit: number): Promise<string> {
+  // Phase 3: /tasks 를 평문 나열에서 상태별 그룹 + 경과시간 + 담당자 표시로 바꾼다.
+  // 상태 분류표는 TASK_STATUS_META(전수 커버리지, huai_tasks_status_check 기준) 참고.
+  private async renderTaskListQuery(limit: number, roomId: string): Promise<string> {
     const safeLimit = Math.max(1, Math.min(limit, 20));
-    const rows = await this.client
-      .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(this.roomId) + "&select=task_id,title,status,priority,assignee_actor_id,updated_at,created_at&order=updated_at.desc&limit=" + safeLimit)
-      .then((response) => response.json<TaskSummaryRow[]>());
+    // count=exact 를 실으면 PostgREST 가 이 요청 하나에 Content-Range 헤더로 room 전체
+    // 건수를 같이 돌려준다 — 별도 조회 없이 "방장이 지금 전부를 본 게 아니다"를 알 수 있다.
+    // (safeLimit 로 잘린 결과만 보고 총 건수를 rows.length 로 표시하던 게 결함이었다 —
+    // 25건 있는 방인데 "총 10건"으로 보였다.)
+    const response = await this.client.request(
+      "GET",
+      "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&select=task_id,title,status,priority,assignee_actor_id,updated_at,created_at&order=updated_at.desc&limit=" + safeLimit,
+      { prefer: "count=exact" }
+    );
+    const rows = await response.json<TaskSummaryRow[]>();
 
     if (rows.length === 0) return "작업 목록\n현재 등록된 작업이 없습니다.";
-    return [
-      "작업 목록",
-      ...rows.map((task, index) => `${index + 1}. ${shortTaskId(task.task_id)} · ${task.title || "제목 없음"}\n상태: ${humanTaskStatus(task.status)}${task.priority ? ` · 우선순위: ${task.priority}` : ""}`)
-    ].join("\n");
+
+    // Content-Range 헤더가 없거나 파싱 실패하면(테스트 목업 등) 안전하게 "보이는 만큼이 전부"로
+    // 가정한다 — 실제보다 더 많다고 거짓으로 알리지 않기 위함이다.
+    const totalCount = parseContentRangeTotal(response.header("content-range")) ?? rows.length;
+
+    const assigneeActorIds = Array.from(new Set(rows.map((task) => task.assignee_actor_id).filter((value): value is string => Boolean(value))));
+    const roleByActorId = await this.fetchActorRolesByActorIds(assigneeActorIds);
+    const now = this.now();
+
+    const grouped = new Map<TaskStatusGroupKey, TaskSummaryRow[]>();
+    for (const task of rows) {
+      const meta = taskStatusMeta(task.status);
+      const bucket = grouped.get(meta.group) ?? [];
+      bucket.push(task);
+      grouped.set(meta.group, bucket);
+    }
+
+    const headerLine = totalCount > rows.length
+      ? `작업 목록 (최근 ${rows.length}건 표시 · 전체 ${totalCount}건 중 ${totalCount - rows.length}건 더 있음)`
+      : `작업 목록 (총 ${rows.length}건)`;
+    const lines: string[] = [headerLine];
+    let index = 0;
+    for (const groupKey of TASK_STATUS_GROUP_ORDER) {
+      const tasks = grouped.get(groupKey);
+      if (!tasks || tasks.length === 0) continue; // 빈 그룹은 화면을 잡아먹으니 아예 출력하지 않는다.
+      const groupInfo = TASK_STATUS_GROUPS[groupKey];
+      lines.push("", `${groupInfo.icon} ${groupInfo.label} (${tasks.length})`);
+      for (const task of tasks) {
+        index += 1;
+        // updated_at 은 상태가 바뀔 때마다 patchTaskStatus 가 갱신하고, 아직 한 번도
+        // 안 바뀐 task 는 insert 시점 created_at 과 사실상 같은 값이 default now() 로 들어간다.
+        // 그래서 상태별로 기준 필드를 분기할 필요 없이 updated_at 하나가
+        // "이 상태로 바뀐 시점"과 "생성된 시점"을 동시에 커버한다.
+        const elapsed = formatElapsedSince(task.updated_at ?? task.created_at, now);
+        const assignee = taskAssigneeLabel(roleByActorId.get(task.assignee_actor_id ?? ""));
+        // 그룹 헤더는 스캔용이고, 같은 그룹 안에도 서로 다른 세부 상태가 섞인다
+        // (예: "⏳ 대기 중"에는 제안 검토 대기/실행 대기/검증 대기 등 6가지가 섞인다).
+        // 그룹만 보여주면 어떤 대기인지 알 수 없어 정보 손실이라, 세부 라벨을 항상 같이 보여준다.
+        const detailParts = [`상태: ${taskStatusMeta(task.status).label}`, `담당: ${assignee}`];
+        if (elapsed) detailParts.push(elapsed);
+        if (task.priority && task.priority !== "normal") detailParts.push(`우선순위: ${task.priority}`);
+        lines.push(`${index}. ${shortTaskId(task.task_id)} · ${task.title || "제목 없음"}`);
+        lines.push(`   ${detailParts.join(" · ")}`);
+      }
+    }
+    return lines.join("\n");
   }
 
-  private async renderTaskSearchQuery(term: string): Promise<string> {
+  // actor_id 는 UUID PK 라 room 필터가 필요 없다 (fetchTaskByProposalId 와 같은 근거).
+  private async fetchActorRolesByActorIds(actorIds: readonly string[]): Promise<Map<string, string>> {
+    if (actorIds.length === 0) return new Map();
+    const quoted = actorIds.map((id) => '"' + escapePostgrestInValue(id) + '"').join(",");
+    const rows = await this.client
+      .request("GET", "/huai_ai_actors?actor_id=in.(" + encodeURIComponent(quoted) + ")&select=actor_id,role")
+      .then((response) => response.json<Array<{ actor_id: string; role: string }>>());
+    return new Map(rows.map((row) => [row.actor_id, row.role]));
+  }
+
+  private async renderTaskSearchQuery(term: string, roomId: string): Promise<string> {
     const normalized = term.trim();
     if (!normalized) return "작업 검색\n검색어를 함께 보내주세요. 예: /search 버튼";
     const encodedTerm = encodeURIComponent("*" + normalized.replace(/[*,()]/g, " ").trim() + "*");
     const rows = await this.client
-      .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(this.roomId) + "&or=(title.ilike." + encodedTerm + ",purpose.ilike." + encodedTerm + ",scope.ilike." + encodedTerm + ")&select=task_id,title,status,priority,assignee_actor_id,updated_at,created_at&order=updated_at.desc&limit=10")
+      .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&or=(title.ilike." + encodedTerm + ",purpose.ilike." + encodedTerm + ",scope.ilike." + encodedTerm + ")&select=task_id,title,status,priority,assignee_actor_id,updated_at,created_at&order=updated_at.desc&limit=10")
       .then((response) => response.json<TaskSummaryRow[]>());
     if (rows.length === 0) return "작업 검색\n검색 결과가 없습니다: " + normalized;
     return [
       "작업 검색: " + normalized,
-      ...rows.map((task, index) => `${index + 1}. ${shortTaskId(task.task_id)} · ${task.title || "제목 없음"}\n상태: ${humanTaskStatus(task.status)}`)
+      ...rows.map((task, index) => `${index + 1}. ${shortTaskId(task.task_id)} · ${task.title || "제목 없음"}\n상태: ${taskStatusMeta(task.status).label}`)
     ].join("\n");
   }
-  private async renderTaskTraceQuery(taskId: string): Promise<string> {
+  private async renderTaskTraceQuery(taskId: string, roomId: string): Promise<string> {
     const normalizedTaskId = taskId.trim();
     if (!isUuid(normalizedTaskId)) return "작업 이력\n작업 UUID를 함께 보내주세요. 예: /trace <task_id>";
 
     const encodedTaskId = encodeURIComponent(normalizedTaskId);
-    const [events, artifacts, verifications] = await Promise.all([
-      this.client
-        .request("GET", "/huai_events?task_id=eq." + encodedTaskId + "&select=event_type,created_at&order=created_at.desc&limit=10")
-        .then((response) => response.json<TaskTraceEventRow[]>()),
-      this.client
-        .request("GET", "/huai_artifacts?task_id=eq." + encodedTaskId + "&select=uri,version,is_final,created_at&order=created_at.desc&limit=10")
-        .then((response) => response.json<TaskTraceArtifactRow[]>()),
-      this.client
-        .request("GET", "/huai_verifications?task_id=eq." + encodedTaskId + "&select=verdict,target_version,created_at&order=created_at.desc&limit=10")
-        .then((response) => response.json<TaskTraceVerificationRow[]>())
-    ]);
+    // huai_artifacts·huai_verifications 에는 room_id 컬럼이 없어 직접 필터링할 수 없다.
+    // 대신 이 task 가 이 방 소유인지 먼저 확인하고, 아니면 실재하지 않는 task 와
+    // 똑같이 빈 이력으로 응답한다 — 존재 여부조차 다른 방에 알려주지 않는다.
+    const owned = await this.taskBelongsToRoom(normalizedTaskId, roomId);
+    const [events, artifacts, verifications] = owned
+      ? await Promise.all([
+          this.client
+            .request("GET", "/huai_events?task_id=eq." + encodedTaskId + "&room_id=eq." + encodeURIComponent(roomId) + "&select=event_type,created_at&order=created_at.desc&limit=10")
+            .then((response) => response.json<TaskTraceEventRow[]>()),
+          this.client
+            .request("GET", "/huai_artifacts?task_id=eq." + encodedTaskId + "&select=uri,version,is_final,created_at&order=created_at.desc&limit=10")
+            .then((response) => response.json<TaskTraceArtifactRow[]>()),
+          this.client
+            .request("GET", "/huai_verifications?task_id=eq." + encodedTaskId + "&select=verdict,target_version,created_at&order=created_at.desc&limit=10")
+            .then((response) => response.json<TaskTraceVerificationRow[]>())
+        ])
+      : [[], [], []] as [TaskTraceEventRow[], TaskTraceArtifactRow[], TaskTraceVerificationRow[]];
 
     return [
       "작업 이력: " + shortTaskId(normalizedTaskId),
@@ -630,20 +709,20 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     ].join("\n");
   }
 
-  private async renderTaskDetailQuery(taskId: string): Promise<string> {
+  private async renderTaskDetailQuery(taskId: string, roomId: string): Promise<string> {
     const normalizedTaskId = taskId.trim();
     if (!normalizedTaskId) return "작업 상세\n작업 ID를 함께 보내주세요. 예: /task task_id";
 
     const task = normalizedTaskId.startsWith("proposal_")
-      ? await this.fetchTaskDetailByProposalId(normalizedTaskId)
-      : await this.fetchTaskDetailByTaskId(normalizedTaskId);
+      ? await this.fetchTaskDetailByProposalId(normalizedTaskId, roomId)
+      : await this.fetchTaskDetailByTaskId(normalizedTaskId, roomId);
     if (!task) return `작업 상세\n해당 작업을 찾지 못했습니다: ${normalizedTaskId}`;
 
     return [
       "작업 상세",
       `ID: ${shortTaskId(task.task_id)}`,
       `작업: ${task.title || "제목 없음"}`,
-      `상태: ${humanTaskStatus(task.status)}`,
+      `상태: ${taskStatusMeta(task.status).label}`,
       task.priority ? `우선순위: ${task.priority}` : undefined,
       task.purpose ? `목적: ${task.purpose}` : undefined,
       task.scope ? `범위: ${task.scope}` : undefined,
@@ -652,31 +731,36 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     ].filter((line): line is string => typeof line === "string" && line.trim().length > 0).join("\n");
   }
 
-  private async fetchTaskDetailByTaskId(taskId: string): Promise<TaskDetailRow | undefined> {
+  private async fetchTaskDetailByTaskId(taskId: string, roomId: string): Promise<TaskDetailRow | undefined> {
     if (!isUuid(taskId)) return undefined;
+    // room_id 를 SELECT 필터에 직접 넣으면, 다른 방 task 는 "존재하지 않음"과
+    // 똑같이 빈 결과로 돌아온다 — 별도 분기 없이 유출을 막는다.
     const rows = await this.client
-      .request("GET", "/huai_tasks?task_id=eq." + encodeURIComponent(taskId) + "&select=task_id,title,status,priority,purpose,scope,completion_criteria,updated_at,created_at&limit=1")
+      .request("GET", "/huai_tasks?task_id=eq." + encodeURIComponent(taskId) + "&room_id=eq." + encodeURIComponent(roomId) + "&select=task_id,title,status,priority,purpose,scope,completion_criteria,updated_at,created_at&limit=1")
       .then((response) => response.json<TaskDetailRow[]>());
     return rows[0];
   }
 
-  private async fetchTaskDetailByProposalId(proposalId: string): Promise<TaskDetailRow | undefined> {
+  private async fetchTaskDetailByProposalId(proposalId: string, roomId: string): Promise<TaskDetailRow | undefined> {
     const proposalUuid = uuidFromProposalId(proposalId);
     const query = proposalUuid
       ? "proposal_id=eq." + encodeURIComponent(proposalUuid)
       : "idempotency_key=eq." + encodeURIComponent(taskIdempotencyKey(proposalId));
     const rows = await this.client
-      .request("GET", "/huai_tasks?" + query + "&select=task_id,title,status,priority,purpose,scope,completion_criteria,updated_at,created_at&limit=1")
+      .request("GET", "/huai_tasks?" + query + "&room_id=eq." + encodeURIComponent(roomId) + "&select=task_id,title,status,priority,purpose,scope,completion_criteria,updated_at,created_at&limit=1")
       .then((response) => response.json<TaskDetailRow[]>());
     return rows[0];
   }
-  private async insertOutboxRowsIdempotently(rows: Array<{
-    event_id: string | undefined;
-    idempotency_key: string;
-    target_kind: OutboxRow["target_kind"];
-    target: string;
-    payload: Record<string, unknown>;
-  }>): Promise<OutboxRow[]> {
+
+  // /trace 가드용. huai_artifacts·huai_verifications 에 room_id 가 없으므로
+  // 산출물·검증 이력을 조회하기 전에 이 task 가 이 방 소유인지부터 확인한다.
+  private async taskBelongsToRoom(taskId: string, roomId: string): Promise<boolean> {
+    const rows = await this.client
+      .request("GET", "/huai_tasks?task_id=eq." + encodeURIComponent(taskId) + "&room_id=eq." + encodeURIComponent(roomId) + "&select=task_id&limit=1")
+      .then((response) => response.json<Array<{ task_id: string }>>());
+    return rows.length > 0;
+  }
+  private async insertOutboxRowsIdempotently(rows: OutboxInsertRow[]): Promise<OutboxRow[]> {
     if (rows.length === 0) return [];
     const body = rows.map((row) => ({ ...row, event_id: row.event_id ?? null }));
     const response = await this.client.request("POST", "/huai_outbox", {
@@ -741,8 +825,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
 export function buildSupabaseBotServiceStoreFromEnv(env: NodeJS.ProcessEnv = process.env): SupabaseBotServiceStore {
   return new SupabaseBotServiceStore({
     url: requiredEnv(env, "SUPABASE_URL"),
-    serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY"),
-    roomId: requiredEnv(env, "BOT_SERVICE_ROOM_ID")
+    serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY")
   });
 }
 
@@ -783,6 +866,10 @@ class SupabaseRestResponse {
     return this.response.status;
   }
 
+  header(name: string): string | null {
+    return this.response.headers.get(name);
+  }
+
   async expectOk(): Promise<void> {
     if (!this.response.ok) {
       throw new Error(`supabase-rest-error:${this.response.status}:${await safeResponseText(this.response)}`);
@@ -810,6 +897,7 @@ type EventRow = {
 
 type OutboxRow = {
   huai_outbox_id: string;
+  room_id?: string | null;
   event_id?: string | null;
   idempotency_key: string;
   target_kind: "telegram_bot" | "local_gateway";
@@ -841,6 +929,9 @@ type ProposalExecutionHint = {
 };
 
 type OutboxInsertRow = {
+  // 방 단위 공평 리스(lease_huai_outbox, migration 20260815140000)의 파티션 키.
+  // 여기서 안 채우면 새로 들어가는 행은 전부 room_id=null 로 한 버킷에 묶여 공평 리스가 무력화된다.
+  room_id: string;
   event_id: string | undefined;
   idempotency_key: string;
   target_kind: OutboxRow["target_kind"];
@@ -923,35 +1014,109 @@ function shortTaskId(taskId: string): string {
   return taskId.length <= 12 ? taskId : taskId.slice(0, 8);
 }
 
-function humanTaskStatus(status: string): string {
-  switch (status) {
-    case "proposed":
-      return "제안됨";
-    case "approved":
-      return "승인됨";
-    case "scheduled":
-      return "실행 대기";
-    case "running":
-      return "실행 중";
-    case "blocked":
-      return "조치 필요";
-    case "verification_requested":
-      return "검증 대기";
-    case "verified":
-      return "검증 완료";
-    case "commander_completed":
-      return "완료 승인 대기";
-    case "completed":
-      return "완료";
-    case "cancelled":
-      return "취소됨";
-    case "proposal_rejected":
-    case "rejected_or_cancelled":
-      return "반려됨";
-    default:
-      return status;
-  }
+// PostgREST 의 `Prefer: count=exact` 응답 헤더 형식: "0-9/25"(부분) 또는 "*/0"(빈 결과).
+// 슬래시 뒤의 총 건수만 뽑는다. 헤더가 없거나 형식이 다르면 undefined — 호출부가
+// "실제보다 많다고 거짓 안내"하지 않도록 rows.length 로 안전하게 폴백한다.
+function parseContentRangeTotal(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const match = value.match(/\/(\d+)$/);
+  if (!match) return undefined;
+  const total = Number(match[1]);
+  return Number.isFinite(total) ? total : undefined;
 }
+
+// ---------- 작업 상태 라벨: 단일 출처 ----------
+// 예전엔 humanTaskStatus(status: string) 가 따로 있었다. 실제 huai_tasks_status_check(schema.sql)
+// 값과 어긋나는 case 가 섞여 있었고("proposed"/"running"/"verified" 는 실제 TaskStatus 에 존재하지
+// 않는 값), 다수의 실제 상태값(proposal_pending/in_progress/mid_approval_pending 등)은 default 로
+// 원문 snake_case 그대로 노출됐다. /search·/task·room facts(소대장 판단 프롬프트) 세 경로가 전부
+// 이 결함을 물려받고 있었다 — room facts 쪽이 특히 나빴다: 소대장이 방 상태를 판단할 때 원문
+// 값을 그대로 읽고 있었다는 뜻이다. TASK_STATUS_META(Record<TaskStatus, ...>, 23개 전수 컴파일
+// 타임 강제)가 이미 있었으므로 두 표를 남기지 않고 이걸 유일한 출처로 통일했다.
+// Record<TaskStatus, ...> 로 선언해 huai_tasks_status_check 의 23개 값 전수를 컴파일 타임에 강제한다.
+type TaskStatusGroupKey = "approval_pending" | "action_needed" | "in_progress" | "waiting" | "paused" | "completed" | "closed";
+
+// 출력 순서: 방장이 지금 결정해야 하는 것(승인 대기) -> 막힌 것(조치 필요) -> 돌고 있는 것(진행 중)
+// -> 대기 -> 일시정지 -> 끝난 것(완료/종료됨) 순. 방장이 가장 궁금해할 것을 위로 올린다.
+const TASK_STATUS_GROUP_ORDER: readonly TaskStatusGroupKey[] = [
+  "approval_pending", "action_needed", "in_progress", "waiting", "paused", "completed", "closed"
+];
+
+const TASK_STATUS_GROUPS: Readonly<Record<TaskStatusGroupKey, { icon: string; label: string }>> = {
+  approval_pending: { icon: "🗳️", label: "승인 대기" },
+  action_needed: { icon: "⚠️", label: "조치 필요" },
+  in_progress: { icon: "▶️", label: "진행 중" },
+  waiting: { icon: "⏳", label: "대기 중" },
+  paused: { icon: "⏸️", label: "일시정지" },
+  completed: { icon: "✅", label: "완료" },
+  closed: { icon: "🚫", label: "종료됨" }
+};
+
+const TASK_STATUS_META: Readonly<Record<TaskStatus, { group: TaskStatusGroupKey; label: string }>> = {
+  proposal_pending: { group: "waiting", label: "제안 검토 대기" },
+  proposal_revision_requested: { group: "action_needed", label: "제안 보완 필요" },
+  proposal_rejected: { group: "closed", label: "제안 반려됨" },
+  scheduled: { group: "waiting", label: "실행 대기" },
+  waiting_dependencies: { group: "waiting", label: "선행 작업 대기" },
+  queued_for_gateway: { group: "waiting", label: "실행 준비 중" },
+  in_progress: { group: "in_progress", label: "실행 중" },
+  mid_approval_pending: { group: "approval_pending", label: "중간 승인 대기" },
+  paused_by_owner: { group: "paused", label: "방장이 일시정지" },
+  verification_pending: { group: "waiting", label: "검증 대기" },
+  verification_in_progress: { group: "in_progress", label: "검증 중" },
+  revision_requested: { group: "action_needed", label: "보완 필요" },
+  revision_in_progress: { group: "in_progress", label: "보완 작업 중" },
+  reverification_pending: { group: "waiting", label: "재검증 대기" },
+  commander_completion_pending: { group: "approval_pending", label: "소대장 완료 확인 대기" },
+  completion_approval_pending: { group: "approval_pending", label: "최종 승인 대기" },
+  owner_supplement_requested: { group: "action_needed", label: "보완 요청함" },
+  completed: { group: "completed", label: "완료" },
+  cancel_requested: { group: "action_needed", label: "취소 처리 중" },
+  cancelled: { group: "closed", label: "취소됨" },
+  failed_retryable: { group: "action_needed", label: "실패(재시도 예정)" },
+  blocked: { group: "action_needed", label: "조치 필요" },
+  rejected_or_cancelled: { group: "closed", label: "반려/취소됨" }
+};
+
+// DB 제약이 지켜지는 한 항상 히트하지만, 방어적으로 미지의 값은 "조치 필요"로 눈에 띄게 분류한다
+// (조용히 숨기지 않는다 — 방장이 모르는 상태값이면 그게 더 위험하다).
+function taskStatusMeta(status: TaskStatus): { group: TaskStatusGroupKey; label: string } {
+  return TASK_STATUS_META[status] ?? { group: "action_needed", label: String(status) };
+}
+
+// 우리 방 봇 4개(platoon_leader/claude_leader/codex_leader/auditor)의 사람이 읽는 담당자 이름.
+// botLabelForRole() 은 소대장 판단 프롬프트용 긴 표기("LeaderBot(소대장)")라 목적이 다르다 —
+// /tasks 는 여러 건을 한 화면에 보여줘야 해서 짧은 표기를 따로 둔다.
+const TASK_ASSIGNEE_DISPLAY_BY_ROLE: Readonly<Record<string, string>> = {
+  platoon_leader: "소대장",
+  claude_leader: "ClaudeBot",
+  codex_leader: "CodexBot",
+  auditor: "AuditBot"
+};
+
+function taskAssigneeLabel(role: string | undefined): string {
+  if (!role) return "미배정";
+  return TASK_ASSIGNEE_DISPLAY_BY_ROLE[role] ?? role;
+}
+
+// 절대 시각은 방장이 직접 계산해야 해서 안 읽힌다 — 상대 표현으로만 보여준다.
+function formatElapsedSince(iso: string | null | undefined, now: Date): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diffMs = Math.max(0, now.getTime() - then);
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "방금";
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}시간 전`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}일 전`;
+  const months = Math.floor(days / 30);
+  return `${months}개월 전`;
+}
+// ---------- /Phase 3 ----------
+
 function requestedExecutionRolesForHint(hint: ProposalExecutionHint): ExecutionActorRole[] {
   if (hint.executionMode === "multi_ai_review") return ["claude_leader", "codex_leader"];
   return hint.requestedActorRole ? [hint.requestedActorRole] : [];
@@ -1264,7 +1429,27 @@ function sameOutboxContent(expected: {
 }, existing: OutboxRow): boolean {
   return expected.target_kind === existing.target_kind
     && stableStringify(JSON.parse(expected.target)) === stableStringify(parseTarget(existing.target))
-    && stableStringify(expected.payload) === stableStringify(existing.payload);
+    && stableStringify(normalizeVolatileExecutionRequestFields(expected.payload)) === stableStringify(normalizeVolatileExecutionRequestFields(existing.payload));
+}
+
+// packages/orchestrator/src/index.ts 의 enqueueExecutionAfterApproval(:516-528)·
+// enqueueAuditExecutionIfConfigured(:1039-1047) 는 executionRequest.attemptId 를
+// ports.makeId() 로, createdAt 을 ports.now() 로 호출마다 새로 만든다. idempotencyKey
+// 필드(executionRequest 내부, outbox 행 자체의 idempotency_key 와는 다른 필드)도
+// `...:${attemptId}` 형태라 attemptId 에 종속돼 같이 매번 달라진다.
+// 같은 승인 결정을 두 번 제출해도(Telegram 버튼 재클릭, 또는 Telegram·Mini App
+// 두 창구에서 같은 결정이 각각 들어올 때) outbox 행의 idempotency_key(entityId 단위,
+// 위 두 함수 주석 참고)는 같게 설계돼 있는데 이 3개 필드만 매번 달라서 여기서
+// "내용이 다르다"고 오판해 outbox-idempotency-conflict 를 던지고 있었다.
+// roomId/taskId/actorId/requestedBy/adapterType/projectPath/prompt/timeoutMs/
+// reportBotRole 등 나머지 필드가 전부 같다면 이건 정말 "같은 요청"이 맞다 — 그래서
+// 이 3개 필드만 비교에서 뺀다. 진짜 내용이 다른 충돌(다른 actorId, 다른 prompt 등)은
+// 이 필드들을 빼도 나머지가 여전히 달라 정상적으로 outbox-idempotency-conflict 로 걸린다.
+function normalizeVolatileExecutionRequestFields(payload: Record<string, unknown>): Record<string, unknown> {
+  const executionRequest = payload.executionRequest;
+  if (!executionRequest || typeof executionRequest !== "object" || Array.isArray(executionRequest)) return payload;
+  const { attemptId, idempotencyKey, createdAt, ...stableExecutionRequest } = executionRequest as Record<string, unknown>;
+  return { ...payload, executionRequest: stableExecutionRequest };
 }
 
 function stableStringify(value: unknown): string {

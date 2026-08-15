@@ -24,9 +24,23 @@ const STEPS = [
   "verify:gate31",
   "verify:gate32",
   "verify:gate33",
+  "verify:gate34",
+  "verify:gate35",
+  "verify:gate36",
+  "verify:gate37",
+  "verify:gate38",
   "verify:local-gateway-runtime",
   "verify:local-gateway-consumer",
   "verify:spec-coverage",
+  // 다방 KPI(뜨문뜨문 20방, 동시 3방) 전용 오프라인 게이트. 다른 gate 들이 이미 검증하는
+  // 항목들을 KPI 언어로 다시 매핑해서 재확인한다 — 개별 gate 가 이미 도니 재실행 비용이
+  // 있지만, "다방이 지금 실제로 온전한가"를 한 곳에서 바로 답할 수 있는 전용 진입점이
+  // 그동안 없었다. verify:multiroom 은 이 오케스트레이터 자체의 로직(spawnImpl 페이크)을
+  // 검증하고, verify:multiroom-offline 이 실제로 다른 gate 들을 돌려서 결과를 낸다.
+  // --live 실측(층 2)은 여기 안 들어간다 — 실 Supabase 접속이 필요해 옵트인으로만 돈다.
+  // verify:secrets 는 마지막 관문으로 남겨야 해서 그 앞에 넣는다.
+  "verify:multiroom",
+  "verify:multiroom-offline",
   "verify:structure",
   "verify:secrets"
 ];

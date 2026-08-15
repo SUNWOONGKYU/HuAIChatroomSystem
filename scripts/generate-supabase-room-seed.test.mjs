@@ -84,12 +84,138 @@ test("keeps telegram_bot_id stable across different rooms but gives each room it
   }
 });
 
+test("seeds a huai_gateway_instances row and derives a different gateway_id per room", () => {
+  const sqlRoomA = generateSupabaseRoomSeed(sampleEnv());
+  const gatewayLinesA = gatewayInsertLines(sqlRoomA);
+  assert.equal(gatewayLinesA.length, 1);
+  assert.match(gatewayLinesA[0], /^insert into huai_gateway_instances \(gateway_id, room_id, machine_label, allowed_project_roots, allowed_adapters, status\)/);
+  assert.equal(insertedGatewayRoomId(gatewayLinesA[0]), sampleEnv().BOT_SERVICE_ROOM_ID);
+
+  const sqlRoomB = generateSupabaseRoomSeed({
+    ...sampleEnv(),
+    BOT_SERVICE_ROOM_ID: "00000000-0000-0000-0000-000000000099"
+  });
+  const gatewayLinesB = gatewayInsertLines(sqlRoomB);
+
+  // 게이트웨이는 봇과 반대다: room_id 가 NOT NULL 이라 방마다 별개 행이 있어야 한다.
+  // 머신 1대(같은 machineLabel)로 여러 방을 돌려도 gateway_id 가 방마다 달라야 한다.
+  assert.notEqual(insertedGatewayId(gatewayLinesA[0]), insertedGatewayId(gatewayLinesB[0]));
+});
+
+test("gateway insert is reconflict-safe but leaves status out of the update clause", () => {
+  const sql = generateSupabaseRoomSeed(sampleEnv());
+  const line = gatewayInsertLines(sql)[0];
+  assert.match(line, /on conflict \(gateway_id\) do update set/);
+  // status 는 최초 등록 이후 실 운영 상태(heartbeat 등)가 소유해야 한다. 재시딩이
+  // 'online'으로 떠 있는 게이트웨이를 'offline'으로 되돌리면 안 되므로 갱신 대상에서 뺀다.
+  assert.deepEqual(conflictSetColumns(line), new Set(["machine_label", "allowed_project_roots", "allowed_adapters"]));
+});
+
+test("gateway allowed_project_roots falls back to the execution project path when LOCAL_GATEWAY_ALLOWED_ROOTS is unset", () => {
+  const sql = generateSupabaseRoomSeed(sampleEnv());
+  const line = gatewayInsertLines(sql)[0];
+  assert.match(line, /C:\/Dev\/HuAIChatroomSystem/);
+});
+
+test("gateway allowed_project_roots prefers LOCAL_GATEWAY_ALLOWED_ROOTS when set, deduped against the project path", () => {
+  const sql = generateSupabaseRoomSeed({
+    ...sampleEnv(),
+    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:/Dev/HuAIChatroomSystem,C:/Dev/OtherProject"
+  });
+  const line = gatewayInsertLines(sql)[0];
+  assert.match(line, /C:\/Dev\/OtherProject/);
+  // dedupe: 프로젝트 경로가 LOCAL_GATEWAY_ALLOWED_ROOTS 안에 이미 있으므로 한 번만 나와야 한다.
+  const occurrences = (line.match(/C:\/Dev\/HuAIChatroomSystem/g) ?? []).length;
+  assert.equal(occurrences, 1);
+});
+
+test("gateway allowed_adapters defaults to claude_code and codex when LOCAL_GATEWAY_ALLOWED_ADAPTERS is unset", () => {
+  const sql = generateSupabaseRoomSeed(sampleEnv());
+  const line = gatewayInsertLines(sql)[0];
+  assert.match(line, /\["claude_code","codex"\]/);
+});
+
+test("CLI args override env for room-id/chat-id/owner-id/project-path/gateway-id", () => {
+  const sql = generateSupabaseRoomSeed(sampleEnv(), [
+    "--room-id", "00000000-0000-0000-0000-000000000077",
+    "--chat-id", "-1009999999999",
+    "--owner-id", "999999999",
+    "--project-path", "C:/Dev/OtherProject",
+    "--gateway-id", "gateway-other"
+  ]);
+  assert.match(sql, /00000000-0000-0000-0000-000000000077/);
+  assert.match(sql, /-1009999999999/);
+  assert.match(sql, /999999999/);
+  assert.match(sql, /OtherProject/);
+  assert.match(sql, /gateway-other/);
+  assert.equal(sql.includes(sampleEnv().BOT_SERVICE_ROOM_ID), false);
+  assert.equal(sql.includes("C:/Dev/HuAIChatroomSystem"), false);
+});
+
+test("--machine-label overrides BOT_SERVICE_EXECUTION_MACHINE_LABEL and changes the derived gateway_id", () => {
+  const sqlDefault = generateSupabaseRoomSeed(sampleEnv());
+  const sqlOverridden = generateSupabaseRoomSeed(sampleEnv(), ["--machine-label", "machine-b"]);
+
+  assert.match(gatewayInsertLines(sqlOverridden)[0], /machine-b/);
+  // machineLabel 은 gateway_id 파생 키에 들어가므로, 같은 방이라도 머신 라벨이
+  // 다르면 다른 gateway_id 가 나와야 한다(머신 1대당 게이트웨이 행 1개 원칙).
+  assert.notEqual(
+    insertedGatewayId(gatewayInsertLines(sqlDefault)[0]),
+    insertedGatewayId(gatewayInsertLines(sqlOverridden)[0])
+  );
+});
+
+test("--machine-label falls back to BOT_SERVICE_EXECUTION_MACHINE_LABEL env, then to 'primary'", () => {
+  const sqlFromEnv = generateSupabaseRoomSeed({ ...sampleEnv(), BOT_SERVICE_EXECUTION_MACHINE_LABEL: "machine-env" });
+  assert.match(gatewayInsertLines(sqlFromEnv)[0], /machine-env/);
+
+  const sqlDefault = generateSupabaseRoomSeed(sampleEnv());
+  assert.match(gatewayInsertLines(sqlDefault)[0], /'primary'/);
+});
+
+test("CLI args are optional and unspecified flags fall back to env (fixes the swap-env-and-revert workflow)", () => {
+  const sql = generateSupabaseRoomSeed(sampleEnv(), ["--project-path", "C:/Dev/OverrideOnly"]);
+  assert.match(sql, new RegExp(sampleEnv().BOT_SERVICE_ROOM_ID));
+  assert.match(sql, /OverrideOnly/);
+});
+
+test("rejects an unknown CLI flag", () => {
+  assert.throws(() => generateSupabaseRoomSeed(sampleEnv(), ["--bogus", "value"]), /unknown-arg:--bogus/);
+});
+
+test("rejects a CLI flag that is missing its value", () => {
+  assert.throws(() => generateSupabaseRoomSeed(sampleEnv(), ["--room-id"]), /missing-arg-value:--room-id/);
+});
+
+test("huai_rooms insert includes purpose (schema not-null with no default)", () => {
+  // schema 상 huai_rooms.purpose 는 not null 이고 default 가 없다. 이 컬럼이 insert 문에서
+  // 빠지면 실제 Supabase 에 적용할 때 not-null 위반으로 실패한다.
+  const sql = generateSupabaseRoomSeed(sampleEnv());
+  const roomLine = sql.split("\n").find((line) => line.startsWith("insert into huai_rooms"));
+  assert.match(roomLine, /^insert into huai_rooms \(room_id, telegram_chat_id, owner_telegram_user_id, purpose, status\)/);
+  assert.match(roomLine, /purpose = excluded\.purpose/);
+});
+
 function botInsertLines(sql) {
   return sql.split("\n").filter((line) => line.startsWith("insert into huai_telegram_bots"));
 }
 
 function actorInsertLines(sql) {
   return sql.split("\n").filter((line) => line.startsWith("insert into huai_ai_actors"));
+}
+
+function gatewayInsertLines(sql) {
+  return sql.split("\n").filter((line) => line.startsWith("insert into huai_gateway_instances"));
+}
+
+function insertedGatewayId(line) {
+  return insertedUuidValue(line);
+}
+
+function insertedGatewayRoomId(line) {
+  const match = line.match(/values \('[^']+'::uuid, '([^']+)'::uuid,/);
+  if (!match) throw new Error(`no room_id match in gateway insert line: ${line}`);
+  return match[1];
 }
 
 function insertedBotUsernameRolePair(line) {

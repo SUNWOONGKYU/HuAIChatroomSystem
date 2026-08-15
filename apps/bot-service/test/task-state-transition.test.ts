@@ -4,9 +4,16 @@ import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js
 import { SupabaseBotServiceStore } from "../src/supabase-store.js";
 
 const taskId = "11111111-1111-4111-8111-111111111111";
+const ROOM_ID = "00000000-0000-0000-0000-000000000010";
+
+// commitTelegramInputResult 는 매 호출마다 telegram_chat_id 로 room_id 를 먼저 해석한다.
+function roomResolutionResponse(): Response {
+  return jsonResponse(200, [{ room_id: ROOM_ID }]);
+}
 
 test("persists event task_id and advances huai_tasks status through workflow transition", async () => {
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [
       {
         event_id: "event-1",
@@ -48,17 +55,18 @@ test("persists event task_id and advances huai_tasks status through workflow tra
   });
 
   assert.equal(persisted.events[0]?.eventType, "owner_verification_requested");
-  assert.match(calls.requests[0]?.url ?? "", /\/rest\/v1\/huai_events$/);
-  assert.equal(calls.requests[0]?.body[0].task_id, taskId);
-  assert.match(calls.requests[1]?.url ?? "", /\/rest\/v1\/huai_tasks\?task_id=eq\./);
-  assert.match(calls.requests[2]?.url ?? "", /\/rest\/v1\/huai_tasks\?task_id=eq\./);
-  assert.equal(calls.requests[2]?.body.status, "verification_pending");
+  assert.match(calls.requests[1]?.url ?? "", /\/rest\/v1\/huai_events$/);
+  assert.equal(calls.requests[1]?.body[0].task_id, taskId);
+  assert.match(calls.requests[2]?.url ?? "", /\/rest\/v1\/huai_tasks\?task_id=eq\..*room_id=eq\./);
+  assert.match(calls.requests[3]?.url ?? "", /\/rest\/v1\/huai_tasks\?task_id=eq\..*room_id=eq\./);
+  assert.equal(calls.requests[3]?.body.status, "verification_pending");
 });
 
 
 test("persists proposal callback entity id without writing it to uuid task_id", async () => {
   const proposalId = "proposal_00000000-0000-4000-8000-000000000010";
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [
       {
         event_id: "event-proposal-approval",
@@ -99,13 +107,14 @@ test("persists proposal callback entity id without writing it to uuid task_id", 
     }
   });
 
-  assert.equal(calls.requests[0]?.body[0].task_id, null);
-  assert.equal(calls.requests[0]?.body[0].payload.entityId, proposalId);
-  assert.equal(calls.requests.length, 1);
+  assert.equal(calls.requests[1]?.body[0].task_id, null);
+  assert.equal(calls.requests[1]?.body[0].payload.entityId, proposalId);
+  assert.equal(calls.requests.length, 2);
 });
 
 test("blocks self verification through persisted event context", async () => {
   const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
     jsonResponse(201, [
       {
         event_id: "event-self-verification",
@@ -148,14 +157,13 @@ test("blocks self verification through persisted event context", async () => {
     /task-transition-not-allowed:verification_started:verification_pending/
   );
 
-  assert.equal(calls.requests.length, 2);
+  assert.equal(calls.requests.length, 3);
 });
 
 function makeStore(fetchImpl: typeof fetch): SupabaseBotServiceStore {
   return new SupabaseBotServiceStore({
     url: "https://example.supabase.co",
     serviceRoleKey: "service-role-key-for-test",
-    roomId: "00000000-0000-0000-0000-000000000010",
     fetchImpl
   });
 }

@@ -62,12 +62,17 @@ export class SupabaseOutboxStore {
     if (updated !== true) throw new Error("outbox-state-conflict:mark-sent");
   }
 
-  async markRetry(outboxId: string, error: string, nextAttemptAt: string): Promise<void> {
+  async markRetry(outboxId: string, error: string, nextAttemptAt: string, attemptsOverride?: number): Promise<void> {
     await this.patchOutbox(outboxId, {
       status: "retry_pending",
       last_error: maskSensitiveText(error),
       next_attempt_at: nextAttemptAt,
-      locked_until: null
+      locked_until: null,
+      // 429 등 우리 예산을 안 쓴 실패는 lease_huai_outbox 가 이번 리스에서 올린 attempts
+      // +1 을 여기서 되돌린다(apps/bot-service/src/outbox.ts 가 계산해서 넘긴다). 생략하면
+      // (undefined) 이 키 자체를 body 에서 뺀다 — attempts: undefined 를 그대로 보내면
+      // PostgREST 가 이걸 어떻게 다룰지 보장이 없어서, 값이 아니라 키 존재 여부로 분기한다.
+      ...(attemptsOverride !== undefined ? { attempts: attemptsOverride } : {})
     });
   }
 
@@ -129,7 +134,8 @@ export class SupabaseOutboxStore {
         text,
         binding: { kind: "event", eventId: event.event_id },
         idempotencyKey
-      }
+      },
+      room_id: input.request.roomId
     });
 
     // 실행 결과를 상태기계에 반영한다.
@@ -164,7 +170,8 @@ export class SupabaseOutboxStore {
           keyboard: buildCompletionKeyboard(input.request.taskId),
           binding: { kind: "verification", verificationId: event.event_id },
           idempotencyKey: auditIdempotencyKey
-        }
+        },
+        room_id: input.request.roomId
       });
     }
   }
@@ -197,7 +204,8 @@ export class SupabaseOutboxStore {
           text: "요청을 작업으로 정리하지 못했습니다. 조금 더 구체적으로 다시 말씀해 주세요.",
           binding: { kind: "event", eventId: sourceEventId },
           idempotencyKey
-        }
+        },
+        room_id: input.request.roomId
       });
       return;
     }
@@ -215,7 +223,8 @@ export class SupabaseOutboxStore {
           text: maskSensitiveText(decision.text).slice(0, 3000),
           binding: { kind: "event", eventId: sourceEventId },
           idempotencyKey
-        }
+        },
+        room_id: input.request.roomId
       });
       return;
     }
@@ -239,7 +248,8 @@ export class SupabaseOutboxStore {
           text: maskSensitiveText(decision.reason || "알겠습니다.").slice(0, 500),
           binding: { kind: "event", eventId: sourceEventId },
           idempotencyKey
-        }
+        },
+        room_id: input.request.roomId
       });
       return;
     }
@@ -282,7 +292,8 @@ export class SupabaseOutboxStore {
         keyboard: buildProposalKeyboard(proposalId),
         binding: { kind: "event", eventId: sourceEventId },
         idempotencyKey
-      }
+      },
+      room_id: input.request.roomId
     });
   }
 
@@ -408,7 +419,8 @@ export class SupabaseOutboxStore {
           keyboard: buildCompletionKeyboard(input.request.taskId),
           binding: { kind: "verification", verificationId: sourceEventId },
           idempotencyKey: "telegram-completion-review:" + input.request.attemptId
-        }
+        },
+        room_id: input.request.roomId
       });
     }
   }
@@ -476,7 +488,8 @@ export class SupabaseOutboxStore {
         text: renderRevisionRequestText(taskId, requiredFixes, reverifyScope),
         binding: { kind: "task", taskId },
         idempotencyKey
-      }
+      },
+      room_id: input.request.roomId
     });
   }
 
@@ -529,8 +542,14 @@ export class SupabaseOutboxStore {
     const group = multiAiAttemptGroup(input.request.attemptId);
     if (!group) return;
 
+    // room_id 필터 없이 전역 최근 100건을 긁으면, 여러 방이 동시에 도는 상황에서
+    // 다른 방의 이벤트가 이 방의 claude/codex 짝을 큐에서 밀어낸다. 그러면
+    // claude/codex 둘 다 이미 도착했는데도 :538 에서 조용히 return 되어 교차 감사가
+    // 영영 큐잉되지 않는다 — 에러도 로그도 없는 무증상 고장이라 운영 중 알아채기 어렵다.
+    // roomId 는 이미 이 함수 안에서 :540 이 fetchActiveGatewayId(roomId) 로 쓰고 있어
+    // 같은 값을 여기 필터에도 붙인다.
     const rows = await this.client
-      .request("GET", "/huai_events?event_type=eq.meaningful_intermediate_ready&select=event_id,payload,created_at&order=created_at.desc&limit=100")
+      .request("GET", "/huai_events?event_type=eq.meaningful_intermediate_ready&room_id=eq." + encodeURIComponent(input.request.roomId) + "&select=event_id,payload,created_at&order=created_at.desc&limit=100")
       .then((response) => response.json<Array<{ event_id: string; payload: Record<string, unknown>; created_at?: string }>>());
     const related = rows.filter((row) => isCompletedMultiAiSibling(row.payload, input.request.taskId, group.baseAttemptId));
     const claude = related.find((row) => String(row.payload.attemptId) === group.baseAttemptId + "-claude");
@@ -556,7 +575,8 @@ export class SupabaseOutboxStore {
       idempotency_key: "gateway:multi-ai-audit:" + input.request.taskId + ":" + group.baseAttemptId,
       target_kind: "local_gateway",
       target: JSON.stringify({ kind: "local_gateway", gatewayId }),
-      payload: { executionRequest: auditRequest, telegramChatId }
+      payload: { executionRequest: auditRequest, telegramChatId },
+      room_id: input.request.roomId
     });
   }
 
@@ -690,7 +710,10 @@ export const MAX_TELEGRAM_CALLBACK_BYTES = 64;
 
 export function shortProposalId(attemptId: string): string {
   const raw = attemptId.replace(LEADER_PLANNING_ATTEMPT_PREFIX, "").replace(/^planning_/, "");
-  // uuid 의 앞 두 마디만 쓴다. 방 하나 안에서 충돌할 확률은 무시할 수 있다.
+  // uuid 의 앞 두 마디, 즉 64비트만 쓴다. 이 id 는 애초에 room 으로 스코프되지 않고
+  // 시스템 전체에서 조회된다(entity_ref 조회에 room_id 필터가 없다). 20개 방을
+  // 동시에 운영해도 생일 역설 기준 50% 충돌 확률에 도달하려면 대략 50억 건의
+  // proposal 이 쌓여야 하므로, 방 개수가 늘어도 이 트렁케이션은 여전히 안전하다.
   const compact = raw.replace(/-/g, "").slice(0, 16);
   return "p_" + compact;
 }
@@ -836,6 +859,12 @@ type OutboxInsertRow = {
   target_kind: "telegram_bot" | "local_gateway";
   target: string;
   payload: Record<string, unknown>;
+  // huai_outbox.room_id 는 nullable FK 다(20260815140000 마이그레이션). lease_huai_outbox
+  // 가 방별 공평 리스를 위해 이 값으로 그룹핑하므로, roomId 를 아는 호출부는 반드시
+  // 채워야 한다 — 안 채우면 그 행이 "room 없음" 공유 버킷으로 떨어져 공평 리스 대상에서
+  // 사실상 빠진다. 옵셔널로 남긴 이유는 이벤트 없이 발생하는 outbox 행처럼 roomId 를
+  // 구조적으로 모르는 호출부가 생길 가능성을 막지 않기 위해서다(지금은 전부 채운다).
+  room_id?: string | null;
 };
 
 function executionRequestFromOutbox(row: OutboxRecord): ExecutionRequest | undefined {

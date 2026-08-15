@@ -33,6 +33,7 @@
     "verify:gate17": "npm run verify:bot-service-webhook-e2e",
     "verify:supabase-room-seed": "node --test scripts/generate-supabase-room-seed.test.mjs",
     "verify:gate16": "npm run verify:supabase-room-seed",
+    "verify:onboard-telegram-room": "node --test scripts/onboard-telegram-room.test.mjs",
     "verify:local-gateway-health": "npm run build && node --test dist/apps/local-gateway/test/health.test.js",
     "verify:gate18": "npm run verify:local-gateway-health",
     "verify:operation-runbook": "node --test scripts/verify-operation-runbook.test.mjs scripts/verify-doc-sync.mjs",
@@ -77,7 +78,19 @@
     "verify:gateway-report-rendering": "npm run build && node --test dist/packages/supabase-runtime/test/gateway-report-rendering.test.js",
     "verify:revision-loop": "npm run build && node --test dist/packages/supabase-runtime/test/revision-loop.test.js",
     "verify:gate32": "npm run verify:revision-loop && npm run verify:workflow && npm run verify:gateway-report-rendering",
-    "verify:telegram-ui": "npm run build && node --test dist/packages/telegram-ui/test/sanitize.test.js dist/packages/telegram-ui/test/callback-data-length.test.js"
+    "verify:telegram-ui": "npm run build && node --test dist/packages/telegram-ui/test/sanitize.test.js dist/packages/telegram-ui/test/callback-data-length.test.js",
+    "verify:room-isolation": "npm run build && node --test dist/apps/bot-service/test/room-isolation.test.js",
+    "verify:gate34": "npm run verify:room-isolation",
+    "verify:task-list-rendering": "npm run build && node --test dist/apps/bot-service/test/task-list-grouping.test.js dist/apps/bot-service/test/task-list-length-and-isolation.test.js",
+    "verify:gate35": "npm run verify:task-list-rendering",
+    "verify:multiroom": "node --test scripts/verify-multiroom.test.mjs",
+    "verify:multiroom-offline": "node scripts/verify-multiroom.mjs",
+    "verify:multi-ai-review-idempotency": "npm run build && node --test dist/apps/bot-service/test/multi-ai-review-idempotency.test.js",
+    "verify:gate36": "npm run verify:multi-ai-review-idempotency",
+    "verify:room-filter-coverage": "npm run build && node --test dist/apps/bot-service/test/room-filter-coverage-leader.test.js dist/apps/bot-service/test/room-filter-coverage-conversation.test.js",
+    "verify:gate37": "npm run verify:room-filter-coverage",
+    "verify:lease-formula-drift": "npm run build && node --test scripts/verify-lease-formula-drift.test.mjs",
+    "verify:gate38": "npm run verify:lease-formula-drift"
   },
   "workspaces": [
     "apps/*",

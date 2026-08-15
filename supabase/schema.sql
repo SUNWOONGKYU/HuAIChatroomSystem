@@ -207,6 +207,11 @@ create table if not exists huai_approvals (
 create index if not exists huai_approvals_entity_ref_idx on huai_approvals (entity_ref);
 create index if not exists huai_approvals_task_stage_idx on huai_approvals (task_id, stage);
 
+-- 이 파일은 신규 환경 구축용이면서 재실행 안전해야 한다. add constraint 는
+-- if not exists 를 지원하지 않으므로 먼저 떨어뜨린다.
+alter table huai_tasks
+  drop constraint if exists huai_tasks_approved_by_approval_fk;
+
 alter table huai_tasks
   add constraint huai_tasks_approved_by_approval_fk
   foreign key (approved_by_approval_id) references huai_approvals(approval_id);
@@ -290,6 +295,10 @@ create table if not exists huai_events (
 create table if not exists huai_outbox (
   huai_outbox_id uuid primary key default gen_random_uuid(),
   event_id uuid references huai_events(event_id) on delete cascade,
+  -- 이 행을 소유한 방. lease_huai_outbox 가 방 하나가 배치를 독점하지 못하도록
+  -- 방별 상한을 걸 때 쓴다. event_id 가 없거나 원본 이벤트가 사라진 행은 null 로
+  -- 남고, 리스 함수는 그런 행을 하나의 공유 버킷으로 묶는다(is not distinct from).
+  room_id uuid references huai_rooms(room_id) on delete set null,
   idempotency_key text not null unique,
   target_kind text not null,
   target text not null,
@@ -307,17 +316,66 @@ create table if not exists huai_outbox (
 );
 
 
+comment on column huai_outbox.room_id is
+  'Room that owns this outbox row, backfilled from huai_events.room_id. '
+  'Null when event_id is null or the source event no longer exists; '
+  'lease_huai_outbox groups all null-room rows into one shared fairness bucket '
+  'via IS NOT DISTINCT FROM.';
+
+create index if not exists huai_outbox_target_room_created_idx
+  on huai_outbox (target_kind, room_id, created_at);
+
+-- Mini App 결정 재생 폴러용 커서.
+-- Mini App 은 결정을 huai_approvals 에 기록만 하고, 봇 서비스가 그걸 폴링해
+-- Telegram 승인과 똑같은 커밋 경로로 재생한다. huai_approvals 는 append-only 라
+-- "처리됨" 표시를 원장 자체에 못 써서 처리 상태를 여기 따로 둔다.
+create table if not exists huai_miniapp_decision_cursor (
+  id smallint primary key default 1,
+  last_seen_created_at timestamptz not null default '-infinity',
+  updated_at timestamptz not null default now(),
+  constraint huai_miniapp_decision_cursor_singleton_check check (id = 1)
+);
+
+-- 행의 존재 자체가 "다시 재생하지 않는다"는 뜻이다. 실패는 남기지 않는다 —
+-- 남기지 않아야 다음 주기에 재시도된다.
+create table if not exists huai_miniapp_decision_processed (
+  approval_id uuid primary key references huai_approvals(approval_id) on delete cascade,
+  outcome text not null,
+  detail text,
+  processed_at timestamptz not null default now(),
+  constraint huai_miniapp_decision_processed_outcome_check
+    check (outcome in ('replayed', 'skipped_duplicate', 'skipped_unsupported_stage', 'skipped_unauthorized'))
+);
+
+create index if not exists huai_miniapp_decision_processed_processed_at_idx
+  on huai_miniapp_decision_processed (processed_at);
+
+-- 방 단위 공평 리스. 예전에는 created_at 오름차순만 봤기 때문에 한 방이 수백 건을
+-- 쌓아두면 그 방이 매 리스를 독식해 다른 방이 굶었다.
+--
+-- 방별 상한을 window 함수(row_number)가 아니라 LATERAL + LIMIT 으로 구한다.
+-- Postgres 는 같은 쿼리 레벨에서 window 함수와 잠금절(FOR UPDATE)을 함께 쓰지 못한다.
+-- 그렇다고 FOR UPDATE SKIP LOCKED 를 뺄 수도 없다 — 빼면 동시 리스 두 건이 같은
+-- 후보 id 를 각각 고른 뒤 둘 다 UPDATE 해버린다(UPDATE 는 조인 키만 다시 볼 뿐
+-- 원래 WHERE 조건을 재확인하지 않으므로 실제 이중 리스가 난다).
 create or replace function lease_huai_outbox(
   p_limit integer,
   p_locked_until timestamptz,
   p_target_kind text
 ) returns setof huai_outbox
 language plpgsql
-as $
+as $$
+declare
+  v_active_room_count integer;
+  v_per_room_cap integer;
 begin
-  return query
-  with candidates as (
-    select o.huai_outbox_id
+  -- 이 target_kind 로 지금 리스 가능한 행을 가진 방이 몇 개인가.
+  -- select distinct 는 null 들을 한 그룹으로 묶으므로(= 연산자와 달리)
+  -- room_id 가 null 인 행 전체가 하나의 "방"으로 계산된다.
+  select count(*)
+  into v_active_room_count
+  from (
+    select distinct o.room_id
     from huai_outbox o
     where o.target_kind = p_target_kind
       and (
@@ -325,6 +383,52 @@ begin
         or (o.status = 'processing' and o.locked_until < now())
       )
       and (o.locked_until is null or o.locked_until < now())
+  ) active_rooms;
+
+  -- 배치 크기를 활성 방 수로 나눠 올림한다. 최소 1 이라 p_limit 이 방 수보다
+  -- 작아도 모든 방이 한 행씩은 낼 기회를 갖는다.
+  v_per_room_cap := greatest(
+    1,
+    ceil(greatest(p_limit, 0)::numeric / greatest(v_active_room_count, 1))
+  )::int;
+
+  return query
+  with active_rooms as (
+    select distinct o.room_id
+    from huai_outbox o
+    where o.target_kind = p_target_kind
+      and (
+        (o.status in ('pending', 'retry_pending') and o.next_attempt_at <= now())
+        or (o.status = 'processing' and o.locked_until < now())
+      )
+      and (o.locked_until is null or o.locked_until < now())
+  ),
+  -- 방마다 가장 오래된 순으로 최대 v_per_room_cap 건씩. 여기엔 아직 잠금절이
+  -- 없으므로 LATERAL 기반 방별 순위 매기기가 합법이다.
+  room_capped as (
+    select ranked.huai_outbox_id
+    from active_rooms a
+    cross join lateral (
+      select o.huai_outbox_id
+      from huai_outbox o
+      where o.target_kind = p_target_kind
+        and o.room_id is not distinct from a.room_id
+        and (
+          (o.status in ('pending', 'retry_pending') and o.next_attempt_at <= now())
+          or (o.status = 'processing' and o.locked_until < now())
+        )
+        and (o.locked_until is null or o.locked_until < now())
+      order by o.created_at asc
+      limit v_per_room_cap
+    ) ranked
+  ),
+  -- 방별로 추린 풀에서 실제 배치를 고른다. 이 SELECT 자체에는 window 함수·집계·
+  -- GROUP BY·DISTINCT 가 없고 조인·ORDER BY·LIMIT 뿐이라 FOR UPDATE SKIP LOCKED 가
+  -- 합법이며, 동시 리스 간 이중 획득을 막아준다.
+  candidates as (
+    select o.huai_outbox_id
+    from huai_outbox o
+    join room_capped rc on rc.huai_outbox_id = o.huai_outbox_id
     order by o.created_at asc
     limit greatest(p_limit, 0)
     for update skip locked
@@ -479,9 +583,91 @@ alter table huai_gateway_instances enable row level security;
 alter table huai_execution_attempts enable row level security;
 alter table huai_audit_logs enable row level security;
 alter table huai_recovery_snapshots enable row level security;
+alter table huai_miniapp_decision_cursor enable row level security;
+alter table huai_miniapp_decision_processed enable row level security;
 
 revoke all on all tables in schema public from anon, authenticated;
 revoke all on all sequences in schema public from anon, authenticated;
+
+-- =====================================================================
+-- Mini App 작업판 — huai_tasks 읽기 전용 RLS (additive-only, defense-in-depth)
+--
+-- 인증 모델은 (B) 채택 — Mini App 은 RLS/JWT 를 거치지 않고 Edge Function 이
+-- service_role 로 모든 접근을 중개한다(supabase/functions/miniapp-tasks).
+-- 그래서 이 정책은 지금 걸리는 경로가 아니라 두 가지 미래 상황을 위한 마지막
+-- 방어선이다: ① 키 관리 실수로 authenticated 세션이 노출되는 경우,
+-- ② 나중에 Supabase Auth 기반 직접 접근 경로가 실제로 추가되는 경우.
+-- 이 시스템은 현재 GoTrue 를 안 쓰므로 authenticated 세션 자체가 없다 —
+-- 즉 지금은 도달 불가(inert)이고, ②가 생기는 순간부터 올바르게 작동한다.
+--
+-- 기존 경로 무변경: bot-service·local-gateway·orchestrator 는 전부
+-- SUPABASE_SERVICE_ROLE_KEY 로만 접속하고, service_role 은 BYPASSRLS 라
+-- 정책·GRANT 어느 쪽도 참조하지 않는다.
+--
+-- ⚠️ 이 블록은 반드시 위의 blanket revoke 뒤에 와야 한다. 앞에 두면
+-- `revoke all on all tables ... from authenticated` 가 아래 grant 를 즉시 되돌린다.
+-- =====================================================================
+
+-- JWT 의 app_metadata.telegram_user_id 를 안전하게 뽑는다. 세션이 없거나
+-- 클레임이 없거나 숫자가 아니면 null — 캐스트 실패로 예외를 던지지 않는다.
+-- huai_room_members/huai_rooms 를 건드리지 않으므로 SECURITY DEFINER 가 필요 없다.
+create or replace function huai_miniapp_jwt_telegram_user_id()
+returns bigint
+language sql
+stable
+as $$
+  select case
+    when (auth.jwt() -> 'app_metadata' ->> 'telegram_user_id') ~ '^[0-9]+$'
+      then (auth.jwt() -> 'app_metadata' ->> 'telegram_user_id')::bigint
+    else null
+  end;
+$$;
+
+-- 이 telegram 사용자가 이 방의 active 멤버이고 방도 active 인지 판정한다.
+-- huai_room_members·huai_rooms 는 RLS 가 켜져 있고 정책이 0건이라 기본 거부다.
+-- SECURITY INVOKER 로 두면 정책 내부 서브쿼리가 그 기본 거부에 걸려 항상 false 가
+-- 되고 정책이 죽은 코드가 된다. SECURITY DEFINER + search_path 고정으로 회피한다.
+-- 기존 huai_can_act_in_room() 은 orchestrator 등이 이미 의존하므로 건드리지 않고
+-- Mini App 전용 함수를 따로 둔다.
+create or replace function huai_miniapp_can_read_task(
+  p_room_id uuid,
+  p_telegram_user_id bigint
+) returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_catalog
+as $$
+  select p_telegram_user_id is not null
+    and exists (
+      select 1
+      from huai_room_members rm
+      join huai_rooms r on r.room_id = rm.room_id
+      where rm.room_id = p_room_id
+        and rm.telegram_user_id = p_telegram_user_id
+        and rm.status = 'active'
+        and r.status = 'active'
+    );
+$$;
+
+-- 새 함수는 기본적으로 PUBLIC 에 EXECUTE 가 열린다. 최소 권한 원칙에 따라
+-- 회수한 뒤 authenticated 에만 다시 준다.
+revoke all on function huai_miniapp_jwt_telegram_user_id() from public;
+revoke all on function huai_miniapp_can_read_task(uuid, bigint) from public;
+grant execute on function huai_miniapp_jwt_telegram_user_id() to authenticated;
+grant execute on function huai_miniapp_can_read_task(uuid, bigint) to authenticated;
+
+drop policy if exists huai_tasks_miniapp_member_select on huai_tasks;
+create policy huai_tasks_miniapp_member_select on huai_tasks
+for select
+to authenticated
+using (
+  huai_miniapp_can_read_task(room_id, huai_miniapp_jwt_telegram_user_id())
+);
+
+-- GRANT 와 RLS 는 별개의 관문이라 둘 다 통과해야 한다. anon 에는 주지 않는다 —
+-- 서명된 JWT 가 없어 어차피 항상 거부되지만 최소 권한 원칙을 지킨다.
+grant select on huai_tasks to authenticated;
 
 
 

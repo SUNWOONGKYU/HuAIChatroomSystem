@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FakeBotServiceStore } from "../../bot-service/src/fake-store.js";
-import { runLocalGatewayConsumerOnce } from "../src/consumer.js";
-import { TelegramUpdateEnvelope, type GatewayEvent, type ExecutionRequest } from "../../../packages/contracts/src/index.js";
+import { runLocalGatewayConsumerOnce, type LocalGatewayOutboxStore } from "../src/consumer.js";
+import { TelegramUpdateEnvelope, type GatewayEvent, type ExecutionRequest, type OutboxRecord } from "../../../packages/contracts/src/index.js";
 import { resolveAdapterPlan, type CommandPlan } from "../../../packages/ai-adapters/src/index.js";
 import { handleTelegramInput } from "../../../packages/orchestrator/src/index.js";
 
@@ -439,6 +439,124 @@ function makePolicy() {
 
 
 
+
+test("워커 풀이 실제로 여러 행을 동시에 처리한다 (순차가 아님을 증명)", async () => {
+  const rows = makeOutboxRecords(3);
+  let active = 0;
+  let peakActive = 0;
+
+  const result = await runLocalGatewayConsumerOnce({
+    store: makeRowStore(rows),
+    policy: makePolicy(),
+    runner: {
+      async run() {
+        active += 1;
+        peakActive = Math.max(peakActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        active -= 1;
+        return { exitCode: 0, stdout: "ok", stderr: "" };
+      }
+    },
+    sink: { async publish() {} },
+    limit: 10,
+    concurrency: 3,
+    leaseUntil: "2026-08-15T00:01:00.000Z",
+    maxAttempts: 3
+  });
+
+  assert.equal(result.completed, 3);
+  // 순차 처리였다면 동시에 실행 중인 개수는 항상 1이었을 것이다.
+  assert.equal(peakActive, 3, "동시 실행 개수가 순차 처리(1)가 아니라 3까지 올라가야 한다");
+});
+
+test("워커 풀은 동시성 상한을 넘지 않는다", async () => {
+  const rows = makeOutboxRecords(5);
+  let active = 0;
+  let peakActive = 0;
+
+  const result = await runLocalGatewayConsumerOnce({
+    store: makeRowStore(rows),
+    policy: makePolicy(),
+    runner: {
+      async run() {
+        active += 1;
+        peakActive = Math.max(peakActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active -= 1;
+        return { exitCode: 0, stdout: "ok", stderr: "" };
+      }
+    },
+    sink: { async publish() {} },
+    limit: 10,
+    concurrency: 2,
+    leaseUntil: "2026-08-15T00:01:00.000Z",
+    maxAttempts: 3
+  });
+
+  assert.equal(result.completed, 5);
+  assert.equal(peakActive, 2, "5건을 동시성 2로 처리하면 동시 실행이 2를 넘으면 안 된다");
+});
+
+test("한 행 처리가 예기치 못하게 실패해도(store 예외) 다른 행 처리는 계속된다", async () => {
+  const rows = makeOutboxRecords(3);
+  const store = makeRowStore(rows);
+  const originalMarkSent = store.markSent.bind(store);
+  store.markSent = async (outboxId, result) => {
+    if (outboxId === rows[0]?.outboxId) throw new Error("store-down-for-row-0");
+    return originalMarkSent(outboxId, result);
+  };
+  const completedOutboxIds: string[] = [];
+  const originalRecord = store.recordGatewayExecutionResult.bind(store);
+  store.recordGatewayExecutionResult = async (input) => {
+    completedOutboxIds.push(input.request.attemptId);
+    return originalRecord(input);
+  };
+
+  const result = await runLocalGatewayConsumerOnce({
+    store,
+    policy: makePolicy(),
+    runner: { async run() { return { exitCode: 0, stdout: "ok", stderr: "" }; } },
+    sink: { async publish() {} },
+    limit: 10,
+    concurrency: 3,
+    leaseUntil: "2026-08-15T00:01:00.000Z",
+    maxAttempts: 3
+  });
+
+  // row 0 은 markSent 에서 죽었으니 completed 카운트에 반영되지 못했겠지만,
+  // row 1/2 는 정상적으로 끝까지 처리돼야 한다.
+  assert.equal(result.completed, 2, "row 0 실패가 row 1/2 처리를 막으면 안 된다");
+  assert.deepEqual(new Set(completedOutboxIds), new Set(["attempt-0", "attempt-1", "attempt-2"]), "세 행 모두 실행 자체는 시도돼야 한다");
+});
+
+function makeOutboxRecords(count: number): OutboxRecord[] {
+  return Array.from({ length: count }, (_, index) => ({
+    outboxId: `outbox-${index}`,
+    idempotencyKey: `gateway:attempt-${index}`,
+    target: { kind: "local_gateway" as const, gatewayId: "primary" },
+    payload: {
+      executionRequest: makeExecutionRequest({
+        attemptId: `attempt-${index}`,
+        taskId: `task-${index}`,
+        idempotencyKey: `exec-${index}`
+      })
+    },
+    status: "processing" as const,
+    attempts: 0
+  }));
+}
+
+function makeRowStore(rows: OutboxRecord[]): LocalGatewayOutboxStore {
+  return {
+    async leasePendingLocalGateway() {
+      return rows;
+    },
+    async markSent() {},
+    async markRetry() {},
+    async markDead() {},
+    async recordGatewayExecutionResult() {}
+  };
+}
 
 test("소대장 판단과 감사는 읽기 전용으로 실행된다", () => {
   // 판단은 아직 방장 승인 전이다. 판단하면서 파일을 고치면

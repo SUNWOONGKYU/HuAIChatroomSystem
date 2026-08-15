@@ -30,8 +30,13 @@ const child = spawn("node", ["dist/apps/local-gateway/src/cli.js"], {
     LOCAL_GATEWAY_MAX_ATTEMPTS: "3",
     LOCAL_GATEWAY_LIMIT: "5",
     LOCAL_GATEWAY_INTERVAL_MS: "250",
+    // 동시 3방 요구에 맞춘 워커 수. 배치 하나를 소화하는 최악 시간은
+    // maxRuntime × ceil(limit / concurrency) 이고, lease 는 그보다 길어야
+    // 아직 돌고 있는 행이 재리스돼 같은 CLI 가 두 번 실행되는 걸 막는다.
+    // 900000 × ceil(5 / 3) = 1800000 이므로 여기에 1분 여유를 더했다.
+    LOCAL_GATEWAY_CONCURRENCY: "3",
     LOCAL_GATEWAY_MAX_RUNTIME_MS: "900000",
-    LOCAL_GATEWAY_LEASE_MS: "960000"
+    LOCAL_GATEWAY_LEASE_MS: "1860000"
   }
 });
 

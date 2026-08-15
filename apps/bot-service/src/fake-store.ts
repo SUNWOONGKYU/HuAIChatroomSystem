@@ -103,11 +103,12 @@ export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxD
     row.payload = { ...row.payload, sendResult: summarizeTelegramSendResult(result) };
   }
 
-  async markRetry(outboxId: string, error: string, nextAttemptAt: string): Promise<void> {
+  async markRetry(outboxId: string, error: string, nextAttemptAt: string, attemptsOverride?: number): Promise<void> {
     const row = this.requireOutbox(outboxId);
     row.status = "retry_pending";
     row.lastError = maskSensitiveText(error);
     row.nextAttemptAt = nextAttemptAt;
+    if (attemptsOverride !== undefined) row.attempts = attemptsOverride;
   }
 
   async markDead(outboxId: string, error: string): Promise<void> {

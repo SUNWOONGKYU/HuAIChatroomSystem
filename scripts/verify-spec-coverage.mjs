@@ -6,6 +6,26 @@
 //
 // 이 스크립트는 리포트이면서 회귀 가드다. 아래 BASELINE과 실제 판정이 어긋나면 실패한다.
 // 기능을 구현했으면 BASELINE을 올려야 하고, 기능을 깨뜨리면 BASELINE과 어긋나 실패한다.
+//
+// ⚠️ 이 게이트의 한계 (신뢰할 때 무엇을 신뢰하는 건지 알아야 한다)
+// sourceMatches/testMatches/scriptMatches 는 전체 소스 텍스트에 대한 정규식 매치일 뿐이다.
+// 주석·문자열·죽은 코드(선언만 있고 호출부가 없는 함수)도 매치 대상에서 구분되지 않는다.
+// 실제로 두 방향의 사고가 다 있었다:
+//   1) 위장(false positive) — NFR-10 은 삭제된 함수 humanTaskStatus 를 찾았는데, 실제로
+//      남아 있던 건 "예전엔 이런 함수가 있었다" 는 설명 주석 한 줄뿐이었다. 그 함수를
+//      완전히 대체한 TASK_STATUS_META 로 교체하기 전까지, 누가 그 주석 문구만 바꿔도
+//      게이트가 깨지고 반대로 기능이 통째로 사라져도 주석만 남으면 계속 통과했다.
+//      같은 유형으로 FR-005 의 role-based-bot-routing 도 죽은 함수(chooseOutboundBotForEvent,
+//      선언만 있고 호출부 0곳)를 증거로 삼고 있었다 — makeOutboxTargetForRole(실제
+//      9곳 이상에서 호출) 로 교체했다.
+//   2) 오탐지(false negative) — 정규식이 실제 코드 형태와 안 맞아 있는 기능도 못 잡는
+//      경우도 있다(예: FR-020 조사 중 editMessageId 사용 패턴 확인. 다만 이 경우는
+//      조사 결과 실제로 "생산자" 코드 자체가 없어서 원래 판정이 맞았다).
+// behaviour: true 로 표시된 강한 근거(calledOutsideDefinition/writesTable/readsTable/
+// emitsEvent)가 같은 블록에 같은 식별자로 짝지어져 있으면 위장 위험이 낮다 — 식별자가
+// 사라지면 둘 다 같이 깨진다. 짝이 없는 weak 전용 체크는 이 위험을 그대로 안고 있다.
+// 이 한계를 고치는 근본 해법은 없다(AST 파싱까지 가지 않는 한) — 새 체크를 추가할 때는
+// 가능하면 behaviour 근거를 같은 식별자로 짝지어라.
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -164,7 +184,11 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   ]);
   add("FR-005", "핵심 메시지 필터", [
     { label: "internal-log-filter", run: (p) => p.sourceMatches("sanitizeTelegramVisibleText") },
-    { label: "role-based-bot-routing", run: (p) => p.sourceMatches("chooseOutboundBotForEvent") },
+    // 예전 probe 는 chooseOutboundBotForEvent(packages/orchestrator/src/index.ts:955) 였는데,
+    // 그 함수는 선언만 있고 호출부가 0곳인 죽은 코드다 — NFR-10 과 같은 유형의 위장 문제였다.
+    // 실제 role 기반 봇 라우팅은 makeOutboxTargetForRole(같은 파일 :962) 이 한다 —
+    // makeRoleMessageOutbox 를 포함해 이 파일 안에서 9곳 이상이 실제로 호출한다.
+    { label: "role-based-bot-routing", run: (p) => p.sourceMatches("makeOutboxTargetForRole") },
     { label: "filter-wired", behaviour: true, run: (p) => p.calledOutsideDefinition("sanitizeTelegramVisibleText", "packages/telegram-ui/src/sanitize.ts") }
   ]);
   add("FR-006", "세부 기록", [
@@ -415,7 +439,13 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     { label: "per-task-execution-timeline", behaviour: true, run: (p) => p.writesTable("huai_execution_attempts") }
   ]);
   add("NFR-10", "접근성", [
-    { label: "text-labelled-status", run: (p) => p.sourceMatches("humanTaskStatus") }
+    // humanTaskStatus() 는 삭제되고 TASK_STATUS_META(단일 출처, 23개 상태 전수 커버리지)로
+    // 통합됐다. 예전 probe 는 humanTaskStatus 를 찾았는데, 그 식별자가 실제로는
+    // supabase-store.ts:1018 근처 설명 주석("예전엔 humanTaskStatus 가 따로 있었다...")에만
+    // 남아 있어서, 코드가 아니라 그 주석 문구의 존재를 검증하고 있었다 — 주석을 지우면
+    // 이 게이트가 깨지고, 반대로 TASK_STATUS_META 기능이 통째로 사라져도 주석만 남으면
+    // 통과하는 구조였다.
+    { label: "text-labelled-status", run: (p) => p.sourceMatches("TASK_STATUS_META") }
   ]);
 
   return rows;

@@ -79,6 +79,15 @@ export type TelegramInputHandlingPorts = {
   makeId(prefix: string): string;
   now(): string;
   executionDefaults?: ExecutionRequestDefaults;
+  // Mini App 결정 폴러처럼 huai_approvals 원본 행을 "재생"하는 호출자를 위한 훅.
+  // applyOwnerCallback 이 만드는 승인 이벤트의 idempotencyKey 를 이 값으로 강제한다.
+  // 원본 huai_approvals 행의 idempotency_key 를 그대로 넘기면, 재생이 만드는 이벤트가
+  // recordApprovals 에서 원본과 같은 키로 INSERT 를 시도해 409 로 흡수되고(이미 그
+  // 경로가 409 를 삼킨다 — supabase-store.ts:218-225 참고, 이 파일에서 손 안 댐)
+  // huai_approvals 원장에는 결정당 1행만 남는다. 생략하면(undefined) 기존과 완전히
+  // 동일하게 자동 생성된 키를 쓴다 — Telegram 경로는 이 필드를 전혀 쓰지 않으므로
+  // 기존 동작이 한 글자도 안 바뀐다.
+  approvalEventIdempotencyKey?: string;
 };
 
 export function authorizeTelegramInput(
@@ -328,16 +337,20 @@ export function createDirectAuditRequest(
     accepted: true,
     authorization: { allowed: true },
     events: [event],
-    outbox: [
-      makeRoleMessageOutbox({
-        botRole: "auditor",
-        telegramChatId: input.envelope.telegramChatId,
-        idempotencyKey: `telegram:audit-request:${auditRequestId}:${input.envelope.updateId}`,
-        text: `감사 요청을 접수했습니다: ${title}`,
-        bindingId: `audit-request:${auditRequestId}:${input.envelope.updateId}`
-      }),
-      ...enqueueAuditExecutionIfConfigured(auditRequestId, "owner_verification_requested", input, ports, requestText)
-    ]
+    outbox: ports.executionDefaults
+      ? [
+          makeRoleMessageOutbox({
+            botRole: "auditor",
+            telegramChatId: input.envelope.telegramChatId,
+            idempotencyKey: `telegram:audit-request:${auditRequestId}:${input.envelope.updateId}`,
+            text: `감사 요청을 접수했습니다: ${title}`,
+            bindingId: `audit-request:${auditRequestId}:${input.envelope.updateId}`
+          }),
+          ...enqueueAuditExecutionIfConfigured(auditRequestId, "owner_verification_requested", input, ports, requestText)
+        ]
+      // 실행 기본값이 없는 방(A-5)에서는 "접수했습니다"를 보내봐야 실제로 아무 감사도
+      // 돌지 않는다 — 거짓 안심이다. 접수 여부와 실제 실행 여부를 분리하지 않는다.
+      : [buildExecutionNotConfiguredOutbox({ botRole: "auditor", entityId: auditRequestId, input })]
   };
 }
 
@@ -378,7 +391,7 @@ export function applyOwnerCallback(
   const action = callbackActionToOwnerEvent(input.callback.action);
   const event: OrchestratorEvent = {
     eventType: action,
-    idempotencyKey: `${action}:${input.envelope.telegramBotId}:${input.envelope.updateId}:${input.callback.entityId}`,
+    idempotencyKey: ports.approvalEventIdempotencyKey ?? `${action}:${input.envelope.telegramBotId}:${input.envelope.updateId}:${input.callback.entityId}`,
     payload: {
       entity: input.callback.entity,
       entityId: input.callback.entityId,
@@ -423,6 +436,13 @@ export function buildOwnerActionOutbox(
   ports: TelegramInputHandlingPorts
 ): OrchestratorOutboxItem[] {
   if (action === "owner_task_approved") {
+    // 실행 기본값이 없는 방(A-5)에서 승인이 오면 enqueueExecutionAfterApproval 이
+    // missing-execution-defaults 를 던져 이 함수 전체가 예외로 끊겼다 — "작업 실행을
+    // 시작했습니다"조차 못 나가고 방에는 아무 반응도 없었다. 여기서 먼저 걸러
+    // 사용자에게 보이는 안내로 바꾼다(검증 경로와 동일한 방식 — 아래 참고).
+    if (!ports.executionDefaults) {
+      return [buildExecutionNotConfiguredOutbox({ botRole: "platoon_leader", entityId: taskOrProposalId, input })];
+    }
     return [
       makeRoleMessageOutbox({
         botRole: "platoon_leader",
@@ -436,6 +456,13 @@ export function buildOwnerActionOutbox(
     ];
   }
   if (action === "owner_verification_requested" || action === "owner_reverification_requested") {
+    // 실행 기본값이 없으면 enqueueAuditExecutionIfConfigured 는 조용히 []를 반환한다.
+    // 그런데 위 코드는 "검증 요청: ..."을 무조건 먼저 보냈다 — 사용자는 검증이 접수된
+    // 줄 알지만 실제로는 아무 감사도 돌지 않는다(거짓 안심, 승인 경로의 무응답보다 나쁘다).
+    // 두 경로가 같은 방식으로 동작하도록 여기서도 먼저 걸러낸다.
+    if (!ports.executionDefaults) {
+      return [buildExecutionNotConfiguredOutbox({ botRole: "auditor", entityId: taskOrProposalId, input })];
+    }
     return [
       makeRoleMessageOutbox({
         botRole: "auditor",
@@ -503,9 +530,36 @@ export function enqueueExecutionAfterApproval(
 
   return {
     target: { kind: "local_gateway", gatewayId: defaults.gatewayId },
-    idempotencyKey: `gateway:execution:${taskOrProposalId}:${input.envelope.updateId}`,
+    // 결정(entityId) 단위로 멱등 — updateId(클릭마다 새로 발급됨)를 넣으면 같은 승인을
+    // 두 번 눌러도 서로 다른 키가 나와 CLI가 두 번 실행된다. 승인은 이 시스템 설계상
+    // 같은 entityId 에 대해 한 번만 일어난다: 수정(revise) 요청이 오면 항상 새
+    // proposalId 를 새로 발급하지, 같은 id 를 재승인하도록 돌려보내지 않는다
+    // (createProposalFromTelegram/routeFreeformMessage 의 후속 제안 경로 참고).
+    // updateId 를 빼면 채널(Telegram 버튼 vs Mini App 탭)과도 무관해져 두 창구에서
+    // 들어온 같은 결정도 huai_outbox 의 idempotency_key unique 제약으로 하나로 합쳐진다.
+    idempotencyKey: `gateway:execution:${taskOrProposalId}`,
     payload: { executionRequest }
   };
+}
+
+// 실행 기본값(actor/gateway/project path)이 없는 방은 승인·검증을 실제로 실행할 수
+// 없다. 예외를 던지거나(승인) 성공 메시지를 먼저 보내고 조용히 아무 것도 안 하는 것
+// (검증) 둘 다 사용자에게 진짜 상태를 숨긴다 — 이 함수 하나로 통일해 "지금은 실행할
+// 수 없다"는 사실과 그게 설정 문제라는 것을 명시적으로 알린다. 내부 에러 코드
+// (missing-execution-defaults 등)는 노출하지 않는다.
+function buildExecutionNotConfiguredOutbox(input: {
+  botRole: TelegramBotRole;
+  entityId: string;
+  input: NormalizedTelegramInput;
+}): OrchestratorOutboxItem {
+  return makeRoleMessageOutbox({
+    botRole: input.botRole,
+    telegramChatId: input.input.envelope.telegramChatId,
+    idempotencyKey: `telegram:execution-not-configured:${input.entityId}:${input.input.envelope.updateId}`,
+    text: `${input.entityId}에 대한 요청을 받았지만 이 방은 아직 실행 준비가 되지 않았습니다.\n담당 AI 실행 설정(프로젝트 경로·게이트웨이 등)이 끝나야 승인·검증을 실제로 실행할 수 있습니다. 방 관리자에게 실행 설정을 요청해 주세요.`,
+    callbackQueryId: input.input.envelope.callbackQueryId,
+    bindingId: `execution-not-configured:${input.entityId}:${input.input.envelope.updateId}`
+  });
 }
 
 function makeRoleMessageOutbox(input: {
@@ -991,7 +1045,21 @@ function enqueueAuditExecutionIfConfigured(taskOrProposalId: string, action: Wor
     timeoutMs: Math.min(defaults.timeoutMs, 300000), idempotencyKey: `audit-execution:${taskOrProposalId}:${attemptId}`,
     createdAt: ports.now(), reportBotRole: "auditor"
   };
-  return [{ target: { kind: "local_gateway", gatewayId: defaults.gatewayId }, idempotencyKey: `gateway:audit:${taskOrProposalId}:${input.envelope.updateId}`, payload: { executionRequest } }];
+  // 검증/재검증은 같은 taskOrProposalId 에 대해 여러 번(보완 요청 -> 재검증 반복) 정당하게
+  // 재발생한다. entityId 만으로 멱등키를 잡으면(승인과 달리) 두 번째 재검증부터 전부
+  // 막혀버린다. 라운드마다 새 메시지(새 완료 키보드)가 나가므로 그 메시지의
+  // telegramMessageId 가 "이번 라운드의 이 결정"을 가리키는 안정적인 키가 된다 —
+  // 같은 메시지의 버튼을 연타해도 telegramMessageId 는 그대로라 두 번째 클릭만 걸러지고,
+  // 새 라운드는 새 메시지라 걸러지지 않는다. Mini App 결정 폴러는 verify/reverify 를
+  // 아직 다루지 않으므로(miniapp-decision-poller.ts 의 CALLBACK_ACTION_BY_STAGE_DECISION 가
+  // task_approval/final_approval/cancellation 만 지원) 이 경로에는 채널 간 충돌이 없다.
+  return [{ target: { kind: "local_gateway", gatewayId: defaults.gatewayId }, idempotencyKey: `gateway:audit:${taskOrProposalId}:${decisionRoundKey(input)}`, payload: { executionRequest } }];
+}
+
+// 콜백이면 클릭된 메시지(=그 라운드의 키보드)의 id, 커맨드/메시지면 그 메시지 자체의 id.
+// 둘 다 없을 매우 예외적인 경우에만 updateId 로 물러난다(항상 값이 있어야 하지만, 방어적으로).
+function decisionRoundKey(input: NormalizedTelegramInput): string {
+  return input.envelope.telegramMessageId ?? input.envelope.updateId;
 }
 
 
