@@ -464,3 +464,68 @@ test("auditor completion persists verification and asks leader for completion re
   assert.match(completionOutbox?.body.payload.text, /검증이 통과/);
   assert.equal(completionOutbox?.body.payload.keyboard.inline_keyboard[0][2].text, "완료");
 });
+
+// 라이브 결함 회귀 — 작업 결과가 방에 안 뜬 사건.
+//
+// ClaudeBot 이 아래 출력을 실제로 냈는데 방에는 "결과:" 뒤가 비고 마지막 줄만 갔다.
+// 원인은 "결론·판정·조치·완료" 단어표로 중요한 줄을 고르고 나머지를 버리던 로직이었다.
+// 답("86줄")에는 그런 단어가 없어서 버려졌고, 사무적인 마지막 줄만 살아남았다.
+test("작업자가 낸 답을 단어표로 골라내다 버리지 않는다", () => {
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [
+      { type: "accepted", taskId: "task-1", attemptId: "attempt-1" },
+      {
+        type: "stdout",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        text: [
+          "README.md 줄 수: **86줄**",
+          "",
+          "근거: `wc -l README.md` 실행 결과 `86 README.md`. 저장소 루트 파일 존재 확인됨.",
+          "",
+          "후속 조치: 불필요. 단순 조사 요청이라 완료."
+        ].join("\n")
+      }
+    ]
+  });
+
+  assert.match(text, /86줄/, "작업 결과가 방에 안 갔다 — 이게 사라지면 일을 시켜도 답을 못 받는다");
+  assert.match(text, /근거/);
+  assert.match(text, /후속 조치/);
+});
+
+test("답에 관료적 단어가 하나도 없어도 그대로 전달한다", () => {
+  // "결론/판정/조치" 같은 단어가 전혀 없는 출력. 예전 단어표로는 전부 버려졌다.
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [
+      {
+        type: "stdout",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        text: "현재 브랜치는 feat/leader-brain-and-collaboration 이고 최신 커밋은 deaaede 입니다."
+      }
+    ]
+  });
+
+  assert.match(text, /feat\/leader-brain-and-collaboration/);
+  assert.match(text, /deaaede/);
+});
+
+test("여섯 줄이 넘는 답도 앞부분이 잘려나가지 않는다", () => {
+  // 예전에는 중요 줄 6개만 남겨서, 답이 7번째 줄에 있으면 통째로 사라졌다.
+  const lines = Array.from({ length: 12 }, (_, index) => `단계 ${index + 1} 진행 상황 기록`);
+  lines.push("최종 수치: 4321");
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: lines.join("\n") }]
+  });
+
+  assert.match(text, /단계 1 /, "맨 앞줄이 사라졌다");
+  assert.match(text, /단계 12 /);
+  assert.match(text, /4321/);
+});

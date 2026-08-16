@@ -1068,20 +1068,23 @@ function cleanHumanVisibleOutput(text: string): string | undefined {
   return summarized || undefined;
 }
 
-function compactHumanVisibleLines(lines: string[]): string {
-  const important = lines.filter(isImportantHumanLine);
-  const selected = (important.length > 0 ? important : lines).slice(0, 6);
-  return truncate(selected.join("\n").trim(), 3200);
-}
+// 사람이 볼 본문을 만든다. 내부 잡음(isInternalOutputLine·isLowValueHumanLine)은 이미
+// 걸러진 뒤라, 여기 남은 줄은 전부 작업자가 사람에게 하려던 말이다.
+//
+// 예전에는 "결론·판정·조치·완료" 같은 단어표로 중요한 줄을 골라내고 나머지를 버렸다.
+// 그게 정확히 답을 지웠다 — 라이브에서 ClaudeBot 이
+//   README.md 줄 수: **86줄**
+//   근거: `wc -l README.md` 실행 결과 `86 README.md`.
+//   후속 조치: 불필요. 단순 조사 요청이라 완료.
+// 를 냈는데, 방에는 마지막 줄만 갔다("조치"·"완료"가 표에 있어서다). 답에는 그런
+// 관료적 단어가 안 들어가므로 단어표는 답을 골라내는 게 아니라 답을 떨어뜨린다.
+//
+// 그래서 고르지 않는다. 작업자가 쓴 순서 그대로 두고 길이로만 자른다 — 답은 보통
+// 맨 앞에 오므로, 잘리더라도 사라지는 건 꼬리지 답이 아니다.
+const HUMAN_VISIBLE_MAX_LENGTH = 3200;
 
-function isImportantHumanLine(line: string): boolean {
-  const importantWords = [
-    "\uACB0\uB860", "\uC810\uC218", "\uC644\uC131\uB3C4", "\uD310\uC815", "\uC6D0\uC778", "\uD544\uC694", "\uC870\uCE58",
-    "\uC218\uC815", "\uBCF4\uC644", "\uC2E4\uD328", "\uC644\uB8CC", "\uD1B5\uACFC", "\uC2B9\uC778", "\uBD88\uAC00",
-    "\uC704\uD5D8", "\uC8FC\uC758", "\uB2E4\uC74C", "secret", "token", "error", "failed", "passed"
-  ];
-  const lower = line.toLowerCase();
-  return importantWords.some((word) => lower.includes(word.toLowerCase()));
+function compactHumanVisibleLines(lines: string[]): string {
+  return truncate(lines.join("\n").trim(), HUMAN_VISIBLE_MAX_LENGTH);
 }
 
 function isLowValueHumanLine(line: string): boolean {
