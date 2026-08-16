@@ -138,6 +138,20 @@ export class SupabaseOutboxStore {
       room_id: input.request.roomId
     });
 
+    // 한 엔진이 사용 한도에 걸리면 다른 엔진으로 한 번 다시 건다.
+    //
+    // 라이브에서 감사가 Codex 한도로 죽었고, 방장이 손으로 다시 시키기 전까지 작업이
+    // 멈춰 있었다. 한도는 우리가 고칠 수 있는 게 아니지만, 다른 엔진은 멀쩡하다.
+    //
+    // 감사도 넘긴다. 원칙은 작업자와 다른 엔진에 맡기는 것이고 그게 최선이지만, 그
+    // 엔진이 막혔을 때의 선택지는 "같은 모델의 다른 세션이 diff 를 보고 반증한다" 와
+    // "아무도 안 본다" 둘뿐이다. 후자가 더 나쁘다. 대신 방에 그 사실을 밝힌다 —
+    // 방장이 알고 승인하는 것과 시스템이 몰래 때우는 것은 다르다(아래 fallbackNotice).
+    if (input.status === "failed" && shouldFallbackToOtherEngine(input.request, input.errorKind, resultSummary)) {
+      await this.enqueueEngineFallback(input.request, telegramChatId, event.event_id);
+      return;
+    }
+
     // 실행 결과를 상태기계에 반영한다.
     //
     // 이게 없으면 실행이 끝나도 작업이 영원히 scheduled 로 남는다.
@@ -201,6 +215,53 @@ export class SupabaseOutboxStore {
   // 걸렸다. 라이브에서 단일 작업자 자동감사로 실제 실행된 건수는 0이었다(게이트웨이
   // 실행요청 172건 중 감사 9건은 전부 다중 AI 경로였다) — 즉 자동 검증은 이름뿐이고
   // 아무것도 검증되지 않고 있었다. 수동 결정(완료·보완)은 작업 현황판이 맡는다.
+  // 한도에 걸린 실행을 다른 엔진으로 다시 건다.
+  private async enqueueEngineFallback(
+    request: ExecutionRequest,
+    telegramChatId: string,
+    sourceEventId: string
+  ): Promise<void> {
+    const gatewayId = await this.fetchActiveGatewayId(request.roomId);
+    if (!gatewayId) return;
+
+    const fallbackAdapter: ExecutionRequest["adapterType"] = request.adapterType === "codex" ? "claude_code" : "codex";
+    const attemptId = request.attemptId + FALLBACK_ATTEMPT_SUFFIX;
+    const isAudit = request.reportBotRole === "auditor";
+
+    await this.insertOutboxIdempotently({
+      event_id: sourceEventId,
+      idempotency_key: "gateway:engine-fallback:" + attemptId,
+      target_kind: "local_gateway",
+      target: JSON.stringify({ kind: "local_gateway", gatewayId }),
+      payload: {
+        executionRequest: { ...request, attemptId, adapterType: fallbackAdapter, idempotencyKey: "engine-fallback:" + attemptId },
+        telegramChatId
+      },
+      room_id: request.roomId
+    });
+
+    const blockedActor = request.adapterType === "codex" ? "CodexBot" : "ClaudeBot";
+    const takingOver = fallbackAdapter === "codex" ? "CodexBot" : "ClaudeBot";
+    await this.insertOutboxIdempotently({
+      event_id: sourceEventId,
+      idempotency_key: "telegram-engine-fallback:" + attemptId,
+      target_kind: "telegram_bot",
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      payload: {
+        botRole: "platoon_leader",
+        telegramChatId,
+        text: isAudit
+          // 감사가 넘어간 것은 반드시 밝힌다. 작업자와 같은 엔진이 감사하면 독립성이
+          // 떨어지는데, 그걸 모르고 승인하면 검증받았다고 착각하게 된다.
+          ? `${blockedActor} 사용 한도 초과로 ${takingOver}가 대신 검증합니다.\n작업자와 같은 엔진이라 독립성이 평소보다 낮습니다. 승인 시 참고해 주세요.`
+          : `${blockedActor} 사용 한도 초과로 ${takingOver}가 이어서 작업합니다.`,
+        binding: { kind: "event", eventId: sourceEventId },
+        idempotencyKey: "telegram-engine-fallback:" + attemptId
+      },
+      room_id: request.roomId
+    });
+  }
+
   private async enqueueSingleWorkerAudit(
     input: { request: ExecutionRequest; events: GatewayEvent[] },
     resultSummary: string,
@@ -994,6 +1055,24 @@ function summarizeGatewayEvents(events: GatewayEvent[]): Array<Record<string, un
 // \uB0A8\uAE30\uBA74\uC11C \uC0DD\uAE30\uB294 \uBD80\uC0B0\uBB3C\uC774\uB77C, \uC774\uAC78 \uC0B0\uCD9C\uBB3C\uB85C \uC138\uBA74 "\uBA87 \uC904\uC778\uC9C0 \uC870\uC0AC\uD574\uC918" \uAC19\uC740 \uC21C\uC218
 // \uC9C8\uC758\uC751\uB2F5\uB3C4 \uD30C\uC77C\uC744 \uBC14\uAFBC \uAC83\uCC98\uB7FC \uBCF4\uC778\uB2E4(\uB77C\uC774\uBE0C\uC5D0\uC11C README \uC904 \uC218 \uC870\uC0AC\uC5D0 3\uAC74 \uC7A1\uD614\uB2E4).
 const BOOKKEEPING_ARTIFACT_PATTERN = /(^|[\\/])sessions([\\/]|$)/i;
+
+// 폴백은 한 번만 한다. 붙였던 실행이 또 한도에 걸리면 그대로 실패로 보고한다 —
+// 두 엔진이 다 막힌 상태에서 계속 넘기면 방만 시끄럽고 아무것도 안 된다.
+export const FALLBACK_ATTEMPT_SUFFIX = "-fallback";
+
+export function shouldFallbackToOtherEngine(
+  request: ExecutionRequest,
+  errorKind: string | undefined,
+  resultSummary: string
+): boolean {
+  if (request.attemptId.endsWith(FALLBACK_ATTEMPT_SUFFIX)) return false;
+  // 소대장 판단은 방장 지시를 해석하는 단계라 엔진을 바꾸면 결과가 달라진다.
+  // 여기서 넘기지 않고 실패를 그대로 보고해, 방장이 다시 말하게 한다.
+  if (isLeaderPlanningAttempt(request.attemptId)) return false;
+
+  const combined = `${errorKind ?? ""}\n${resultSummary}`;
+  return /agent-usage-limit|chatgpt\.com\/codex\/settings|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|quota exceeded|limit reached/i.test(combined);
+}
 
 export function producedRealArtifacts(events: readonly GatewayEvent[]): boolean {
   return realArtifactPaths(events).length > 0;

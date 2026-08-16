@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, buildSingleWorkerAuditPrompt, producedRealArtifacts, realArtifactPaths } from "../src/index.js";
+import { SupabaseOutboxStore, buildSingleWorkerAuditPrompt, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
 import { type GatewayEvent } from "../../contracts/src/index.js";
 
 // 자동 검증 기준: 이 실행이 실제로 무언가를 만들거나 고쳤는가.
@@ -177,4 +177,55 @@ function makeStoreCalls() {
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+// 라이브 결함 회귀 — 한 엔진이 한도에 걸리면 작업이 그대로 멈추던 문제.
+//
+// 감사가 Codex 한도로 죽었고, 방장이 손으로 다시 시키기 전까지 아무 일도 안 일어났다.
+// 한도는 우리가 고칠 수 없지만 다른 엔진은 멀쩡하다.
+test("한도에 걸리면 다른 엔진으로 넘긴다", () => {
+  const request = { ...auditRequest(), adapterType: "codex" as const };
+
+  assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", "You've hit your usage limit. Visit https://chatgpt.com/codex/settings"), true);
+  assert.equal(shouldFallbackToOtherEngine(request, "agent-usage-limit", ""), true);
+});
+
+test("한도가 아닌 실패는 넘기지 않는다", () => {
+  // 진짜 오류를 다른 엔진으로 넘기면 같은 실패를 두 번 하고 방만 시끄럽다.
+  const request = { ...auditRequest(), adapterType: "codex" as const };
+
+  assert.equal(shouldFallbackToOtherEngine(request, "process-timeout", ""), false);
+  assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", "설정 파일을 읽지 못했습니다."), false);
+});
+
+test("폴백은 한 번만 한다", () => {
+  // 두 엔진이 다 막힌 상태에서 계속 넘기면 끝나지 않는다.
+  const already = { ...auditRequest(), attemptId: "attempt-1-fallback" };
+
+  assert.equal(shouldFallbackToOtherEngine(already, "agent-usage-limit", ""), false);
+});
+
+test("소대장 판단은 엔진을 바꾸지 않는다", () => {
+  // 방장 지시를 해석하는 단계다. 엔진을 바꾸면 해석이 달라지므로, 실패를 그대로 알려
+  // 방장이 다시 말하게 한다.
+  const planning = { ...auditRequest(), attemptId: "leader-planning-abc" };
+
+  assert.equal(shouldFallbackToOtherEngine(planning, "agent-usage-limit", ""), false);
+});
+
+function auditRequest() {
+  return {
+    roomId: "99999999-9999-4999-8999-999999999999",
+    taskId: TASK_ID,
+    attemptId: "attempt-1",
+    actorId: "77777777-7777-4777-8777-777777777777",
+    requestedBy: "5001",
+    adapterType: "codex" as const,
+    projectPath: "C:/work",
+    prompt: "감사해줘",
+    timeoutMs: 30_000,
+    idempotencyKey: "exec-audit",
+    createdAt: "2026-08-16T00:00:00.000Z",
+    reportBotRole: "auditor" as const
+  };
 }
