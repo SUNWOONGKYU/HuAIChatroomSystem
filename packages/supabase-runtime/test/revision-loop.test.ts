@@ -194,5 +194,11 @@ test("검증 통과는 완료 승인 대기까지 스스로 이동한다 (마지
 
   const review = calls.requests.find((request) => String(request.body?.idempotency_key ?? "").startsWith("telegram-completion-review:"));
   assert.ok(review, "방장에게 완료 승인 요청이 올라가야 한다");
-  assert.ok(review.body.payload.keyboard, "완료 버튼이 있어야 한다");
+
+  // 이 테스트가 지키는 것은 "마지막 한 번은 방장이 결정한다"이지 버튼이 어디 있느냐가
+  // 아니다. 완료·보완 결정 창구는 작업판으로 옮겼으므로 방에는 버튼을 붙이지 않는다.
+  // 대신 어디서 결정하는지는 반드시 알려줘야 한다 — 안내 없이 버튼만 사라지면
+  // 방장은 완료시킬 방법을 못 찾고, 작업이 승인 대기로 영원히 남는다.
+  assert.equal(review.body.payload.keyboard, undefined, "방에 완료 버튼이 다시 붙었다");
+  assert.match(String(review.body.payload.text), /작업판/, "어디서 결정하는지 안내가 없다");
 });

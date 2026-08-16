@@ -501,10 +501,11 @@ export function buildOwnerActionOutbox(
         botRole: "platoon_leader",
         telegramChatId: input.envelope.telegramChatId,
         idempotencyKey: `telegram:supplement-requested:${taskOrProposalId}:${input.envelope.updateId}`,
-        text: `보완 요청: ${taskOrProposalId}`,
+        // 완료·보완 결정은 작업판에서 한다. 방에 버튼을 다시 붙이면 결정 창구가
+        // 둘로 갈라지고, 대화 공간도 버튼 줄로 계속 잠식된다.
+        text: `보완 요청: ${taskOrProposalId}\n이후 결정은 고정된 작업판에서 진행해 주세요.`,
         callbackQueryId: input.envelope.callbackQueryId,
-        bindingId: `supplement-requested:${taskOrProposalId}:${input.envelope.updateId}`,
-        keyboard: buildCompletionKeyboard(taskOrProposalId)
+        bindingId: `supplement-requested:${taskOrProposalId}:${input.envelope.updateId}`
       })
     ];
   }

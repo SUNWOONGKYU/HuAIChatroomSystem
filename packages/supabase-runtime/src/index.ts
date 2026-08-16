@@ -7,7 +7,7 @@ import {
   type OutboxTarget,
   type TelegramSendResult
 } from "../../contracts/src/index.js";
-import { buildCompletionKeyboard, buildProposalKeyboard } from "../../telegram-ui/src/index.js";
+import { buildProposalKeyboard } from "../../telegram-ui/src/index.js";
 import { isLeaderPlanningAttempt, LEADER_PLANNING_ATTEMPT_PREFIX } from "../../orchestrator/src/index.js";
 import { parseLeaderDecision, type LeaderPlan } from "../../orchestrator/src/leader-planning.js";
 import {
@@ -156,24 +156,45 @@ export class SupabaseOutboxStore {
       await this.enqueueMultiAiAuditIfReady(input, telegramChatId, event.event_id);
     }
 
-    if (input.status === "completed" && shouldRequestAutomaticAudit(input.request, resultSummary)) {
-      const auditIdempotencyKey = "telegram-audit:" + input.request.attemptId + ":completed";
-      await this.insertOutboxIdempotently({
-        event_id: event.event_id,
-        idempotency_key: auditIdempotencyKey,
-        target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "auditor", telegramChatId }),
-        payload: {
-          botRole: "auditor",
-          telegramChatId,
-          text: renderAutomaticAuditRequestText(input.request),
-          keyboard: buildCompletionKeyboard(input.request.taskId),
-          binding: { kind: "verification", verificationId: event.event_id },
-          idempotencyKey: auditIdempotencyKey
-        },
-        room_id: input.request.roomId
-      });
+    if (input.status === "completed" && shouldRunAutomaticAudit(input.request, input.events)) {
+      await this.enqueueSingleWorkerAudit(input, resultSummary, telegramChatId, event.event_id);
     }
+  }
+
+  // 파일을 바꾼 작업은 방장이 버튼을 누르지 않아도 감사가 돈다.
+  //
+  // 예전에는 감사 "요청" 메시지만 방에 올리고 실제 실행은 방장이 검증 버튼을 눌러야
+  // 걸렸다. 라이브에서 단일 작업자 자동감사로 실제 실행된 건수는 0이었다(게이트웨이
+  // 실행요청 172건 중 감사 9건은 전부 다중 AI 경로였다) — 즉 자동 검증은 이름뿐이고
+  // 아무것도 검증되지 않고 있었다. 수동 결정(완료·보완)은 작업판이 맡는다.
+  private async enqueueSingleWorkerAudit(
+    input: { request: ExecutionRequest; events: GatewayEvent[] },
+    resultSummary: string,
+    telegramChatId: string,
+    eventId: string
+  ): Promise<void> {
+    const gatewayId = await this.fetchActiveGatewayId(input.request.roomId);
+    if (!gatewayId) return;
+
+    const actor = input.request.adapterType === "codex" ? "CodexBot" : "ClaudeBot";
+    const auditRequest: ExecutionRequest = {
+      ...input.request,
+      attemptId: input.request.attemptId + "-audit",
+      // 작업자와 다른 엔진에 맡긴다. 같은 엔진이 자기 결과를 보면 독립 감사가 아니다.
+      adapterType: input.request.adapterType === "codex" ? "claude_code" : "codex",
+      prompt: buildSingleWorkerAuditPrompt(input.request.taskId, actor, resultSummary, realArtifactPaths(input.events)),
+      idempotencyKey: "single-worker-audit:" + input.request.attemptId,
+      reportBotRole: "auditor"
+    };
+
+    await this.insertOutboxIdempotently({
+      event_id: eventId,
+      idempotency_key: "gateway:single-worker-audit:" + input.request.attemptId,
+      target_kind: "local_gateway",
+      target: JSON.stringify({ kind: "local_gateway", gatewayId }),
+      payload: { executionRequest: auditRequest, telegramChatId },
+      room_id: input.request.roomId
+    });
   }
 
   // 소대장이 대화를 읽고 내린 판단을 방에 올린다.
@@ -415,8 +436,11 @@ export class SupabaseOutboxStore {
         payload: {
           botRole: "platoon_leader",
           telegramChatId,
-          text: "검증이 통과되었습니다. 완료 승인 또는 보완 여부를 선택해 주세요.",
-          keyboard: buildCompletionKeyboard(input.request.taskId),
+          // 결정 버튼은 방에 붙이지 않는다 — 완료·보완 결정은 작업판이 맡는다.
+          // 이 상태(completion_approval_pending·commander_completion_pending)는
+          // 작업판에서 decidable 이라(supabase/functions/_shared/task-status.ts) 방장이
+          // 갇히지 않는다. 방에는 알림만 남겨 대화 공간을 버튼으로 채우지 않는다.
+          text: "검증이 통과되었습니다.\n완료 승인 또는 보완 요청은 고정된 작업판에서 결정해 주세요.",
           binding: { kind: "verification", verificationId: sourceEventId },
           idempotencyKey: "telegram-completion-review:" + input.request.attemptId
         },
@@ -932,24 +956,56 @@ function summarizeGatewayEvents(events: GatewayEvent[]): Array<Record<string, un
   });
 }
 
-function shouldRequestAutomaticAudit(request: ExecutionRequest, resultSummary: string): boolean {
+// \uC138\uC158 \uAE30\uB85D\uC6A9 \uD30C\uC77C. \uC791\uC5C5\uC790\uAC00 \uB9CC\uB4E0 \uC0B0\uCD9C\uBB3C\uC774 \uC544\uB2C8\uB77C Claude Code \uD6C5\uC774 \uC790\uAE30 \uC138\uC158\uC744
+// \uB0A8\uAE30\uBA74\uC11C \uC0DD\uAE30\uB294 \uBD80\uC0B0\uBB3C\uC774\uB77C, \uC774\uAC78 \uC0B0\uCD9C\uBB3C\uB85C \uC138\uBA74 "\uBA87 \uC904\uC778\uC9C0 \uC870\uC0AC\uD574\uC918" \uAC19\uC740 \uC21C\uC218
+// \uC9C8\uC758\uC751\uB2F5\uB3C4 \uD30C\uC77C\uC744 \uBC14\uAFBC \uAC83\uCC98\uB7FC \uBCF4\uC778\uB2E4(\uB77C\uC774\uBE0C\uC5D0\uC11C README \uC904 \uC218 \uC870\uC0AC\uC5D0 3\uAC74 \uC7A1\uD614\uB2E4).
+const BOOKKEEPING_ARTIFACT_PATTERN = /(^|[\\/])sessions([\\/]|$)/i;
+
+export function producedRealArtifacts(events: readonly GatewayEvent[]): boolean {
+  return realArtifactPaths(events).length > 0;
+}
+
+export function realArtifactPaths(events: readonly GatewayEvent[]): string[] {
+  return collectedArtifactsFromEvents(events)
+    .map((artifact) => String(artifact.path ?? artifact.uri ?? ""))
+    .filter((location) => location.length > 0 && !BOOKKEEPING_ARTIFACT_PATTERN.test(location));
+}
+
+// \uBB34\uC5C7\uC744 \uC790\uB3D9 \uAC10\uC0AC\uD560\uC9C0 \uC815\uD55C\uB2E4.
+//
+// \uAC80\uC99D\uC740 "\uBC14\uB010 \uAC83"\uC744 \uBCF4\uB294 \uC77C\uC774\uB2E4. \uADF8\uB798\uC11C \uAE30\uC900\uC740 \uC774 \uC2E4\uD589\uC774 \uC2E4\uC81C\uB85C \uBB34\uC5B8\uAC00\uB97C \uB9CC\uB4E4\uAC70\uB098
+// \uACE0\uCCE4\uB294\uAC00 \uD558\uB098\uB2E4. \uD30C\uC77C\uC744 \uAC74\uB4DC\uB9AC\uC9C0 \uC54A\uC740 \uC9C8\uC758\uC751\uB2F5("\uC904 \uC218 \uC54C\uB824\uC918")\uC740 \uB3C5\uB9BD \uAC10\uC0AC\uB97C
+// \uBD99\uC77C \uB300\uC0C1\uC774 \uC5C6\uC73C\uBBC0\uB85C \uAC74\uB108\uB6F4\uB2E4 \u2014 \uAC10\uC0AC \uD55C \uBC88\uC774 AI \uC2E4\uD589 \uD55C \uBC88\uC774\uB77C \uADF8\uB0E5 \uBE44\uC6A9\uC774\uB2E4.
+//
+// \uC608\uC804\uC5D0\uB294 \uD504\uB86C\uD504\uD2B8\uC640 \uACB0\uACFC \uBB38\uC790\uC5F4\uC744 \uB2E8\uC5B4\uD45C(\uAC80\uC99D\u00B7\uAC10\uC0AC\u00B7\uBCF4\uC548\u00B7\uAD6C\uD604 \uC644\uB8CC\u00B7\uD14C\uC2A4\uD2B8 \uD1B5\uACFC\u00B7
+// supabase\u00B7migration \u2026)\uC5D0 \uB123\uC5B4 \uD310\uC815\uD588\uB2E4. \uC694\uCCAD\uC790\uAC00 \uBB34\uC2A8 \uB2E8\uC5B4\uB97C \uACE8\uB790\uB294\uC9C0\uB85C \uAC10\uC0AC \uC5EC\uBD80\uAC00
+// \uAC08\uB9AC\uB294 \uAC74 \uADFC\uAC70\uAC00 \uC5C6\uB2E4 \u2014 "supabase"\uB97C \uC5B8\uAE09\uD558\uBA74 \uAC10\uC0AC\uD558\uACE0 \uAC19\uC740 \uBCC0\uACBD\uC744 \uB2E4\uB978 \uB9D0\uB85C
+// \uC124\uBA85\uD558\uBA74 \uC548 \uD558\uB294 \uC2DD\uC774\uC5C8\uB2E4. \uC624\uB298 \uAC19\uC740 \uAD6C\uC870\uC758 \uB2E8\uC5B4\uD45C\uAC00 \uC81C\uBAA9\uACFC \uBCF4\uACE0 \uBCF8\uBB38\uC5D0\uC11C \uAC01\uAC01
+// \uB2F5\uC744 \uC9C0\uC6B4 \uAC83\uC744 \uC7A1\uC558\uACE0, \uC5EC\uAE30\uB3C4 \uAC19\uC740 \uAC83\uC774\uB2E4.
+function shouldRunAutomaticAudit(request: ExecutionRequest, events: readonly GatewayEvent[]): boolean {
   if (process.env.HUAI_AUTO_AUDIT_ENABLED !== "true") return false;
+  // \uAC10\uC0AC \uACB0\uACFC\uB97C \uB2E4\uC2DC \uAC10\uC0AC\uD558\uBA74 \uB05D\uB098\uC9C0 \uC54A\uB294\uB2E4.
   if (request.reportBotRole === "auditor") return false;
+  // \uB2E4\uC911 AI \uC2E4\uD589\uC740 enqueueMultiAiAuditIfReady \uAC00 \uB450 \uACB0\uACFC\uB97C \uBAA8\uC544 \uD55C \uBC88\uC5D0 \uAC10\uC0AC\uD55C\uB2E4.
+  if (multiAiAttemptGroup(request.attemptId)) return false;
+  return producedRealArtifacts(events);
+}
 
-  const prompt = request.prompt.toLowerCase();
-  const summary = resultSummary.toLowerCase();
-  const combined = `${prompt}\n${summary}`;
-
-  const explicitAuditWords = [
-    "\uAC80\uC99D", "\uAC10\uC0AC", "\uBCF4\uC548", "\uCDE8\uC57D", "security", "audit", "verify", "review"
-  ];
-  if (explicitAuditWords.some((keyword) => combined.includes(keyword.toLowerCase()))) return true;
-
-  const meaningfulOutcomeWords = [
-    "\uAD6C\uD604 \uC644\uB8CC", "\uC218\uC815 \uC644\uB8CC", "\uD14C\uC2A4\uD2B8 \uD1B5\uACFC", "\uD30C\uC77C \uC0DD\uC131", "\uBB38\uC11C \uC791\uC131",
-    "\uBC30\uD3EC", "\uB9C8\uC774\uADF8\uB808\uC774\uC158", "migration", "schema", "supabase", "typecheck", "build passed", "tests passed"
-  ];
-  return meaningfulOutcomeWords.some((keyword) => combined.includes(keyword.toLowerCase()));
+export function buildSingleWorkerAuditPrompt(taskId: string, actor: string, resultSummary: string, artifactPaths: readonly string[]): string {
+  return [
+    "HuAI Collab Chatroom System\uC758 \uC791\uC5C5 \uACB0\uACFC\uB97C \uB3C5\uB9BD \uAC10\uC0AC\uD558\uC138\uC694.",
+    "\uB300\uC0C1 \uC791\uC5C5: " + taskId,
+    "\uC791\uC5C5\uC790: " + actor,
+    "\uD310\uC815 \uAE30\uC900: \uACB0\uACFC\uC758 \uC815\uD655\uC131, \uC644\uB8CC \uC870\uAC74 \uCDA9\uC871 \uC5EC\uBD80, \uB204\uB77D\uB41C \uC2E4\uD589 \uC870\uCE58, \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uD544\uC694\uD55C \uB2E4\uC74C \uC120\uD0DD\uC9C0.",
+    "\uBCF4\uACE0: \uC0AC\uB78C\uC774 \uC54C\uC544\uC57C \uD560 \uACB0\uB860\uACFC \uD544\uC694\uD55C \uC870\uCE58\uB9CC \uAC04\uACB0\uD558\uAC8C \uC791\uC131\uD558\uC138\uC694.",
+    "\uAE08\uC9C0: \uB0B4\uBD80 JSON, hook log, stack trace, token, API key, \uC6D0\uBB38 \uC2DC\uD06C\uB9BF \uCD9C\uB825.",
+    "",
+    "\uC791\uC5C5\uC790 \uBCF4\uACE0:",
+    resultSummary || "(\uBCF4\uACE0 \uC5C6\uC74C)",
+    "",
+    "\uBCC0\uACBD\uB41C \uC0B0\uCD9C\uBB3C:",
+    ...(artifactPaths.length > 0 ? artifactPaths.map((path) => "- " + path) : ["(\uC5C6\uC74C)"])
+  ].join("\n");
 }
 
 function multiAiAttemptGroup(attemptId: string): { baseAttemptId: string; role: "claude" | "codex" } | undefined {
@@ -1000,17 +1056,9 @@ function inferVerificationVerdict(summary: string): "pass" | "conditional_pass" 
   return "conditional_pass";
 }
 
-export function renderAutomaticAuditRequestText(request: ExecutionRequest): string {
-  const actor = request.adapterType === "codex" ? "CodexBot" : "ClaudeBot";
-  return [
-    "\uAC80\uC99D \uC694\uCCAD: " + request.taskId,
-    "\uC791\uC5C5\uC790: " + actor,
-    "\uC2E4\uD589 \uACB0\uACFC\uB97C \uB3C5\uB9BD \uAC80\uC99D\uD574 \uC8FC\uC138\uC694."
-    // \uBC84\uD2BC \uBAA9\uB85D\uC744 \uBCF8\uBB38\uC5D0 \uAE00\uB85C \uB610 \uC4F0\uC9C0 \uC54A\uB294\uB2E4. \uC544\uB798\uC5D0 \uC9C4\uC9DC \uBC84\uD2BC(buildCompletionKeyboard)\uC774
-    // \uBD99\uC73C\uBBC0\uB85C \uAC19\uC740 \uAC83\uC774 \uB450 \uBC88 \uBCF4\uC774\uACE0, \uAC8C\uB2E4\uAC00 \uC774\uB984\uC774 \uC5B4\uAE0B\uB098 \uC788\uC5C8\uB2E4 \u2014 \uBCF8\uBB38\uC740 "\uC7AC\uAC80"\uC778\uB370
-    // \uBC84\uD2BC\uC740 "\uAC80\uC99D"\uC774\uB77C \uC5B4\uB290 \uCABD\uC744 \uB20C\uB7EC\uC57C \uD558\uB294\uC9C0\uAC00 \uC624\uD788\uB824 \uD5F7\uAC08\uB838\uB2E4.
-  ].join("\n");
-}
+// renderAutomaticAuditRequestText \uB294 \uC81C\uAC70\uD588\uB2E4. \uBC29\uC7A5\uC5D0\uAC8C "\uAC80\uC99D\uD574 \uB4DC\uB9B4\uAE4C\uC694"\uB97C \uBB3B\uACE0
+// \uBC84\uD2BC\uC744 \uBD99\uC774\uB358 \uBA54\uC2DC\uC9C0\uC778\uB370, \uC774\uC81C \uD30C\uC77C\uC744 \uBC14\uAFBC \uC791\uC5C5\uC740 \uBB3B\uC9C0 \uC54A\uACE0 \uBC14\uB85C \uAC10\uC0AC\uAC00 \uB3C8\uB2E4.
+// \uB0A8\uACA8\uB450\uBA74 \uB2E4\uC74C \uC0AC\uB78C\uC774 \uB2E4\uC2DC \uBD99\uC5EC \uACB0\uC815 \uCC3D\uAD6C\uAC00 \uBC29\uACFC \uC791\uC5C5\uD310\uC73C\uB85C \uAC08\uB77C\uC9C4\uB2E4.
 
 export function renderGatewayReportText(input: {
   request: ExecutionRequest;

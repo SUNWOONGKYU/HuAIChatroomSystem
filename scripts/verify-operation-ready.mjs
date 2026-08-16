@@ -34,6 +34,7 @@ const STEPS = [
   "verify:gate41",
   "verify:gate42",
   "verify:gate43",
+  "verify:gate44",
   "verify:local-gateway-runtime",
   "verify:local-gateway-consumer",
   "verify:spec-coverage",

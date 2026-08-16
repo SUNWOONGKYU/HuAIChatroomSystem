@@ -222,7 +222,11 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     { label: "write:huai_reports", behaviour: true, run: (p) => p.writesTable("huai_reports") }
   ]);
   add("FR-012", "선택 검증", [
-    { label: "conditional-audit-request", run: (p) => p.sourceMatches("shouldRequestAutomaticAudit") },
+    // 예전 근거는 shouldRequestAutomaticAudit 이라는 이름 하나였다. 그 함수는 감사를
+    // 돌리지 않고 "검증해 드릴까요" 메시지만 올렸고, 라이브에서 실제 실행 건수는 0이었다.
+    // 지금은 파일을 바꾼 실행이면 감사를 실제로 큐잉한다 — 근거도 그 큐잉으로 잡는다.
+    { label: "conditional-audit-rule", run: (p) => p.sourceMatches("shouldRunAutomaticAudit") },
+    { label: "audit-execution-enqueued", run: (p) => p.sourceMatches("gateway:single-worker-audit:") },
     { label: "meaningfulness-record", behaviour: true, run: (p) => p.writesTable("huai_reports") }
   ]);
   add("FR-013", "검증 의견서", [

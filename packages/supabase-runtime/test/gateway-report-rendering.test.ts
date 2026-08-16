@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, renderAutomaticAuditRequestText, renderGatewayReportText } from "../src/index.js";
+import { SupabaseOutboxStore, renderGatewayReportText } from "../src/index.js";
 import { type ExecutionRequest, type GatewayEvent } from "../../contracts/src/index.js";
 
 test("gateway report hides internal json and hook output from Telegram text", () => {
@@ -462,7 +462,12 @@ test("auditor completion persists verification and asks leader for completion re
   const completionOutbox = calls.requests.find((request) => request.body?.idempotency_key === "telegram-completion-review:attempt-audit");
   assert.equal(completionOutbox?.body.target_kind, "telegram_bot");
   assert.match(completionOutbox?.body.payload.text, /검증이 통과/);
-  assert.equal(completionOutbox?.body.payload.keyboard.inline_keyboard[0][2].text, "완료");
+
+  // 완료·보완 결정은 작업판이 맡는다. 방에 버튼을 붙이면 결정 창구가 둘로 갈라지고
+  // 대화 공간도 버튼 줄로 잠식된다. 대신 어디서 결정하는지는 본문이 알려줘야 한다 —
+  // 안내 없이 버튼만 사라지면 방장은 완료시킬 방법을 못 찾는다.
+  assert.equal(completionOutbox?.body.payload.keyboard, undefined, "방에 완료 버튼이 다시 붙었다");
+  assert.match(completionOutbox?.body.payload.text, /작업판/);
 });
 
 // 라이브 결함 회귀 — 작업 결과가 방에 안 뜬 사건.
@@ -604,13 +609,6 @@ test("줄 전체가 경로뿐이면 여전히 버린다", () => {
   assert.equal(text.includes("dist/apps"), false);
 });
 
-test("검증 요청 본문에 버튼 목록을 글로 또 쓰지 않는다", () => {
-  // 아래에 진짜 버튼(검증/보완/완료)이 붙는다. 본문에 같은 목록을 쓰면 두 번 보이고,
-  // 라이브에서는 이름까지 어긋나 있었다 — 본문 "재검" vs 버튼 "검증".
-  const text = renderAutomaticAuditRequestText({ ...makeRequest(), adapterType: "claude_code" });
-
-  assert.match(text, /검증 요청/);
-  assert.match(text, /작업자: ClaudeBot/);
-  assert.equal(text.includes("버튼:"), false, "버튼 목록이 본문에 또 들어 있다");
-  assert.equal(text.includes("재검"), false, "버튼에 없는 이름이 본문에 남아 있다");
-});
+// "검증해 드릴까요" 메시지 자체가 없어졌다(파일을 바꾼 작업은 묻지 않고 바로 감사가
+// 돈다). 그 문구를 검사하던 테스트도 함께 제거했다 — 감사 실행 여부는 아래
+// automatic-audit.test.ts 가 지킨다.
