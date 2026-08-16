@@ -864,7 +864,11 @@ export function renderLeaderPlanMessage(plan: LeaderPlan): string {
     ? "ClaudeBot + CodexBot"
     : plan.assignee === "claude_leader" ? "ClaudeBot" : "CodexBot";
   return [
-    "작업 제안: " + plan.title,
+    // 📥 접수 → 📋 제안 → ⚙️ 작업 중. 같은 자리에 같은 아이콘이 오면 방장이 흐름의
+    // 어디쯤인지 문장을 읽지 않고도 안다.
+    "📋 작업 제안입니다. 승인하시면 바로 시작합니다.",
+    "",
+    plan.title,
     "",
     "목적: " + plan.purpose,
     "범위: " + plan.scope,
@@ -960,7 +964,9 @@ class SupabaseRestClient {
   }
 
   async request(method: string, path: string, options: { body?: unknown; prefer?: string } = {}): Promise<SupabaseRestResponse> {
+    // 게이트웨이 결과 기록도 루프 안에서 돈다. 끊기지 않으면 다음 결과가 못 들어온다.
     const response = await this.fetchImpl(`${this.baseUrl}/rest/v1${path}`, {
+      signal: AbortSignal.timeout(20_000),
       method,
       headers: stripUndefined({
         apikey: this.serviceRoleKey,

@@ -128,7 +128,9 @@ class SupabaseRuntimeRestClient {
   }
 
   async get<T>(path: string): Promise<T> {
+    // 끊기지 않는 호출 하나가 기동을 통째로 멈춘다(supabase-store.ts 의 같은 주석 참고).
     const response = await this.fetchImpl(`${this.baseUrl}/rest/v1${path}`, {
+      signal: AbortSignal.timeout(20_000),
       method: "GET",
       headers: {
         apikey: this.serviceRoleKey,

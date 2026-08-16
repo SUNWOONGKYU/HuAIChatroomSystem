@@ -471,6 +471,8 @@ class MiniAppRestClient {
 
   private async request(method: string, path: string, options: { body?: unknown; prefer?: string } = {}): Promise<Response> {
     return this.fetchImpl(`${this.baseUrl}/rest/v1${path}`, {
+      // 이 폴러도 while 루프다 — 한 번 안 돌아오면 승인 처리가 영영 멎는다.
+      signal: AbortSignal.timeout(20_000),
       method,
       headers: stripUndefined({
         apikey: this.serviceRoleKey,

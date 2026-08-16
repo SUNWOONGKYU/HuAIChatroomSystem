@@ -884,6 +884,14 @@ export function buildSupabaseBotServiceStoreFromEnv(env: NodeJS.ProcessEnv = pro
   });
 }
 
+// 바깥으로 나가는 호출은 반드시 스스로 끊는다.
+//
+// 라이브에서 폴링 한 바퀴가 Supabase 기록 단계에서 영영 돌아오지 않아, 텔레그램에서 가져온
+// 메시지의 offset 이 확정되지 못했다. 프로세스는 살아 있고 로그는 조용한데 방의 말은 하나도
+// 처리되지 않았다(pending_update_count 가 1 에서 안 움직였다). 끊기지 않는 호출 하나가
+// 루프 전체를 멈춘다 — 재기동 말고는 빠져나올 길이 없다.
+const SUPABASE_REQUEST_TIMEOUT_MS = 20_000;
+
 class SupabaseRestClient {
   private readonly baseUrl: string;
   private readonly serviceRoleKey: string;
@@ -908,7 +916,8 @@ class SupabaseRestClient {
         "content-type": "application/json",
         prefer: options.prefer
       }),
-      body: options.body === undefined ? undefined : JSON.stringify(options.body)
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: AbortSignal.timeout(SUPABASE_REQUEST_TIMEOUT_MS)
     });
     return new SupabaseRestResponse(response);
   }

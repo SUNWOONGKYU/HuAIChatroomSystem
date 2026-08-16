@@ -301,6 +301,22 @@ export function requestLeaderPlanning(
         target: { kind: "local_gateway", gatewayId: defaults.gatewayId },
         idempotencyKey: `gateway:leader-planning:${planningId}`,
         payload: { executionRequest, telegramChatId: input.envelope.telegramChatId, triggeringText: text }
+      },
+      // 방장이 말을 걸면 바로 대답한다.
+      //
+      // 소대장 판단은 CLI 를 한 번 돌리는 일이라 제안이 뜨기까지 수십 초가 걸린다. 그동안
+      // 방에는 아무 말도 나가지 않았고, 방장은 봇이 죽은 줄 알고 다시 보내거나 기다렸다.
+      // "입력 중" 표시는 화면 맨 위 작은 글씨라 그 자리를 대신하지 못한다.
+      {
+        target: { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: input.envelope.telegramChatId },
+        idempotencyKey: `telegram:leader-planning-ack:${planningId}`,
+        payload: {
+          botRole: "platoon_leader",
+          telegramChatId: input.envelope.telegramChatId,
+          text: "📥 접수했습니다. 할 일을 정리하고 있습니다.",
+          binding: { kind: "task", taskId: planningId },
+          idempotencyKey: `telegram:leader-planning-ack:${planningId}`
+        }
       }
     ]
   };
@@ -446,7 +462,7 @@ export function buildOwnerActionOutbox(
     return [
       ...makeCallbackAcknowledgedEdit({
         botRole: "platoon_leader",
-        text: "▶ 실행 중입니다.\n작업을 접수해 작업자를 배정하고 있습니다. 결과가 나오면 이 방에 보고합니다.",
+        text: "⚙️ 작업 중입니다. 작업자를 배정했습니다.",
         entityId: taskOrProposalId,
         envelope: input.envelope,
         kind: "execution-started"

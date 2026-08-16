@@ -54,7 +54,9 @@ export async function releaseTelegramWebhooks(
   const results: Array<{ botUsername: string; ok: boolean }> = [];
   for (const bot of bots) {
     try {
+      // 기동 직전 단계다. 여기서 안 끊으면 폴링이 시작조차 못 한다.
       const response = await fetchImpl(`https://api.telegram.org/bot${bot.token}/deleteWebhook`, {
+        signal: AbortSignal.timeout(15_000),
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ drop_pending_updates: false })

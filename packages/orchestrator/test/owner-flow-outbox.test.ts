@@ -726,7 +726,7 @@ test("실행 버튼을 누르면 그 메시지가 실행 중으로 바뀌고 버
     ? result.outbox.find((item) => item.payload.editMessageId !== undefined)
     : undefined;
   assert.ok(edit, "누른 메시지를 고치는 항목이 없다 — 화면에 아무 변화가 없다");
-  assert.match(String(edit.payload.text), /실행 중/);
+  assert.match(String(edit.payload.text), /작업 중/);
 
   // 빈 키보드를 명시해야 기존 버튼이 확실히 걷힌다. 생략하면 reply_markup 키가
   // 요청에서 빠져 버튼이 남을 수 있고, 그러면 두 번 눌리는 길이 열린다.

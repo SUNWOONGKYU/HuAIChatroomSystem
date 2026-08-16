@@ -182,7 +182,9 @@ test("세션 id 추출", () => {
 
 test("제안 메시지에 내부 상태가 아니라 사람이 읽을 내용만 담긴다", () => {
   const text = renderLeaderPlanMessage({ ...PLAN, assignee: "both" } as never);
-  assert.match(text, /작업 제안:/);
+  assert.match(text, /📋 작업 제안입니다/);
+  // 제목은 안내 문구와 섞이지 않고 따로 선다.
+  assert.match(text, new RegExp(PLAN.title));
   assert.match(text, /담당: ClaudeBot \+ CodexBot/);
   assert.equal(text.includes("leader-planning-"), false);
   assert.equal(text.includes("attemptId"), false);

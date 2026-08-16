@@ -87,3 +87,4 @@ Telegram 기반 핵심 운영 경로와 `/tasks`, `/task`, `/search`, `/trace` �
 
 최신 갱신일: 2026-08-16
 실행 엔진: Claude · Codex · Antigravity (3단 폴백 · 검증완료)
+3단 폴백 실사용 종주 완료: 2026-08-16
