@@ -70,6 +70,8 @@ export function createTelegramGrammySender(input: {
         try {
           const message = await api.sendMessage(request.telegramChatId, chunks[index] ?? "", stripUndefined({
             reply_to_message_id: index === 0 ? optionalNumericMessageId(request.replyToMessageId) : undefined,
+            // 주제를 안 실으면 포럼 그룹에서 General 로 떨어진다.
+            message_thread_id: optionalNumericMessageId(request.messageThreadId),
             reply_markup: index === chunks.length - 1 ? request.keyboard : undefined
           }));
           result = { telegramMessageId: String(message.message_id), raw: message };
@@ -242,6 +244,8 @@ async function sendTelegramOutbox(row: OutboxRecord, sender: TelegramMessageSend
   return sender.sendMessage({
     botRole: row.target.botRole,
     telegramChatId: row.target.telegramChatId,
+    // 포럼 그룹에서는 이 값이 있어야 지시가 오간 주제로 답이 간다.
+    messageThreadId: optionalString(row.payload.messageThreadId),
     text,
     replyToMessageId,
     keyboard
@@ -260,6 +264,7 @@ async function sendTelegramTextChunks(
     result = await callTelegramApi(fetchImpl, tokenResolver, request.botRole, "sendMessage", {
       chat_id: request.telegramChatId,
       text: chunks[index],
+      message_thread_id: request.messageThreadId,
       reply_to_message_id: index === 0 ? request.replyToMessageId : undefined,
       reply_markup: index === chunks.length - 1 ? request.keyboard : undefined
     }, timeoutMs);

@@ -16,12 +16,27 @@
 export type InFlightExecution = {
   telegramChatId: string;
   startedAtMs: number;
+  // 포럼 주제 번호. 진행 표시도 지시가 오간 주제에 떠야 한다.
+  messageThreadId?: string;
 };
 
 export type ExecutionHeartbeatPorts = {
   listInFlightExecutions(): Promise<InFlightExecution[]>;
   sendTypingAction(telegramChatId: string): Promise<void>;
+  // 경과 시간을 적은 메시지를 방에 하나 두고 계속 고쳐 쓴다. 숫자가 올라가는 것은
+  // 방장 눈에 실제로 보인다 — 입력 표시와 달리 화면 흐름 안에 남는다.
+  sendProgressMessage?(telegramChatId: string, text: string, messageThreadId?: string): Promise<string | undefined>;
+  editProgressMessage?(telegramChatId: string, messageId: string, text: string): Promise<void>;
 };
+
+// 방마다 진행 표시 메시지 하나. 프로세스가 죽으면 잊히고, 다음 실행 때 새로 만든다.
+export type ProgressMessages = Map<string, { messageId: string; lastText: string }>;
+
+export function renderProgressText(elapsedMs: number): string {
+  return `⏳ 작업 중 · ${formatElapsed(elapsedMs)} 경과`;
+}
+
+export const PROGRESS_DONE_TEXT = "✅ 작업이 끝났습니다. 결과를 정리해 올리겠습니다.";
 
 export type ExecutionHeartbeatHandle = { stop(): void };
 
@@ -46,17 +61,54 @@ export function formatElapsed(elapsedMs: number): string {
   return minutes > 0 ? `${minutes}분 ${seconds}초` : `${seconds}초`;
 }
 
-export async function runExecutionHeartbeatOnce(ports: ExecutionHeartbeatPorts): Promise<{ chats: number }> {
+export async function runExecutionHeartbeatOnce(
+  ports: ExecutionHeartbeatPorts,
+  progress: ProgressMessages = new Map(),
+  nowMs: number = Date.now()
+): Promise<{ chats: number }> {
   const executions = await ports.listInFlightExecutions();
   const byChat = summarizeByChat(executions);
-  for (const chatId of byChat.keys()) {
+  const threadByChat = new Map(
+    executions.filter((execution) => execution.messageThreadId).map((execution) => [execution.telegramChatId, execution.messageThreadId])
+  );
+
+  for (const [chatId, startedAtMs] of byChat) {
     // 한 방이 실패해도 다른 방 표시는 계속돼야 한다.
     try {
       await ports.sendTypingAction(chatId);
     } catch {
       // 표시가 안 되는 것은 작업 자체를 막을 이유가 아니다. 조용히 넘긴다.
     }
+
+    try {
+      const text = renderProgressText(nowMs - startedAtMs);
+      const existing = progress.get(chatId);
+      if (!existing) {
+        const messageId = await ports.sendProgressMessage?.(chatId, text, threadByChat.get(chatId));
+        if (messageId) progress.set(chatId, { messageId, lastText: text });
+        continue;
+      }
+      // 같은 글자로 고치면 Telegram 이 거절한다. 초가 바뀔 때만 보낸다.
+      if (existing.lastText === text) continue;
+      await ports.editProgressMessage?.(chatId, existing.messageId, text);
+      existing.lastText = text;
+    } catch {
+      // 표시가 안 되는 것은 작업 자체를 막을 이유가 아니다.
+    }
   }
+
+  // 끝난 방의 표시는 끝났다고 못박는다. 숫자가 멈춘 채로 남으면 방장은 그게 멈춘 건지
+  // 아직 도는 건지 알 수 없다 — 표시를 붙인 이유가 사라진다.
+  for (const [chatId, entry] of [...progress]) {
+    if (byChat.has(chatId)) continue;
+    progress.delete(chatId);
+    try {
+      await ports.editProgressMessage?.(chatId, entry.messageId, PROGRESS_DONE_TEXT);
+    } catch {
+      // 이미 지워졌거나 편집이 막힌 메시지다. 다음 실행은 새 메시지로 시작한다.
+    }
+  }
+
   return { chats: byChat.size };
 }
 
@@ -65,6 +117,7 @@ export function startExecutionHeartbeatLoop(
 ): ExecutionHeartbeatHandle {
   // Telegram 의 입력 표시는 약 5초 뒤 사라진다. 그보다 짧게 보내야 끊기지 않는다.
   const intervalMs = ports.intervalMs ?? 4000;
+  const progress: ProgressMessages = new Map();
   let stopped = false;
   let running = false;
 
@@ -72,7 +125,7 @@ export function startExecutionHeartbeatLoop(
     if (stopped || running) return;
     running = true;
     try {
-      await runExecutionHeartbeatOnce(ports);
+      await runExecutionHeartbeatOnce(ports, progress);
     } catch (error) {
       ports.onError?.(error);
     } finally {

@@ -372,7 +372,8 @@ create index if not exists huai_miniapp_decision_processed_processed_at_idx
 create or replace function lease_huai_outbox(
   p_limit integer,
   p_locked_until timestamptz,
-  p_target_kind text
+  p_target_kind text,
+  p_gateway_id text default null
 ) returns setof huai_outbox
 language plpgsql
 as $$
@@ -380,15 +381,13 @@ declare
   v_active_room_count integer;
   v_per_room_cap integer;
 begin
-  -- 이 target_kind 로 지금 리스 가능한 행을 가진 방이 몇 개인가.
-  -- select distinct 는 null 들을 한 그룹으로 묶으므로(= 연산자와 달리)
-  -- room_id 가 null 인 행 전체가 하나의 "방"으로 계산된다.
   select count(*)
   into v_active_room_count
   from (
     select distinct o.room_id
     from huai_outbox o
     where o.target_kind = p_target_kind
+      and (p_gateway_id is null or o.target::jsonb ->> 'gatewayId' = p_gateway_id)
       and (
         (o.status in ('pending', 'retry_pending') and o.next_attempt_at <= now())
         or (o.status = 'processing' and o.locked_until < now())
@@ -396,8 +395,6 @@ begin
       and (o.locked_until is null or o.locked_until < now())
   ) active_rooms;
 
-  -- 배치 크기를 활성 방 수로 나눠 올림한다. 최소 1 이라 p_limit 이 방 수보다
-  -- 작아도 모든 방이 한 행씩은 낼 기회를 갖는다.
   v_per_room_cap := greatest(
     1,
     ceil(greatest(p_limit, 0)::numeric / greatest(v_active_room_count, 1))
@@ -408,14 +405,13 @@ begin
     select distinct o.room_id
     from huai_outbox o
     where o.target_kind = p_target_kind
+      and (p_gateway_id is null or o.target::jsonb ->> 'gatewayId' = p_gateway_id)
       and (
         (o.status in ('pending', 'retry_pending') and o.next_attempt_at <= now())
         or (o.status = 'processing' and o.locked_until < now())
       )
       and (o.locked_until is null or o.locked_until < now())
   ),
-  -- 방마다 가장 오래된 순으로 최대 v_per_room_cap 건씩. 여기엔 아직 잠금절이
-  -- 없으므로 LATERAL 기반 방별 순위 매기기가 합법이다.
   room_capped as (
     select ranked.huai_outbox_id
     from active_rooms a
@@ -423,6 +419,7 @@ begin
       select o.huai_outbox_id
       from huai_outbox o
       where o.target_kind = p_target_kind
+        and (p_gateway_id is null or o.target::jsonb ->> 'gatewayId' = p_gateway_id)
         and o.room_id is not distinct from a.room_id
         and (
           (o.status in ('pending', 'retry_pending') and o.next_attempt_at <= now())
@@ -433,9 +430,6 @@ begin
       limit v_per_room_cap
     ) ranked
   ),
-  -- 방별로 추린 풀에서 실제 배치를 고른다. 이 SELECT 자체에는 window 함수·집계·
-  -- GROUP BY·DISTINCT 가 없고 조인·ORDER BY·LIMIT 뿐이라 FOR UPDATE SKIP LOCKED 가
-  -- 합법이며, 동시 리스 간 이중 획득을 막아준다.
   candidates as (
     select o.huai_outbox_id
     from huai_outbox o

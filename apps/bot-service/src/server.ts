@@ -152,6 +152,13 @@ function maybeStartExecutionHeartbeat(
     intervalMs: parsePositiveInteger(env.BOT_SERVICE_EXECUTION_HEARTBEAT_MS ?? "4000", "BOT_SERVICE_EXECUTION_HEARTBEAT_MS"),
     listInFlightExecutions: () => runtime.inFlightExecutions!.listInFlightExecutions(),
     sendTypingAction: (telegramChatId) => sender.sendChatAction!({ botRole: "platoon_leader", telegramChatId, action: "typing" }),
+    async sendProgressMessage(telegramChatId, text, messageThreadId) {
+      const result = await sender.sendMessage({ botRole: "platoon_leader", telegramChatId, messageThreadId, text });
+      return result.telegramMessageId;
+    },
+    async editProgressMessage(telegramChatId, messageId, text) {
+      await sender.editMessageText({ botRole: "platoon_leader", telegramChatId, telegramMessageId: messageId, text });
+    },
     onError(error) {
       console.error(`bot-service-execution-heartbeat-error:${maskServerError(error)}`);
     }

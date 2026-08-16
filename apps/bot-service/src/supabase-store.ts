@@ -195,9 +195,11 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return rows
       .map((row) => {
         const telegramChatId = typeof row.payload?.telegramChatId === "string" ? row.payload.telegramChatId : "";
+        const request = row.payload?.executionRequest as { telegramMessageThreadId?: unknown } | undefined;
+        const messageThreadId = typeof request?.telegramMessageThreadId === "string" ? request.telegramMessageThreadId : undefined;
         // 언제부터 돌았는지는 리스한 시각이 가장 가깝다. 없으면 행이 생긴 시각으로 대체한다.
         const startedAt = Date.parse(String(row.locked_at ?? row.created_at ?? ""));
-        return { telegramChatId, startedAtMs: Number.isFinite(startedAt) ? startedAt : Date.now() };
+        return { telegramChatId, messageThreadId, startedAtMs: Number.isFinite(startedAt) ? startedAt : Date.now() };
       })
       .filter((execution) => execution.telegramChatId.length > 0);
   }

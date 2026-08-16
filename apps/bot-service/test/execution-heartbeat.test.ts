@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatElapsed,
+  PROGRESS_DONE_TEXT,
   runExecutionHeartbeatOnce,
   summarizeByChat,
   type InFlightExecution
@@ -89,3 +90,72 @@ test("경과 시간을 사람이 읽는 말로 쓴다", () => {
 function execution(telegramChatId: string, startedAtMs: number): InFlightExecution {
   return { telegramChatId, startedAtMs };
 }
+
+// 방장이 반복해 제기한 문제 — "실행 버튼 움직임이 결과 나오기 전에 끝나버린다".
+//
+// 입력 표시는 화면 맨 위 작은 글씨라 눈에 안 띄고, 5초면 사라진다. 방 흐름 안에 남아
+// 숫자가 올라가는 표시가 있어야 방장이 "돌고 있다"를 안다.
+test("실행이 도는 동안 경과 시간을 적은 메시지를 방에 두고 고쳐 쓴다", async () => {
+  const sent: Array<{ chatId: string; text: string }> = [];
+  const edited: Array<{ chatId: string; messageId: string; text: string }> = [];
+  const progress = new Map();
+  const ports = {
+    async listInFlightExecutions() {
+      return [{ telegramChatId: "1001", startedAtMs: 1_000 }];
+    },
+    async sendTypingAction() {},
+    async sendProgressMessage(chatId: string, text: string) {
+      sent.push({ chatId, text });
+      return "msg-1";
+    },
+    async editProgressMessage(chatId: string, messageId: string, text: string) {
+      edited.push({ chatId, messageId, text });
+    }
+  };
+
+  await runExecutionHeartbeatOnce(ports, progress, 6_000);
+  assert.deepEqual(sent, [{ chatId: "1001", text: "⏳ 작업 중 · 5초 경과" }]);
+  assert.deepEqual(edited, []);
+
+  await runExecutionHeartbeatOnce(ports, progress, 71_000);
+  assert.equal(sent.length, 1, "방마다 메시지는 하나여야 한다 — 매 바퀴 새로 보내면 방이 도배된다");
+  assert.deepEqual(edited, [{ chatId: "1001", messageId: "msg-1", text: "⏳ 작업 중 · 1분 10초 경과" }]);
+});
+
+test("같은 초에 두 번 돌아도 편집을 보내지 않는다", async () => {
+  // 같은 글자로 고치면 Telegram 이 거절한다. 오류를 스스로 만들 이유가 없다.
+  const edited: string[] = [];
+  const progress = new Map();
+  const ports = {
+    async listInFlightExecutions() {
+      return [{ telegramChatId: "1001", startedAtMs: 0 }];
+    },
+    async sendTypingAction() {},
+    async sendProgressMessage() { return "msg-1"; },
+    async editProgressMessage(_chatId: string, _messageId: string, text: string) { edited.push(text); }
+  };
+
+  await runExecutionHeartbeatOnce(ports, progress, 3_000);
+  await runExecutionHeartbeatOnce(ports, progress, 3_400);
+  assert.deepEqual(edited, []);
+});
+
+test("실행이 끝나면 표시를 끝났다고 못박는다", async () => {
+  // 숫자가 멈춘 채 남으면 멈춘 건지 도는 건지 알 수 없다.
+  const edited: string[] = [];
+  const progress = new Map();
+  let inFlight = [{ telegramChatId: "1001", startedAtMs: 0 }];
+  const ports = {
+    async listInFlightExecutions() { return inFlight; },
+    async sendTypingAction() {},
+    async sendProgressMessage() { return "msg-1"; },
+    async editProgressMessage(_chatId: string, _messageId: string, text: string) { edited.push(text); }
+  };
+
+  await runExecutionHeartbeatOnce(ports, progress, 1_000);
+  inFlight = [];
+  await runExecutionHeartbeatOnce(ports, progress, 9_000);
+
+  assert.deepEqual(edited, [PROGRESS_DONE_TEXT]);
+  assert.equal(progress.size, 0, "끝난 방을 들고 있으면 다음 실행이 옛 메시지를 고친다");
+});

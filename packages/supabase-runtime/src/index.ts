@@ -24,13 +24,18 @@ export type SupabaseRuntimeConfig = {
   url: string;
   serviceRoleKey: string;
   fetchImpl?: typeof fetch;
+  // 이 게이트웨이 앞으로 온 일만 리스한다. 없으면 예전처럼 전부 대상 —
+  // 텔레그램 발신 리스(bot-service)는 게이트웨이 개념이 없으므로 그대로 둔다.
+  gatewayId?: string;
 };
 
 export class SupabaseOutboxStore {
   private readonly client: SupabaseRestClient;
+  private readonly gatewayId?: string;
 
   constructor(config: SupabaseRuntimeConfig) {
     this.client = new SupabaseRestClient(config);
+    this.gatewayId = config.gatewayId;
   }
 
   async leasePending(limit: number, leaseUntil: string): Promise<OutboxRecord[]> {
@@ -132,6 +137,9 @@ export class SupabaseOutboxStore {
       target: JSON.stringify({ kind: "telegram_bot", botRole, telegramChatId }),
       payload: {
         botRole,
+        // 실행 보고는 지시가 오간 주제로 돌아간다. 이 값이 없으면 General 로 떨어져
+        // 방장은 자기가 시킨 자리에서 결과를 못 본다.
+        messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId,
         text,
         binding: { kind: "event", eventId: event.event_id },
@@ -217,6 +225,7 @@ export class SupabaseOutboxStore {
       target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
       payload: {
         botRole: "platoon_leader",
+        messageThreadId: request.telegramMessageThreadId,
         telegramChatId,
         text: "바꾼 파일이 없어 별도 검증 없이 마쳤습니다.\n완료 승인은 고정된 작업 현황판에서 결정해 주세요.",
         binding: { kind: "event", eventId: sourceEventId },
@@ -266,6 +275,7 @@ export class SupabaseOutboxStore {
       target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
       payload: {
         botRole: "platoon_leader",
+        messageThreadId: request.telegramMessageThreadId,
         telegramChatId,
         text: isAudit
           // 감사가 넘어간 것은 반드시 밝힌다. 작업자와 같은 엔진이 감사하면 독립성이
@@ -339,6 +349,7 @@ export class SupabaseOutboxStore {
         target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
         payload: {
           botRole: "platoon_leader",
+          messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           text: "요청을 작업으로 정리하지 못했습니다. 조금 더 구체적으로 다시 말씀해 주세요.",
           binding: { kind: "event", eventId: sourceEventId },
@@ -358,6 +369,7 @@ export class SupabaseOutboxStore {
         target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
         payload: {
           botRole: "platoon_leader",
+          messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           text: maskSensitiveText(decision.text).slice(0, 3000),
           binding: { kind: "event", eventId: sourceEventId },
@@ -383,6 +395,7 @@ export class SupabaseOutboxStore {
         target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
         payload: {
           botRole: "platoon_leader",
+          messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           text: maskSensitiveText(decision.reason || "알겠습니다.").slice(0, 500),
           binding: { kind: "event", eventId: sourceEventId },
@@ -426,6 +439,7 @@ export class SupabaseOutboxStore {
       target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
       payload: {
         botRole: "platoon_leader",
+        messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId,
         text: renderLeaderPlanMessage(plan),
         keyboard: buildProposalKeyboard(proposalId),
@@ -518,6 +532,7 @@ export class SupabaseOutboxStore {
       target: JSON.stringify({ kind: "telegram_bot", botRole: "auditor", telegramChatId }),
       payload: {
         botRole: "auditor",
+        messageThreadId: request.telegramMessageThreadId,
         telegramChatId,
         text: [
           `${engineActorName(request.adapterType)} 감사가 판정 없이 끝났습니다.`,
@@ -580,6 +595,7 @@ export class SupabaseOutboxStore {
         target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
         payload: {
           botRole: "platoon_leader",
+          messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           // 결정 버튼은 방에 붙이지 않는다 — 완료·보완 결정은 작업 현황판이 맡는다.
           // 이 상태(completion_approval_pending·commander_completion_pending)는
@@ -653,6 +669,7 @@ export class SupabaseOutboxStore {
       target: JSON.stringify({ kind: "telegram_bot", botRole: assigneeBotRole, telegramChatId }),
       payload: {
         botRole: assigneeBotRole,
+        messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId,
         text: renderRevisionRequestText(taskId, requiredFixes, reverifyScope),
         binding: { kind: "task", taskId },
@@ -777,7 +794,11 @@ export class SupabaseOutboxStore {
     const rows = await this.client.rpc<OutboxRow[]>("lease_huai_outbox", {
       p_limit: limit,
       p_locked_until: leaseUntil,
-      p_target_kind: targetKind
+      p_target_kind: targetKind,
+      // 방마다 게이트웨이를 하나씩 띄우자 서로 남의 일을 집어갔다. 집어간 쪽은 그 폴더를
+      // 허용하지 않으니 project-path-not-allowed 로 실패시켰고, 방에는 "작업 실행 실패"가
+      // 떴다 — 실패한 게 아니라 받는 사람이 아닌 자가 뜯어본 것이다.
+      ...(targetKind === "local_gateway" && this.gatewayId ? { p_gateway_id: this.gatewayId } : {})
     });
     return rows.map(toOutboxRecord);
   }

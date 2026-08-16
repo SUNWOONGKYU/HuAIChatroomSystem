@@ -121,6 +121,54 @@ export function handleTelegramInput(
   context: RoomAuthorizationContext,
   ports: TelegramInputHandlingPorts
 ): TelegramInputHandlingResult {
+  // 답은 물어본 자리로 돌아가야 한다.
+  //
+  // 포럼 그룹에서는 주제(topic)마다 대화가 따로 흐른다. 주제 번호를 안 실으면 답이 전부
+  // General 로 떨어져, 방장이 지시한 주제에는 아무 반응이 없는 것처럼 보인다.
+  //
+  // 여기서 한 번에 얹는 이유: 아웃박스를 만드는 자리가 서른 곳 가까이 되고, 새 메시지를
+  // 추가할 때마다 사람이 기억해서 붙여야 한다면 언젠가는 빠뜨린다. 그리고 빠뜨린 티가
+  // 안 난다 — 메시지는 나가는데 엉뚱한 주제에 뜰 뿐이다.
+  return attachMessageThread(routeTelegramInput(input, context, ports), input.envelope.messageThreadId);
+}
+
+function attachMessageThread(
+  result: TelegramInputHandlingResult,
+  messageThreadId: string | undefined
+): TelegramInputHandlingResult {
+  if (!messageThreadId || !result.accepted) return result;
+  return {
+    ...result,
+    outbox: result.outbox.map((item) => {
+      if (item.target.kind === "telegram_bot") {
+        // 이미 실어둔 값이 있으면 그것을 쓰고, 없을 때만 채운다.
+        // 순서를 반대로 쓰면 payload 에 있는 messageThreadId: undefined 가 이 값을 덮는다 —
+        // 라이브에서 "작업을 시작했습니다" 한 줄만 General 로 떨어진 게 그 때문이었다.
+        return { ...item, payload: { ...item.payload, messageThreadId: item.payload.messageThreadId ?? messageThreadId } };
+      }
+      // 게이트웨이로 가는 실행 요청에도 실어 둔다. 실행 보고·감사 결과는 몇 분 뒤에
+      // 나가는데, 그때는 이 대화가 어느 주제에서 시작됐는지 알 길이 요청밖에 없다.
+      const executionRequest = item.payload.executionRequest as ExecutionRequest | undefined;
+      if (!executionRequest) return item;
+      return {
+        ...item,
+        payload: {
+          ...item.payload,
+          executionRequest: {
+            ...executionRequest,
+            telegramMessageThreadId: executionRequest.telegramMessageThreadId ?? messageThreadId
+          }
+        }
+      };
+    })
+  };
+}
+
+function routeTelegramInput(
+  input: NormalizedTelegramInput,
+  context: RoomAuthorizationContext,
+  ports: TelegramInputHandlingPorts
+): TelegramInputHandlingResult {
   const authorization = authorizeTelegramInput(input, context);
   if (!authorization.allowed) {
     return { accepted: false, authorization };
@@ -589,6 +637,8 @@ function buildExecutionNotConfiguredOutbox(input: {
 function makeRoleMessageOutbox(input: {
   botRole: TelegramBotRole;
   telegramChatId: string;
+  // 포럼 주제 번호. 안 실으면 답이 General 로 떨어져 지시한 주제는 조용해 보인다.
+  messageThreadId?: string;
   idempotencyKey: string;
   text: string;
   bindingId: string;
@@ -604,6 +654,7 @@ function makeRoleMessageOutbox(input: {
       keyboard: input.keyboard,
       callbackQueryId: input.callbackQueryId,
       editMessageId: input.editMessageId,
+      messageThreadId: input.messageThreadId,
       binding: { kind: "event", eventId: input.bindingId }
     }
   };
@@ -635,6 +686,7 @@ function makeCallbackAcknowledgedEdit(input: {
     makeRoleMessageOutbox({
       botRole: input.botRole,
       telegramChatId: input.envelope.telegramChatId,
+      messageThreadId: input.envelope.messageThreadId,
       idempotencyKey: `telegram:${input.kind}-ack:${input.entityId}:${input.envelope.updateId}`,
       text: input.text,
       editMessageId,

@@ -155,3 +155,37 @@ test("defers local gateway rows while blocking task dependencies are unfinished"
   assert.equal(calls.requests[3]?.body.status, "retry_pending");
   assert.equal(calls.requests[3]?.body.last_error, "waiting-dependencies");
 });
+// 라이브 결함 회귀 — 방마다 게이트웨이를 하나씩 띄우자 서로 남의 일을 집어갔다.
+// 개발방 작업을 상증세법·DCF 게이트웨이가 먼저 집고 project-path-not-allowed 로 실패시켰다.
+test("게이트웨이는 자기 앞으로 온 행만 리스한다", async () => {
+  const bodies: any[] = [];
+  const fetchImpl: typeof fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")));
+    return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const store = new LocalGatewaySupabaseOutboxStore({
+    url: "https://example.supabase.co",
+    serviceRoleKey: "k",
+    fetchImpl,
+    gatewayId: "16e2c574-3acb-45c0-a86b-0efd1f492b2d"
+  });
+
+  await store.leasePendingLocalGateway(5, "2026-08-16T00:00:00.000Z");
+
+  assert.equal(bodies[0].p_gateway_id, "16e2c574-3acb-45c0-a86b-0efd1f492b2d");
+  assert.equal(bodies[0].p_target_kind, "local_gateway");
+});
+
+test("게이트웨이 지정이 없으면 예전처럼 전부 대상", async () => {
+  // bot-service 의 텔레그램 발신 리스에는 게이트웨이 개념이 없다. 조건을 걸면 안 된다.
+  const bodies: any[] = [];
+  const fetchImpl: typeof fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")));
+    return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const store = new LocalGatewaySupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "k", fetchImpl });
+
+  await store.leasePendingLocalGateway(5, "2026-08-16T00:00:00.000Z");
+
+  assert.equal("p_gateway_id" in bodies[0], false);
+});

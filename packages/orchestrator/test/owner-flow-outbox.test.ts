@@ -761,3 +761,65 @@ test("명령으로 승인하면 고칠 메시지가 없으므로 편집을 만�
   const edits = result.accepted ? result.outbox.filter((item) => item.payload.editMessageId !== undefined) : [];
   assert.deepEqual(edits, []);
 });
+
+// 라이브 결함 회귀 — 포럼 그룹의 "달걀 깨기 게임" 주제에서 지시했는데 그 주제에는 아무
+// 반응이 없었다. 답이 전부 General 로 떨어졌기 때문이다. 방장은 봇이 죽은 줄 알았다.
+test("포럼 주제에서 온 지시는 답도 그 주제로 간다", () => {
+  const forumEnvelope = envelope("@leader_chatroom_bot 달걀 깨기 게임 만들어줘");
+  (forumEnvelope as any).messageThreadId = "613";
+  const result = handleTelegramInput({ kind: "message", envelope: forumEnvelope } as any, ownerContext(), ports());
+
+  assert.equal(result.accepted, true);
+  const telegramItems = result.accepted ? result.outbox.filter((item) => item.target.kind === "telegram_bot") : [];
+  assert.equal(telegramItems.length > 0, true, "방으로 나가는 메시지가 없다");
+  for (const item of telegramItems) {
+    assert.equal(item.payload.messageThreadId, "613", "주제 번호가 빠지면 General 로 떨어진다");
+  }
+});
+
+test("실행 요청에도 주제를 실어 나중 보고가 같은 자리로 돌아온다", () => {
+  // 실행 보고·감사 결과는 몇 분 뒤에 나간다. 그때는 요청 말고 주제를 알 길이 없다.
+  const forumEnvelope = envelope(undefined, "task:task-1:approve");
+  (forumEnvelope as any).messageThreadId = "613";
+  const result = handleTelegramInput(
+    { kind: "callback", envelope: forumEnvelope, callback: { entity: "task", entityId: "task-1", action: "approve" } } as any,
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const gateway = result.accepted ? result.outbox.find((item) => item.target.kind === "local_gateway") : undefined;
+  assert.ok(gateway, "게이트웨이로 가는 실행 요청이 없다");
+  assert.equal((gateway.payload.executionRequest as any).telegramMessageThreadId, "613");
+});
+
+test("주제가 없는 일반 그룹은 그대로 둔다", () => {
+  // General 주제나 포럼이 아닌 그룹에는 이 값이 아예 없다. 빈 값을 실어 보내면 안 된다.
+  const result = handleTelegramInput({ kind: "message", envelope: envelope("@leader_chatroom_bot 뭐 좀 해줘") } as any, ownerContext(), ports());
+
+  assert.equal(result.accepted, true);
+  const telegramItems = result.accepted ? result.outbox.filter((item) => item.target.kind === "telegram_bot") : [];
+  for (const item of telegramItems) {
+    assert.equal(item.payload.messageThreadId, undefined);
+  }
+});
+
+// 라이브 결함 회귀 — 승인 후 나가는 메시지 중 "작업을 시작했습니다" 한 줄만 General 로
+// 떨어졌다. 그 메시지를 만드는 자리가 messageThreadId 키를 undefined 로 이미 갖고 있었고,
+// 주입이 그 뒤에 펼쳐지면서 값이 undefined 로 덮였다.
+test("승인 후 나가는 메시지가 하나도 빠짐없이 같은 주제로 간다", () => {
+  const forumEnvelope = envelope(undefined, "task:task-1:approve");
+  (forumEnvelope as any).messageThreadId = "613";
+  const result = handleTelegramInput(
+    { kind: "callback", envelope: forumEnvelope, callback: { entity: "task", entityId: "task-1", action: "approve" } } as any,
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const telegramItems = result.accepted ? result.outbox.filter((item) => item.target.kind === "telegram_bot") : [];
+  assert.equal(telegramItems.length >= 2, true, "승인 경로는 편집과 새 메시지를 함께 낸다");
+  for (const item of telegramItems) {
+    assert.equal(item.payload.messageThreadId, "613", `주제가 빠진 메시지: ${item.idempotencyKey}`);
+  }
+});

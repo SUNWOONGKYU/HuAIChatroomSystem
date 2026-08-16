@@ -137,6 +137,8 @@ export type TelegramUpdate = {
   update_id: number | string;
   message?: {
     message_id: number | string;
+    // 포럼 그룹에서만 붙는다. 주제(topic) 하나가 이 번호 하나다.
+    message_thread_id?: number | string;
     chat: { id: number | string };
     from?: { id: number | string; is_bot?: boolean; username?: string };
     text?: string;
@@ -159,6 +161,7 @@ export type TelegramUpdate = {
     from: { id: number | string; username?: string };
     message?: {
       message_id: number | string;
+      message_thread_id?: number | string;
       chat: { id: number | string };
     };
     data?: string;
@@ -183,7 +186,11 @@ export class TelegramUpdateEnvelope {
     public readonly attachmentKinds: readonly string[] = [],
     // 답장 대상 메시지를 보낸 봇의 username. 사람 메시지에 답장했으면 undefined.
     // "누구에게 답장했는가"를 알아야 그 봇에게 한 말인지 판정할 수 있다.
-    public readonly replyToBotUsername: string | undefined = undefined
+    public readonly replyToBotUsername: string | undefined = undefined,
+    // 포럼 그룹의 주제(topic) 번호. 방장이 "달걀 깨기 게임" 주제에서 말을 걸면 답도 그
+    // 주제로 가야 한다. 이 값 없이 보내면 전부 General 로 떨어져, 지시한 자리에는 아무
+    // 반응이 없는 것처럼 보인다(라이브에서 실제로 그렇게 보였다).
+    public readonly messageThreadId: string | undefined = undefined
   ) {}
 
   static parse(
@@ -225,7 +232,9 @@ export class TelegramUpdateEnvelope {
       replyToMessage?.message_id === undefined ? undefined : String(replyToMessage.message_id),
       replyToText,
       attachmentKinds,
-      replyToBotUsername
+      replyToBotUsername,
+      // General 주제의 메시지에는 이 값이 없다. 없으면 없는 채로 보내는 것이 맞다.
+      message?.message_thread_id === undefined ? undefined : String(message.message_thread_id)
     );
   }
 }
@@ -342,6 +351,9 @@ export type ExecutionRequest = {
   resumeSessionId?: string;
   // 역할별 모델 지정. 소대장 판단은 실행보다 상위 모델이 필요할 수 있다.
   model?: string;
+  // 방장이 말을 건 포럼 주제. 실행 보고·감사 결과가 몇 분 뒤에 나가도 같은 주제로
+  // 돌아가야 하므로, 방 정보가 아니라 이 요청을 따라다닌다.
+  telegramMessageThreadId?: string;
   // 이 요청이 감사할 작업을 실제로 한 엔진. 감사 요청에만 채운다.
   //
   // 감사가 사용 한도에 걸려 다른 엔진으로 넘길 때, 하필 작업자 엔진으로 넘기면
@@ -366,7 +378,8 @@ export function assertExecutionRequestPayload(value: unknown): ExecutionRequest 
     typeof request.createdAt !== "string" ||
     Number.isNaN(Date.parse(request.createdAt)) ||
     (request.reportBotRole !== undefined && !["platoon_leader", "claude_leader", "codex_leader", "auditor"].includes(request.reportBotRole)) ||
-    (request.workerAdapterType !== undefined && !isAiAdapterType(request.workerAdapterType))
+    (request.workerAdapterType !== undefined && !isAiAdapterType(request.workerAdapterType)) ||
+    (request.telegramMessageThreadId !== undefined && typeof request.telegramMessageThreadId !== "string")
   ) {
     throw new Error("invalid-execution-request-payload");
   }
@@ -435,6 +448,8 @@ export type OutboxTarget =
 export type OutboundBotMessage = {
   botRole: TelegramBotRole;
   telegramChatId: string;
+  // 포럼 주제 번호. 들어온 주제로 되돌려 보내기 위해 대화 전 구간을 따라다닌다.
+  messageThreadId?: string;
   text: string;
   replyToMessageId?: string;
   editMessageId?: string;
@@ -461,6 +476,8 @@ export type OutboxRecord = {
 export type TelegramSendMessageRequest = {
   botRole: TelegramBotRole;
   telegramChatId: string;
+  // 포럼 주제 번호. 새 메시지에만 필요하다 — 편집은 이미 그 주제에 있는 메시지를 고친다.
+  messageThreadId?: string;
   text: string;
   replyToMessageId?: string;
   keyboard?: unknown;
