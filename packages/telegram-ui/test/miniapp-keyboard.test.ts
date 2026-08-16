@@ -4,7 +4,7 @@
 // 버튼으로 t.me 딥링크(core.telegram.org/bots/webapps, "Direct Link Mini App")를 연다.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildMiniAppDirectLink, buildMiniAppOpenKeyboard } from "../src/index.js";
+import { buildMiniAppDirectLink, buildMiniAppOpenKeyboard, parseMiniAppStartParam } from "../src/index.js";
 
 test("buildMiniAppDirectLink 는 베이스 링크에 ?startapp=<roomId> 를 붙인다", () => {
   const link = buildMiniAppDirectLink("https://t.me/leader_chatroom_bot/board", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
@@ -45,4 +45,32 @@ test("생성된 링크는 https 다", () => {
   const keyboard = buildMiniAppOpenKeyboard({ directLinkBaseUrl: "https://t.me/leader_chatroom_bot/board", roomId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   const url = keyboard.inline_keyboard[0]?.[0]?.url ?? "";
   assert.match(url, /^https:\/\//);
+});
+
+// 방장 요청 — 방 하나 안에서 주제를 갈라 쓰는데 현황판이 방 전체를 보여주면 주제를 나눈
+// 의미가 없다. 주제마다 고정한 현황판은 그 주제 작업만 열어야 한다.
+test("현황판 링크에 주제를 실어 보낸다", () => {
+  const link = buildMiniAppDirectLink("https://t.me/leader_chatroom_bot/board", "9a477b32-15ed-46e3-b575-9488ff09efb6", "613");
+
+  assert.match(link, /startapp=9a477b32-15ed-46e3-b575-9488ff09efb6__t613$/);
+  // Telegram Deep Linking 규격: [A-Za-z0-9_-] 1-64자.
+  const startParam = link.split("startapp=")[1] ?? "";
+  assert.equal(startParam.length <= 64, true, `startapp 이 64자를 넘었다: ${startParam.length}`);
+  assert.match(startParam, /^[A-Za-z0-9_-]+$/);
+});
+
+test("주제가 없으면 예전 그대로 방 전체를 연다", () => {
+  const link = buildMiniAppDirectLink("https://t.me/leader_chatroom_bot/board", "9a477b32-15ed-46e3-b575-9488ff09efb6");
+
+  assert.match(link, /startapp=9a477b32-15ed-46e3-b575-9488ff09efb6$/);
+});
+
+test("실어 보낸 주제를 되돌려 읽는다", () => {
+  assert.deepEqual(parseMiniAppStartParam("9a477b32-15ed-46e3-b575-9488ff09efb6__t613"), {
+    roomId: "9a477b32-15ed-46e3-b575-9488ff09efb6",
+    messageThreadId: "613"
+  });
+  assert.deepEqual(parseMiniAppStartParam("9a477b32-15ed-46e3-b575-9488ff09efb6"), {
+    roomId: "9a477b32-15ed-46e3-b575-9488ff09efb6"
+  });
 });

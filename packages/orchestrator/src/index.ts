@@ -222,6 +222,8 @@ export function createProposalFromTelegram(
     payload: {
       proposalId,
       telegramChatId: input.envelope.telegramChatId,
+      // 이 작업이 어느 주제에서 시작됐는지. 현황판을 주제별로 가르는 근거가 된다.
+      messageThreadId: input.envelope.messageThreadId,
       telegramUserId: input.envelope.telegramUserId,
       sourceMessageId: input.envelope.telegramMessageId,
       title,

@@ -418,6 +418,9 @@ export class SupabaseOutboxStore {
       idempotency_key: "leader-proposal:" + input.request.attemptId,
       payload: {
         proposalId,
+        // 소대장 판단은 방장이 말을 건 주제에서 시작됐다. 그 주제를 여기서 놓치면
+        // 승인 뒤 만들어지는 작업이 어느 주제 것인지 알 길이 없어진다.
+        messageThreadId: input.request.telegramMessageThreadId,
         title: plan.title,
         purpose: plan.purpose,
         scope: plan.scope,

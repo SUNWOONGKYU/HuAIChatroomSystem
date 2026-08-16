@@ -167,6 +167,8 @@ create table if not exists huai_tasks (
   purpose text not null,
   scope text not null,
   completion_criteria text not null,
+  -- 이 작업이 시작된 포럼 주제. 없으면 주제 없이 만들어진 작업이다(일반 그룹/General).
+  telegram_message_thread_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint huai_tasks_status_check check (status in ('proposal_pending', 'proposal_revision_requested', 'proposal_rejected', 'scheduled', 'waiting_dependencies', 'queued_for_gateway', 'in_progress', 'mid_approval_pending', 'paused_by_owner', 'verification_pending', 'verification_in_progress', 'revision_requested', 'revision_in_progress', 'reverification_pending', 'commander_completion_pending', 'completion_approval_pending', 'owner_supplement_requested', 'completed', 'cancel_requested', 'cancelled', 'failed_retryable', 'blocked', 'rejected_or_cancelled'))

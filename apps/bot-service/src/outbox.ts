@@ -39,13 +39,15 @@ export type TelegramMessageSender = {
   answerCallbackQuery?(request: { botRole: TelegramBotRole; callbackQueryId: string; text?: string }): Promise<TelegramSendResult>;
   // 실행이 도는 동안 방 상단에 "…이 입력 중" 을 띄운다. 봇이 낼 수 있는 유일한 움직이는 신호다.
   sendChatAction?(request: { botRole: TelegramBotRole; telegramChatId: string; action: "typing" }): Promise<void>;
+  // 포럼 그룹은 주제마다 고정 바가 따로다. 현황판은 주제 안에서 고정돼야 그 주제에서 보인다.
+  pinMessage?(request: { botRole: TelegramBotRole; telegramChatId: string; telegramMessageId: string }): Promise<void>;
 };
 
 export type TelegramBotTokenResolver = {
   resolveBotToken(botRole: TelegramBotRole): Promise<string>;
 };
 
-type GrammyApiLike = Pick<Api, "sendMessage" | "editMessageText" | "answerCallbackQuery">;
+type GrammyApiLike = Pick<Api, "sendMessage" | "editMessageText" | "answerCallbackQuery" | "pinChatMessage">;
 
 export function createTelegramGrammySender(input: {
   tokenResolver: TelegramBotTokenResolver;
@@ -80,6 +82,15 @@ export function createTelegramGrammySender(input: {
         }
       }
       return result ?? { telegramMessageId: "" };
+    },
+    async pinMessage(request) {
+      const api = await resolveApi(request.botRole);
+      try {
+        // 고정 알림까지 울리면 주제마다 한 번씩 방이 시끄럽다.
+        await api.pinChatMessage(request.telegramChatId, numericMessageId(request.telegramMessageId), { disable_notification: true });
+      } catch (error) {
+        throw normalizeTelegramError(error);
+      }
     },
     async editMessageText(request) {
       const chunks = splitTelegramText(request.text);
@@ -184,6 +195,14 @@ export function createTelegramFetchSender(input: {
     async editMessageText(request) {
       return editTelegramTextChunks(fetchImpl, input.tokenResolver, request, timeoutMs);
     },
+    async pinMessage(request) {
+      await callTelegramApi(fetchImpl, input.tokenResolver, request.botRole, "pinChatMessage", {
+        chat_id: request.telegramChatId,
+        message_id: request.telegramMessageId,
+        // 고정 알림까지 울리면 주제마다 한 번씩 방이 시끄럽다.
+        disable_notification: true
+      }, timeoutMs);
+    },
     async answerCallbackQuery(request) {
       return callTelegramApi(fetchImpl, input.tokenResolver, request.botRole, "answerCallbackQuery", {
         callback_query_id: request.callbackQueryId,
@@ -241,7 +260,7 @@ async function sendTelegramOutbox(row: OutboxRecord, sender: TelegramMessageSend
     });
   }
 
-  return sender.sendMessage({
+  const sent = await sender.sendMessage({
     botRole: row.target.botRole,
     telegramChatId: row.target.telegramChatId,
     // 포럼 그룹에서는 이 값이 있어야 지시가 오간 주제로 답이 간다.
@@ -250,6 +269,22 @@ async function sendTelegramOutbox(row: OutboxRecord, sender: TelegramMessageSend
     replyToMessageId,
     keyboard
   });
+
+  // 고정까지가 이 메시지의 목적인 경우가 있다(작업 현황판). 고정에 실패해도 메시지는
+  // 이미 나갔으므로 발신 자체를 실패로 되돌리지 않는다 — 재시도하면 같은 글이 또 올라간다.
+  if (row.payload.pinMessage === true && sender.pinMessage && sent.telegramMessageId) {
+    try {
+      await sender.pinMessage({
+        botRole: row.target.botRole,
+        telegramChatId: row.target.telegramChatId,
+        telegramMessageId: sent.telegramMessageId
+      });
+    } catch (error) {
+      console.error(`telegram-pin-failed:${maskSensitiveText(String(error).slice(0, 200))}`);
+    }
+  }
+
+  return sent;
 }
 
 async function sendTelegramTextChunks(
@@ -316,7 +351,7 @@ async function callTelegramApi(
   fetchImpl: typeof fetch,
   tokenResolver: TelegramBotTokenResolver,
   botRole: TelegramBotRole,
-  method: "sendMessage" | "editMessageText" | "answerCallbackQuery",
+  method: "sendMessage" | "editMessageText" | "answerCallbackQuery" | "pinChatMessage",
   body: Record<string, unknown>,
   timeoutMs: number
 ): Promise<TelegramSendResult> {

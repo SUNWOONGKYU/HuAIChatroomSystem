@@ -36,6 +36,43 @@ function seededClient() {
   });
 }
 
+// 방장 요청 — 방 하나 안에서 주제를 갈라 쓰는데 현황판이 방 전체를 보여주면 주제를 나눈
+// 의미가 없다. 주제마다 고정한 현황판은 그 주제 작업만 열어야 한다.
+function topicSeededClient() {
+  return new FakeSupabaseClient({
+    huai_tasks: [
+      taskRow({ task_id: "task-egg", room_id: "room-A", title: "달걀 게임", telegram_message_thread_id: "613" } as never),
+      taskRow({ task_id: "task-sys", room_id: "room-A", title: "시스템 구현", telegram_message_thread_id: "42" } as never),
+      taskRow({ task_id: "task-general", room_id: "room-A", title: "주제 없음" })
+    ]
+  });
+}
+
+test("주제를 지정하면 그 주제 작업만 나온다", async () => {
+  const deps = buildDepsFromClient(topicSeededClient());
+  const result = await deps.fetchTasksForRoom("room-A", "613");
+  assert.deepEqual((result.data ?? []).map((t) => t.task_id), ["task-egg"]);
+});
+
+test("주제를 안 주면 방 전체가 나온다 — 일반 그룹·General 현황판이 그렇다", async () => {
+  const deps = buildDepsFromClient(topicSeededClient());
+  const result = await deps.fetchTasksForRoom("room-A");
+  assert.deepEqual((result.data ?? []).map((t) => t.task_id).sort(), ["task-egg", "task-general", "task-sys"]);
+});
+
+test("주제 번호가 같아도 다른 방 작업은 안 섞인다", async () => {
+  // 주제 번호는 방마다 새로 매겨진다. 주제만으로 거르면 남의 방 작업이 딸려 나온다.
+  const client = new FakeSupabaseClient({
+    huai_tasks: [
+      taskRow({ task_id: "task-a", room_id: "room-A", telegram_message_thread_id: "613" } as never),
+      taskRow({ task_id: "task-b", room_id: "room-B", telegram_message_thread_id: "613" } as never)
+    ]
+  });
+  const deps = buildDepsFromClient(client);
+  const result = await deps.fetchTasksForRoom("room-A", "613");
+  assert.deepEqual((result.data ?? []).map((t) => t.task_id), ["task-a"]);
+});
+
 test("fetchTasksForRoom(room-A) — room-B 작업이 절대 섞이지 않는다", async () => {
   const deps = buildDepsFromClient(seededClient());
   const result = await deps.fetchTasksForRoom("room-A");
@@ -91,4 +128,23 @@ test("E2E — GET ?roomId=room-B 응답에는 room-B 작업만 있고 room-A 작
   assert.deepEqual(taskIds, ["task-b1"]);
   assert.equal(taskIds.includes("task-a1"), false);
   assert.equal(taskIds.includes("task-a2"), false);
+});
+
+// 페이지 배포가 늦어 옛 화면을 보고 있는 사용자를 위해, roomId 에 주제가 통째로 실려 와도
+// 서버에서 갈라 읽는다. 안 그러면 현황판이 빈 화면이 되고 원인이 화면에 안 보인다.
+test("roomId 에 주제가 붙어 와도 방과 주제를 갈라 읽는다", async () => {
+  const client = new FakeSupabaseClient({
+    huai_tasks: [
+      taskRow({ task_id: "task-egg", room_id: "room-A", telegram_message_thread_id: "613" } as never),
+      taskRow({ task_id: "task-sys", room_id: "room-A", telegram_message_thread_id: "42" } as never)
+    ]
+  });
+  const response = await handleMiniappTasksRequest(
+    req("https://example.test/miniapp-tasks?roomId=room-A__t613"),
+    { ...fakeAuthDeps(), ...buildDepsFromClient(client) }
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.tasks.map((task: { taskId: string }) => task.taskId), ["task-egg"]);
 });

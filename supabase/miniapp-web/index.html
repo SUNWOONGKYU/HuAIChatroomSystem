@@ -466,7 +466,22 @@
     return qs.get("room") || qs.get("roomId") || qs.get("tgWebAppStartParam") ||
       (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || "";
   }
-  var roomId = resolveRoomId(qs, tg);
+
+  // 포럼 주제까지 실린 시작 파라미터를 가른다: "<roomId>__t<주제번호>".
+  //
+  // 방 하나 안에서 주제를 갈라 쓰면 작업 흐름도 갈린다. 주제마다 고정한 현황판이 방의
+  // 모든 작업을 보여주면 주제를 나눈 의미가 없어진다. 구분자가 없으면 예전처럼 방 전체다.
+  // resolve-room-id.test.mjs 가 이 함수 정의 텍스트를 파일에서 그대로 읽어 실행 검증한다.
+  function parseStartParam(raw) {
+    var value = String(raw || "");
+    var index = value.indexOf("__t");
+    if (index < 0) return { roomId: value, messageThreadId: "" };
+    return { roomId: value.slice(0, index), messageThreadId: value.slice(index + 3) };
+  }
+  var startParam = parseStartParam(resolveRoomId(qs, tg));
+  var roomId = startParam.roomId;
+  var messageThreadId = qs.get("threadId") || startParam.messageThreadId;
+  var threadQuery = messageThreadId ? "&threadId=" + encodeURIComponent(messageThreadId) : "";
 
   if (tg) {
     tg.ready();
@@ -559,7 +574,7 @@
       return;
     }
     if (!isBackground) showState("불러오는 중…");
-    apiFetch("/miniapp-tasks?roomId=" + encodeURIComponent(roomId), { method: "GET" })
+    apiFetch("/miniapp-tasks?roomId=" + encodeURIComponent(roomId) + threadQuery, { method: "GET" })
       .then(function (data) {
         stateEl.style.display = "none";
         tabsEl.hidden = false;

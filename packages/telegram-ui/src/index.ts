@@ -87,15 +87,36 @@ export type MiniAppOpenKeyboard = {
 // gen_random_uuid() 로 만든 표준 UUID(36자, 0-9/a-f/하이픈)라 이 문자 집합에 이미
 // 들어간다 — 별도 인코딩 없이 그대로 실어도 안전하다(encodeURIComponent 는 방어적으로
 // 한 번 더 씌우지만 이 문자들엔 아무것도 안 한다).
-export function buildMiniAppDirectLink(directLinkBaseUrl: string, roomId: string): string {
+export function buildMiniAppDirectLink(directLinkBaseUrl: string, roomId: string, messageThreadId?: string): string {
   const separator = directLinkBaseUrl.includes("?") ? "&" : "?";
-  return `${directLinkBaseUrl}${separator}startapp=${encodeURIComponent(roomId)}`;
+  return `${directLinkBaseUrl}${separator}startapp=${encodeURIComponent(buildMiniAppStartParam(roomId, messageThreadId))}`;
 }
 
-export function buildMiniAppOpenKeyboard(input: { directLinkBaseUrl: string; roomId: string }): MiniAppOpenKeyboard {
+// 포럼 주제까지 실어 보낸다 — 주제마다 고정한 현황판은 그 주제 작업만 보여야 한다.
+//
+// startapp 은 [A-Za-z0-9_-] 1-64자만 허용한다(Telegram Deep Linking 규격). UUID 36자 +
+// 구분자 2자 + 주제 번호(현실적으로 10자 이하)라 한계 안에 든다. 구분자를 밑줄 두 개로
+// 두는 이유는 UUID 에 밑줄이 없어서 되돌릴 때 애매해지지 않기 때문이다.
+export const MINIAPP_THREAD_SEPARATOR = "__t";
+
+export function buildMiniAppStartParam(roomId: string, messageThreadId?: string): string {
+  if (!messageThreadId) return roomId;
+  return `${roomId}${MINIAPP_THREAD_SEPARATOR}${messageThreadId}`;
+}
+
+export function parseMiniAppStartParam(startParam: string): { roomId: string; messageThreadId?: string } {
+  const index = startParam.indexOf(MINIAPP_THREAD_SEPARATOR);
+  if (index < 0) return { roomId: startParam };
+  return {
+    roomId: startParam.slice(0, index),
+    messageThreadId: startParam.slice(index + MINIAPP_THREAD_SEPARATOR.length) || undefined
+  };
+}
+
+export function buildMiniAppOpenKeyboard(input: { directLinkBaseUrl: string; roomId: string; messageThreadId?: string }): MiniAppOpenKeyboard {
   return {
     inline_keyboard: [
-      [{ text: "작업 현황판 열기", url: buildMiniAppDirectLink(input.directLinkBaseUrl, input.roomId) }]
+      [{ text: "작업 현황판 열기", url: buildMiniAppDirectLink(input.directLinkBaseUrl, input.roomId, input.messageThreadId) }]
     ]
   };
 }

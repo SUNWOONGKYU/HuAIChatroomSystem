@@ -538,3 +538,59 @@ test("room facts(소대장 판단 프롬프트)는 작업 상태를 raw 값이 �
   assert.match(prompt, /중간 승인 대기/, "사람이 읽는 라벨이 나와야 한다");
   assert.equal(prompt.includes("mid_approval_pending"), false, "raw snake_case 가 프롬프트에 새면 안 된다");
 });
+
+// 방장 제기 — 포럼 그룹은 주제마다 고정 바가 따로라, 그룹에 하나 고정해 둔 작업 현황판이
+// 다른 주제에서는 보이지 않았다. 그 주제에서 일을 시키고도 결과를 확인할 창구가 없었다.
+test("주제로 나가는 메시지가 있으면 그 주제에 현황판을 올려 고정한다", async () => {
+  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, [])]);
+  const store = new SupabaseBotServiceStore({
+    url: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key-for-test",
+    fetchImpl: calls.fetchImpl,
+    miniAppDirectLinkBaseUrl: "https://t.me/leader_chatroom_bot/board"
+  });
+
+  await store.commitTelegramInputResult(
+    makeOutboxCommit("telegram:something:1", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
+      botRole: "platoon_leader",
+      telegramChatId: "1001",
+      messageThreadId: "613",
+      text: "📥 접수했습니다."
+    })
+  );
+
+  const inserted = calls.requests
+    .filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url))
+    .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
+  const board = inserted.find((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:topic-board:"));
+
+  assert.ok(board, "그 주제에 현황판이 올라가지 않았다");
+  assert.equal(board.payload.messageThreadId, "613", "현황판이 다른 주제에 올라가면 소용이 없다");
+  assert.equal(board.payload.pinMessage, true, "고정하지 않으면 대화에 밀려 사라진다");
+  assert.match(JSON.stringify(board.payload.keyboard), /startapp=/, "현황판을 여는 버튼이 없다");
+});
+
+test("주제 없는 그룹에는 현황판을 따로 올리지 않는다", async () => {
+  // 일반 그룹은 고정 바가 하나라 이미 고정해 둔 것으로 충분하다.
+  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, [])]);
+  const store = new SupabaseBotServiceStore({
+    url: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key-for-test",
+    fetchImpl: calls.fetchImpl,
+    miniAppDirectLinkBaseUrl: "https://t.me/leader_chatroom_bot/board"
+  });
+
+  await store.commitTelegramInputResult(
+    makeOutboxCommit("telegram:something:2", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
+      botRole: "platoon_leader",
+      telegramChatId: "1001",
+      text: "📥 접수했습니다."
+    })
+  );
+
+  const inserted = calls.requests
+    .filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url))
+    .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
+
+  assert.equal(inserted.some((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:topic-board:")), false);
+});

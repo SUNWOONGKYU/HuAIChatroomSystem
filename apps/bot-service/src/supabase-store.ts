@@ -38,6 +38,23 @@ export type SupabaseStoreConfig = {
   miniAppDirectLinkBaseUrl?: string;
 };
 
+// 고정 메시지 본문. 목록을 싣지 않는다 — 고정해두면 만들어진 시점의 목록이 박제되고,
+// 최신 상태는 버튼을 눌러야 보인다(scripts/pin-room-board-message.mjs 와 같은 이유).
+export const TOPIC_BOARD_MESSAGE_TEXT = "📋 작업 현황판 — 이 주제의 작업과 승인 대기를 한 화면에서 봅니다.";
+
+function optionalPayloadString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function outboxTargetChatId(target: string): string | undefined {
+  try {
+    const parsed = JSON.parse(target) as { telegramChatId?: unknown };
+    return optionalPayloadString(parsed.telegramChatId);
+  } catch {
+    return undefined;
+  }
+}
+
 export class SupabaseBotServiceStore implements OrchestratorPersistencePort, OutboxDispatcherStore {
   private readonly client: SupabaseRestClient;
   // chat_id -> room_id. huai_rooms.telegram_chat_id 는 unique not null 이고 실질 불변이라
@@ -150,7 +167,8 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows, roomId);
     const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows, roomId);
     const hydratedOutboxRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
-    const insertedOutbox = await this.insertOutboxRowsIdempotently(hydratedOutboxRows);
+    const withTopicBoard = this.withTopicBoardPin(hydratedOutboxRows, roomId);
+    const insertedOutbox = await this.insertOutboxRowsIdempotently(withTopicBoard);
 
     return {
       events: persistedEvents.map((event) => ({ ...event, createdAt: event.createdAt ?? createdAt })),
@@ -321,6 +339,49 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .then((rows) => {
         if (rows.length !== 1) throw new Error("task-state-conflict:patch");
       });
+  }
+
+  // 주제마다 작업 현황판을 하나 고정한다.
+  //
+  // 포럼 그룹은 주제마다 고정 바가 따로다. 그룹에 하나 고정해 둔 현황판은 다른 주제에서는
+  // 보이지 않아서, 방장이 그 주제에서 일을 시키고도 결과를 확인할 창구가 없었다.
+  //
+  // 한 주제에 한 번만 올린다 — 아웃박스의 idempotency_key 가 그 보증이다(같은 키는 두 번
+  // 안 들어간다). 별도 표를 두고 "이미 고정했는가"를 관리하지 않는 이유이기도 하다.
+  private withTopicBoardPin(rows: OutboxInsertRow[], roomId: string): OutboxInsertRow[] {
+    if (!this.miniAppDirectLinkBaseUrl) return rows;
+
+    const seeded = new Set<string>();
+    const boardRows: OutboxInsertRow[] = [];
+    for (const row of rows) {
+      if (row.target_kind !== "telegram_bot") continue;
+      const threadId = optionalPayloadString(row.payload.messageThreadId);
+      const telegramChatId = outboxTargetChatId(row.target);
+      if (!threadId || !telegramChatId || seeded.has(threadId)) continue;
+      seeded.add(threadId);
+
+      boardRows.push({
+        room_id: roomId,
+        event_id: row.event_id,
+        idempotency_key: `telegram:topic-board:${roomId}:${threadId}`,
+        target_kind: "telegram_bot",
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        payload: {
+          botRole: "platoon_leader",
+          telegramChatId,
+          messageThreadId: threadId,
+          text: TOPIC_BOARD_MESSAGE_TEXT,
+          // 이 주제에 고정하는 현황판이므로 이 주제 작업만 열리게 한다.
+          keyboard: buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId, messageThreadId: threadId }),
+          // 보내고 나서 고정한다. 고정하지 않으면 대화가 쌓이는 순간 위로 밀려 사라진다.
+          pinMessage: true,
+          binding: { kind: "task", taskId: roomId },
+          idempotencyKey: `telegram:topic-board:${roomId}:${threadId}`
+        }
+      });
+    }
+
+    return boardRows.length === 0 ? rows : [...boardRows, ...rows];
   }
 
   // "작업 실행을 시작했습니다: p_032d2db2..." 처럼 내부 id 만 보여주면
@@ -525,7 +586,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       const proposalId = typeof row.payload.proposalId === "string" ? row.payload.proposalId : undefined;
       if (!proposalId || !wanted.has(proposalId) || hints.has(proposalId)) continue;
       const prompt = proposalPromptFromPayload(row.payload);
-      if (prompt) hints.set(proposalId, { prompt, title: proposalTitleFromPayload(row.payload), requestedActorRole: proposalActorRoleFromPayload(row.payload), executionMode: proposalExecutionModeFromPayload(row.payload), rawText: proposalRequestTextFromPayload(row.payload), purpose: proposalFieldFromPayload(row.payload, "purpose"), scope: proposalFieldFromPayload(row.payload, "scope"), completionCriteria: proposalFieldFromPayload(row.payload, "completionCriteria") });
+      if (prompt) hints.set(proposalId, { prompt, messageThreadId: optionalPayloadString(row.payload.messageThreadId), title: proposalTitleFromPayload(row.payload), requestedActorRole: proposalActorRoleFromPayload(row.payload), executionMode: proposalExecutionModeFromPayload(row.payload), rawText: proposalRequestTextFromPayload(row.payload), purpose: proposalFieldFromPayload(row.payload, "purpose"), scope: proposalFieldFromPayload(row.payload, "scope"), completionCriteria: proposalFieldFromPayload(row.payload, "completionCriteria") });
     }
     return hints;
   }
@@ -600,7 +661,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         title: hint.title,
         purpose: hint.purpose ?? hint.title,
         scope: hint.scope ?? hint.rawText ?? hint.title,
-        completion_criteria: hint.completionCriteria ?? DEFAULT_COMPLETION_CRITERIA
+        completion_criteria: hint.completionCriteria ?? DEFAULT_COMPLETION_CRITERIA,
+        // 현황판을 주제별로 가르는 값. 없으면 주제 없이 만들어진 작업이다.
+        telegram_message_thread_id: hint.messageThreadId ?? null
       },
       prefer: "return=representation"
     });
@@ -985,6 +1048,8 @@ type ExecutionActorRole = "claude_leader" | "codex_leader";
 type ProposalExecutionHint = {
   prompt: string;
   title: string;
+  // 이 제안이 시작된 포럼 주제. 승인되면 작업 행에 그대로 옮겨 적는다.
+  messageThreadId?: string;
   requestedActorRole?: ExecutionActorRole;
   executionMode?: "multi_ai_review";
   rawText?: string;

@@ -38,7 +38,8 @@ test("grammy sender sends messages without optional reply id", async () => {
     apiFactory: () => ({
       async sendMessage() { return { message_id: 123 } as never; },
       async editMessageText() { return { message_id: 124 } as never; },
-      async answerCallbackQuery() { return true; }
+      async answerCallbackQuery() { return true; },
+      async pinChatMessage() { return true; }
     })
   });
   const sent = await sender.sendMessage({ botRole: "platoon_leader", telegramChatId: "1001", text: "hello" });

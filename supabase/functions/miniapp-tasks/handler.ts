@@ -40,7 +40,9 @@ export type TasksHandlerDeps = {
   // room_id 로 이미 스코프된 조회를 기대한다 — 이 함수는 그 필터가 실제로 걸렸는지까지는
   // 보장하지 못한다(miniapp-proposals/handler.ts 의 동일 주석 참고). 그 증명은
   // room-isolation.test.ts 가 buildDepsFromClient + FakeSupabaseClient 로 별도 수행한다.
-  fetchTasksForRoom(roomId: string): Promise<{ error?: string; data?: TaskRow[] }>;
+  // messageThreadId 를 주면 그 포럼 주제에서 시작된 작업만 돌려준다. 없으면 방 전체다 —
+  // 주제 없이 열린 현황판(일반 그룹, 포럼의 General)은 지금까지처럼 방을 통으로 본다.
+  fetchTasksForRoom(roomId: string, messageThreadId?: string): Promise<{ error?: string; data?: TaskRow[] }>;
 };
 
 export async function handleMiniappTasksRequest(req: Request, deps: TasksHandlerDeps): Promise<Response> {
@@ -51,13 +53,20 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
   if (!auth.ok) return jsonResponse(auth.status, { error: auth.message });
 
   const url = new URL(req.url);
-  const roomId = url.searchParams.get("roomId");
-  if (!roomId) return jsonResponse(400, { error: "missing-room-id" });
+  const rawRoomId = url.searchParams.get("roomId");
+  if (!rawRoomId) return jsonResponse(400, { error: "missing-room-id" });
+
+  // 현황판 링크는 "<roomId>__t<주제번호>" 로 온다. 페이지가 그걸 갈라 threadId 로 넘겨주지만,
+  // 아직 옛 페이지를 보고 있는 사용자는 통째로 roomId 에 실어 보낸다. 그 경우 방 조회가
+  // 실패해 현황판이 빈 화면이 된다 — 페이지 배포가 늦어도 여기서 받아준다.
+  const separatorIndex = rawRoomId.indexOf("__t");
+  const roomId = separatorIndex < 0 ? rawRoomId : rawRoomId.slice(0, separatorIndex);
+  const threadFromRoomParam = separatorIndex < 0 ? undefined : rawRoomId.slice(separatorIndex + 3) || undefined;
 
   const access = await deps.checkRoomAccess(roomId, auth.telegramUserId);
   if (!access.ok) return jsonResponse(access.status, { error: access.message });
 
-  const tasksResult = await deps.fetchTasksForRoom(roomId);
+  const tasksResult = await deps.fetchTasksForRoom(roomId, url.searchParams.get("threadId") ?? threadFromRoomParam);
   if (tasksResult.error) {
     console.error(`miniapp-tasks: tasks query failed: ${tasksResult.error}`);
     return jsonResponse(500, { error: "lookup-failed" });
@@ -101,13 +110,17 @@ export type TasksQueryDeps = Pick<TasksHandlerDeps, "fetchTasksForRoom">;
 
 export function buildDepsFromClient(supabase: MinimalSupabaseClient): TasksQueryDeps {
   return {
-    async fetchTasksForRoom(roomId: string) {
-      const { data, error } = await supabase
+    async fetchTasksForRoom(roomId: string, messageThreadId?: string) {
+      const scoped = supabase
         .from("huai_tasks")
         .select(
           "task_id, status, priority, title, purpose, scope, completion_criteria, created_at, updated_at, assignee_actor_id, assignee:huai_ai_actors(role, adapter_type)"
         )
-        .eq("room_id", roomId)
+        .eq("room_id", roomId);
+      // 주제가 지정된 현황판은 그 주제 작업만 본다. 방 조건은 그대로 둔다 — 주제 번호는
+      // 방마다 다시 매겨지므로 주제만으로 거르면 다른 방 작업이 섞인다.
+      const query = messageThreadId ? scoped.eq("telegram_message_thread_id", messageThreadId) : scoped;
+      const { data, error } = await query
         .order("updated_at", { ascending: false })
         .limit(200);
       if (error) return { error: error.message };
