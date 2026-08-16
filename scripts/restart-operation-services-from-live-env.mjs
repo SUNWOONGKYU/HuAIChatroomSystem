@@ -27,10 +27,20 @@ async function restartOperationServices() {
   const botPids = mergePidSources(readPid(BOT_PID), discovered.botService);
   const gatewayPids = mergePidSources(readPid(GATEWAY_PID), discovered.localGateway);
 
+  // 살아 있는 프로세스에서 환경변수를 물려받되, 설정 파일이 그보다 우선한다.
+  //
+  // 물려받기의 목적은 시크릿을 파일에서 다시 읽지 않는 것이다. 그런데 순서가 반대로
+  // 되어 있어서, 죽은 프로세스가 들고 있던 값이 계속 대물림됐다 — 파일에서
+  // LOCAL_GATEWAY_MAX_RUNTIME_MS 를 5분에서 15분으로 고치고 재기동했는데도 실행은
+  // 여전히 5분에 끊겼고, 프로세스 환경을 직접 열어보고서야 옛 값이 그대로인 것을 알았다.
+  //
+  // 파일에 적힌 값이 사람이 방금 정한 값이다. 그것을 마지막에 얹는다. 파일에 없는
+  // 항목은 여전히 살아 있는 프로세스에서 물려받으므로 시크릿은 그대로 유지된다.
   const mergedEnv = {
     ...process.env,
     ...await readWindowsProcessEnv(botPids[0]),
-    ...await readWindowsProcessEnv(gatewayPids[0])
+    ...await readWindowsProcessEnv(gatewayPids[0]),
+    ...readOperationEnvFile()
   };
   applyOperationEnvAliases(mergedEnv);
   setOperationRuntimeTimeout(mergedEnv);
@@ -117,6 +127,36 @@ function readPid(path) {
 function stopPid(pid) {
   if (!pid) return;
   try { process.kill(pid); } catch {}
+}
+
+// .env.operation.local 을 읽어 키/값으로 돌려준다. 파일이 없으면 빈 값 —
+// 물려받은 환경만으로 돌던 예전 동작이 그대로 유지된다.
+export function parseEnvFile(text) {
+  const parsed = {};
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    // 값에 = 가 더 있어도 첫 = 만 구분자로 본다(토큰에 = 가 들어간다).
+    let value = line.slice(separator + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (key) parsed[key] = value;
+  }
+  return parsed;
+}
+
+function readOperationEnvFile() {
+  const path = resolve(ROOT, ".env.operation.local");
+  if (!existsSync(path)) return {};
+  try {
+    return parseEnvFile(readFileSync(path, "utf8"));
+  } catch {
+    return {};
+  }
 }
 
 export function mergePidSources(pidFileValue, discoveredPids) {

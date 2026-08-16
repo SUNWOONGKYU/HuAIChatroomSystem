@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifyServiceProcesses,
-  mergePidSources
+  mergePidSources,
+  parseEnvFile
 } from "./restart-operation-services-from-live-env.mjs";
 
 // 라이브 사고 재현: PID 파일에는 41020/32880 이 적혀 있었는데 실제로 도는 건
@@ -73,4 +74,43 @@ test("PID 가 숫자가 아니면 정지 대상으로 삼지 않는다", () => {
 
   assert.deepEqual(result.botService, []);
   assert.deepEqual(result.localGateway, []);
+});
+
+// 라이브 결함 회귀 — 설정 파일을 고쳐도 옛 값이 대물림되던 문제.
+//
+// 이 스크립트는 살아 있는 프로세스에서 환경변수를 물려받는다(시크릿을 파일에서 다시
+// 읽지 않으려는 것). 그런데 순서가 반대라 죽은 프로세스의 값이 파일을 덮었다.
+// LOCAL_GATEWAY_MAX_RUNTIME_MS 를 5분에서 15분으로 고치고 재기동했는데도 실행이
+// 여전히 5분에 끊겼고, 프로세스 환경을 직접 열어보고서야 원인을 알았다.
+test("설정 파일에서 키와 값을 읽는다", () => {
+  const parsed = parseEnvFile([
+    "# 주석",
+    "",
+    "LOCAL_GATEWAY_MAX_RUNTIME_MS=900000",
+    "BOT_SERVICE_RECEIVE_MODE=polling"
+  ].join("\n"));
+
+  assert.equal(parsed.LOCAL_GATEWAY_MAX_RUNTIME_MS, "900000");
+  assert.equal(parsed.BOT_SERVICE_RECEIVE_MODE, "polling");
+  assert.equal(Object.keys(parsed).length, 2, "주석과 빈 줄이 값으로 들어갔다");
+});
+
+test("값에 = 가 들어 있어도 첫 = 만 구분자로 본다", () => {
+  // 봇 토큰과 키에 = 가 들어간다. 뒤를 잘라먹으면 인증이 통째로 깨진다.
+  const parsed = parseEnvFile("SUPABASE_SERVICE_ROLE_KEY=eyJhbGci.payload==");
+
+  assert.equal(parsed.SUPABASE_SERVICE_ROLE_KEY, "eyJhbGci.payload==");
+});
+
+test("따옴표로 감싼 값은 벗겨서 읽는다", () => {
+  const parsed = parseEnvFile(['A="큰따옴표"', "B='작은따옴표'"].join("\n"));
+
+  assert.equal(parsed.A, "큰따옴표");
+  assert.equal(parsed.B, "작은따옴표");
+});
+
+test("= 가 없는 줄은 버린다", () => {
+  const parsed = parseEnvFile(["쓰레기줄", "=값만있음", "OK=1"].join("\n"));
+
+  assert.deepEqual(Object.keys(parsed), ["OK"]);
 });
