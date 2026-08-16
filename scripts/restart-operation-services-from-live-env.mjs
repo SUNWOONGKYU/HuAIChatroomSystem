@@ -1,5 +1,5 @@
 ﻿import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { applyOperationEnvAliases } from "./operation-env-loader.mjs";
 import { validateOperationEnv } from "./verify-operation-env.mjs";
@@ -7,6 +7,9 @@ import { validateOperationEnv } from "./verify-operation-env.mjs";
 const ROOT = "C:\\Dev\\HuAIChatroomSystem";
 const BOT_PID = "C:\\tmp\\huai-bot-service.pid";
 const GATEWAY_PID = "C:\\tmp\\huai-local-gateway.pid";
+const LOG_DIR = "C:\\tmp\\huai-logs";
+const BOT_LOG = LOG_DIR + "\\bot-service.log";
+const GATEWAY_LOG = LOG_DIR + "\\local-gateway.log";
 
 // 이 파일은 순수 함수도 함께 내보낸다. 실행부를 top-level 에 두면 테스트가 import 하는
 // 순간 라이브 서비스를 죽였다 살린다 — 그래서 CLI 로 직접 부를 때만 돌게 가둔다.
@@ -54,10 +57,20 @@ async function restartOperationServices() {
   rmSync(BOT_PID, { force: true });
   rmSync(GATEWAY_PID, { force: true });
 
+  // 두 서비스의 출력을 파일로 남긴다.
+  //
+  // 예전에는 stdio: "ignore" 라 전부 버렸다. 그 대가를 라이브에서 치렀다 — 봇이
+  // Telegram 메시지를 한 시간 넘게 못 받는데 /healthz 는 계속 ok 를 돌려줘서,
+  // 왜 못 받는지 알 방법이 아예 없었다. 서비스가 스스로 남긴 진단(폴링 에러, 무시
+  // 사유)이 있어도 읽을 수가 없으면 없는 것과 같다.
+  mkdirSync(LOG_DIR, { recursive: true });
+  const botLog = openSync(BOT_LOG, "a");
+  const gatewayLog = openSync(GATEWAY_LOG, "a");
+
   const bot = spawn("node", ["dist/apps/bot-service/src/cli.js"], {
     cwd: ROOT,
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", botLog, botLog],
     windowsHide: true,
     env: mergedEnv
   });
@@ -67,12 +80,15 @@ async function restartOperationServices() {
   const gateway = spawn("node", ["dist/apps/local-gateway/src/cli.js"], {
     cwd: ROOT,
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", gatewayLog, gatewayLog],
     windowsHide: true,
     env: mergedEnv
   });
   gateway.unref();
   writeFileSync(GATEWAY_PID, String(gateway.pid));
+
+  console.log(`bot_service_log=${BOT_LOG}`);
+  console.log(`local_gateway_log=${GATEWAY_LOG}`);
 
   console.log(`bot_service_pid=${bot.pid}`);
   console.log(`local_gateway_pid=${gateway.pid}`);

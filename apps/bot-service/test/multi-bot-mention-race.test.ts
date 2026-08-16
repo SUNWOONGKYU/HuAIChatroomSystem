@@ -225,3 +225,71 @@ function raceAwareStore(): {
     }
   };
 }
+
+// 라이브 결함 회귀 — 지목된 봇이 그 방에서 메시지를 못 받는 경우.
+//
+// 메인방에서 `@claude_chatroom1_bot ...` 을 보내면 소대장 봇만 업데이트를 받았다
+// (폴링 로그: fetched=1, ignored=1, queued=0). 소대장은 "지목된 봇이 처리하겠지" 하고
+// 양보했고, ClaudeBot 에게는 Telegram 이 아무것도 주지 않았다. 아무도 처리하지 않아
+// 방이 조용히 죽었다 — 에러도 기록도 없이.
+test("지목된 봇이 업데이트를 못 받아도 소대장이 처리한다", async () => {
+  const store = raceAwareStore();
+  const config = fourBotConfig();
+  const text = "@" + CLAUDE + " 이 저장소 package.json 의 version 값을 조사해서 보고해";
+
+  // 소대장 봇에게만 업데이트가 온다 — 라이브에서 관측된 그대로.
+  await runTelegramPollingCycle({
+    bots: [bot(PLATOON)],
+    config,
+    ports: store.ports,
+    offsets: new TelegramPollingOffsets(),
+    deps: { fetchImpl: perBotFetch([[PLATOON, [message(70000, CHAT, 7400, text)]]]) }
+  });
+
+  const handled = store.queued.filter((m) => m.input.kind !== "observation");
+  assert.equal(handled.length, 1, "아무도 처리하지 않았다 — 방이 조용히 죽는다");
+  assert.equal(handled[0]?.input.envelope.telegramBotRole, "platoon_leader");
+});
+
+test("소대장이 처리해도 지목된 작업자 정보는 본문에 그대로 남는다", async () => {
+  // 배정은 수신한 봇이 아니라 본문의 지목으로 정해진다. 소대장이 대신 받았다고 해서
+  // 소대장에게 일이 가면 안 된다.
+  const store = raceAwareStore();
+  const config = fourBotConfig();
+  const text = "@" + CLAUDE + " 로그인 세션 문제 조사해";
+
+  await runTelegramPollingCycle({
+    bots: [bot(PLATOON)],
+    config,
+    ports: store.ports,
+    offsets: new TelegramPollingOffsets(),
+    deps: { fetchImpl: perBotFetch([[PLATOON, [message(70100, CHAT, 7401, text)]]]) }
+  });
+
+  const handled = store.queued.filter((m) => m.input.kind !== "observation");
+  assert.equal(handled.length, 1);
+  assert.match(String(handled[0]?.input.envelope.messageText), new RegExp("@" + CLAUDE));
+});
+
+test("소대장이 아닌 봇은 여전히 양보한다", async () => {
+  // CodexBot 이 claude 지목 메시지를 처리하면 수신 봇 역할이 배정에 우선 반영되어
+  // 엉뚱한 작업자에게 일이 넘어간다. 그래서 양보는 나머지 봇에서 유지해야 한다.
+  const store = raceAwareStore();
+  const config = fourBotConfig();
+  const text = "@" + CLAUDE + " 조사해";
+  const ignoredReasons: string[] = [];
+
+  await runTelegramPollingCycle({
+    bots: [bot(CODEX)],
+    config,
+    ports: store.ports,
+    offsets: new TelegramPollingOffsets(),
+    deps: {
+      fetchImpl: perBotFetch([[CODEX, [message(70200, CHAT, 7402, text)]]]),
+      onIgnored: (botUsername, reason) => ignoredReasons.push(botUsername + ":" + reason)
+    }
+  });
+
+  assert.deepEqual(ignoredReasons, [CODEX + ":not-addressed-to-this-bot"]);
+  assert.equal(store.queued.filter((m) => m.input.kind !== "observation").length, 0);
+});

@@ -190,7 +190,7 @@ test("records bot messages as ignored without enqueue", async () => {
   } finally { await close(server); }
 });
 
-test("logs the ignore reason when a webhook update is yielded to a different bot", async () => {
+test("the leader desk handles a message aimed at another bot instead of yielding it", async () => {
   const queued: TelegramInboundQueueMessage[] = [];
   const recorded: string[] = [];
   const server = createTelegramWebhookHttpServer({
@@ -216,17 +216,24 @@ test("logs the ignore reason when a webhook update is yielded to a different bot
     const response = await postWebhook(port, telegramMessageUpdate("@claude_bot 이거 해줘"), "platoon-secret");
     const ack = await response.json() as Record<string, unknown>;
 
-    // ack 자체엔 계약(TelegramWebhookRejectReason) 밖 값을 못 실어서 reason 이 빠진다 —
-    // 실제 사유는 로그로 남아야 한다(아래 확인). Telegram 은 ack body 를 읽지 않는다.
-    assert.deepEqual(ack, { httpStatus: 200, queued: false });
-    assert.equal(queued.length, 0);
-    assert.deepEqual(recorded, [], "다른 봇에게 양보한 update 는 기록 자체가 없어야 한다");
+    // 소대장은 다른 봇이 지목된 메시지도 양보하지 않는다.
+    //
+    // 양보에는 "지목된 봇이 그 메시지를 받는다"는 전제가 있는데, 라이브에서 그 전제가
+    // 깨졌다 — 메인방에서 소대장 봇만 업데이트를 받고(fetched=1) 양보했고, 지목된 봇에게는
+    // Telegram 이 아무것도 주지 않아 큐잉이 0건이었다. 아무도 처리하지 않고 방이 조용히
+    // 죽었다. 소대장은 방의 기본 창구이므로 여기서 받아야 한다.
+    //
+    // 작업자 배정은 수신한 봇이 아니라 본문의 지목으로 정해지므로(orchestrator 의
+    // detectRequestedExecutionActorRole), 소대장이 받아도 일은 지목된 봇에게 간다.
+    // 소대장이 아닌 봇의 양보는 그대로 유지된다 — multi-bot-mention-race.test.ts 참고.
+    assert.deepEqual(ack, { httpStatus: 200, queued: true });
+    assert.equal(queued.length, 1, "아무도 처리하지 않았다 — 방이 조용히 죽는다");
+    assert.equal(queued[0]?.input.kind, "message");
+    assert.match(String(queued[0]?.input.envelope.messageText), /@claude_bot/, "지목이 본문에 남아야 배정이 된다");
+    assert.equal(recorded.length, 1);
 
     const ignoreLog = logs.find((line) => line.includes("telegram_webhook_ignored"));
-    assert.ok(ignoreLog, "무시 사유 로그가 남아야 한다");
-    const parsed = JSON.parse(ignoreLog!);
-    assert.equal(parsed.reason, "not-addressed-to-this-bot");
-    assert.equal(parsed.botUsername, "platoon_bot");
+    assert.equal(ignoreLog, undefined, "소대장이 처리했는데 무시 로그가 남았다");
   } finally {
     console.log = originalLog;
     await close(server);
