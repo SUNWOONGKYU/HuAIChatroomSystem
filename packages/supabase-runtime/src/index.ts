@@ -149,7 +149,14 @@ export class SupabaseOutboxStore {
     // 엔진이 막혔을 때의 선택지는 "같은 모델의 다른 세션이 diff 를 보고 반증한다" 와
     // "아무도 안 본다" 둘뿐이다. 후자가 더 나쁘다. 대신 방에 그 사실을 밝힌다 —
     // 방장이 알고 승인하는 것과 시스템이 몰래 때우는 것은 다르다(아래 fallbackNotice).
-    if (input.status === "failed" && shouldFallbackToOtherEngine(input.request, input.errorKind, resultSummary)) {
+    // 판정은 정제본이 아니라 원본 출력으로 한다.
+    //
+    // 라이브에서 Codex 한도 초과가 폴백되지 않고 그대로 실패로 끝났다. 방에 나간 문구는
+    // "사용 한도 초과"였는데도 그랬다 — 보고문은 원본 출력을 보고, 폴백 판정만 정제본을
+    // 봤기 때문이다. 정제본은 사람이 읽을 문장만 남기려고 Codex 의 JSON 줄을 내부 잡음으로
+    // 걸러내는데, 한도 통보가 바로 그 JSON 줄에 들어 있다. 같은 실행을 두고 두 판정이
+    // 서로 다른 입력을 보면 이렇게 갈린다.
+    if (input.status === "failed" && shouldFallbackToOtherEngine(input.request, input.errorKind, gatewayFailureEvidence(input.events))) {
       await this.enqueueEngineFallback(input.request, telegramChatId, event.event_id);
       return;
     }
@@ -165,6 +172,14 @@ export class SupabaseOutboxStore {
     }
 
     if (input.status === "completed" && input.request.reportBotRole === "auditor") {
+      // 감사가 아무 판정도 못 내고 끝나는 일이 있다. CLI 가 권한 문제로 도구를 하나도
+      // 못 써서 "no output produced" 만 남기고 종료코드 0 으로 끝난 경우다(라이브에서
+      // Antigravity 가 그랬다). 그걸 감사 결과로 받으면 근거 없는 "보완 필요"가 방에
+      // 걸리고 작업자가 고칠 것도 없는 수정 요구를 받는다.
+      if (auditProducedNoVerdict(resultSummary)) {
+        await this.reportEmptyAudit(input.request, telegramChatId, event.event_id);
+        return;
+      }
       await this.recordAuditVerification(input, resultSummary, telegramChatId, event.event_id);
     }
 
@@ -486,6 +501,33 @@ export class SupabaseOutboxStore {
         artifactCount: saved.length,
         artifacts: saved
       }
+    });
+  }
+
+  // 판정 없이 끝난 감사를 방에 알린다. 조용히 넘기면 방장은 검증이 된 줄 안다.
+  private async reportEmptyAudit(
+    request: ExecutionRequest,
+    telegramChatId: string,
+    sourceEventId: string
+  ): Promise<void> {
+    const idempotencyKey = "telegram-empty-audit:" + request.attemptId;
+    await this.insertOutboxIdempotently({
+      event_id: sourceEventId,
+      idempotency_key: idempotencyKey,
+      target_kind: "telegram_bot",
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "auditor", telegramChatId }),
+      payload: {
+        botRole: "auditor",
+        telegramChatId,
+        text: [
+          `${engineActorName(request.adapterType)} 감사가 판정 없이 끝났습니다.`,
+          "도구 실행이 막혀 변경 내용을 보지 못했습니다. 이 실행은 검증으로 치지 않습니다.",
+          "작업 결과 자체는 남아 있습니다. 검증 없이 승인할지, 다시 검증할지 정해 주세요."
+        ].join("\n"),
+        binding: { kind: "event", eventId: sourceEventId },
+        idempotencyKey
+      },
+      room_id: request.roomId
     });
   }
 
@@ -1193,6 +1235,17 @@ function summarizePersistedGatewayPayload(payload: Record<string, unknown>): str
     .filter(Boolean);
   return truncate(texts.at(-1) ?? String(payload.errorKind ?? payload.status ?? "결과 요약 없음"), 3200);
 }
+// 감사가 판정을 내놓지 못한 것을 알아본다.
+//
+// 종료코드는 0 이어도 실제로는 아무것도 안 본 실행이 있다. CLI 가 권한 때문에 도구를 하나도
+// 못 쓴 경우가 그렇고, 그때 남는 것은 "출력 없음" 이라는 안내문뿐이다. 이걸 판정으로 받으면
+// inferVerificationVerdict 가 기본값 conditional_pass 를 매겨 근거 없는 보완 요구가 나간다.
+export function auditProducedNoVerdict(resultSummary: string): boolean {
+  const text = resultSummary.trim();
+  if (text.length === 0) return true;
+  return /no output produced|auto-denied|cannot prompt for/i.test(text);
+}
+
 function inferVerificationVerdict(summary: string): "pass" | "conditional_pass" | "fail" {
   const lower = summary.toLowerCase();
   if (/실패|불합격|문제 있음|보완 필요|수정 필요|fail|failed|reject/.test(lower)) return "fail";
@@ -1211,11 +1264,16 @@ export function renderGatewayReportText(input: {
   events: GatewayEvent[];
   errorKind?: string;
 }): string {
+  // \uAC10\uC0AC\uB294 \uC791\uC5C5\uC774 \uC544\uB2C8\uB2E4. \uB458\uC744 \uAC19\uC740 \uBB38\uAD6C\uB85C \uBCF4\uACE0\uD558\uBA74 \uAC10\uC0AC\uAC00 \uC2E4\uD328\uD588\uC744 \uB54C \uBC29\uC7A5\uC774 \uC791\uC5C5\uC774
+  // \uC2E4\uD328\uD55C \uC904 \uC548\uB2E4 \u2014 \uB77C\uC774\uBE0C\uC5D0\uC11C \uC2E4\uC81C\uB85C \uADF8\uB807\uAC8C \uC77D\uD614\uB2E4(\uC791\uC5C5\uC740 \uC131\uACF5, \uAC10\uC0AC\uB9CC \uD55C\uB3C4\uB85C \uC8FD\uC74C).
+  const isAudit = input.request.reportBotRole === "auditor";
+  const subject = isAudit ? "\uAC10\uC0AC \uC2E4\uD589" : "\uC791\uC5C5 \uC2E4\uD589";
+
   if (input.status === "completed") {
     const summary = summarizeGatewayOutput(input.events);
     const lines = summary
-      ? ["\uC791\uC5C5 \uC2E4\uD589 \uC644\uB8CC", "\uACB0\uACFC:", summary]
-      : ["\uC791\uC5C5 \uC2E4\uD589 \uC644\uB8CC."];
+      ? [subject + " \uC644\uB8CC", "\uACB0\uACFC:", summary]
+      : [subject + " \uC644\uB8CC."];
     const collectionFailure = input.events.find(
       (event): event is Extract<GatewayEvent, { type: "artifact_collection_failed" }> =>
         event.type === "artifact_collection_failed"
@@ -1227,7 +1285,23 @@ export function renderGatewayReportText(input: {
   }
 
   const outputSummary = summarizeGatewayOutput(input.events);
-  const failureEvidence = input.events
+  const reason = humanReadableGatewayError(input.errorKind ?? outputSummary ?? "failed", gatewayFailureEvidence(input.events) || outputSummary, input.request.adapterType);
+  return [
+    subject + " \uC2E4\uD328",
+    "\uC6D0\uC778: " + reason,
+    isAudit
+      // \uAC10\uC0AC\uAC00 \uC8FD\uC5C8\uC5B4\uB3C4 \uC791\uC5C5 \uACB0\uACFC\uB294 \uADF8\uB300\uB85C \uC788\uB2E4. \uBC29\uC7A5\uC774 \uBB34\uC5C7\uC744 \uC783\uC5C8\uB294\uC9C0 \uC54C\uC544\uC57C \uC2B9\uC778 \uC5EC\uBD80\uB97C
+      // \uD310\uB2E8\uD560 \uC218 \uC788\uB2E4 \u2014 \uC783\uC740 \uAC83\uC740 \uC791\uC5C5\uC774 \uC544\uB2C8\uB77C \uB3C5\uB9BD \uAC80\uC99D\uC774\uB2E4.
+      ? "\uC791\uC5C5 \uACB0\uACFC \uC790\uCCB4\uB294 \uB0A8\uC544 \uC788\uC2B5\uB2C8\uB2E4. \uAC80\uC99D \uC5C6\uC774 \uC2B9\uC778\uD560\uC9C0, \uB2E4\uC2DC \uAC80\uC99D\uD560\uC9C0 \uC815\uD574 \uC8FC\uC138\uC694."
+      : "\uD544\uC694\uD558\uBA74 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uAC70\uB098 \uC791\uC5C5\uC790 \uBCF4\uC644\uC744 \uC694\uCCAD\uD574 \uC8FC\uC138\uC694."
+  ].join("\n");
+}
+// 실패를 판정할 때 쓰는 원본 출력. 사람이 읽을 문장으로 정제하기 전의 것이다.
+//
+// CLI 가 한도·인증 같은 사정을 알리는 자리는 사람이 읽을 문장이 아니라 JSON 줄인 경우가
+// 많다. 정제본은 그 줄을 버리므로, 무엇이 왜 실패했는지 기계가 판정할 때는 여기를 본다.
+export function gatewayFailureEvidence(events: readonly GatewayEvent[]): string {
+  return events
     .map((event) => {
       if ((event.type === "stdout" || event.type === "stderr") && "text" in event) return event.text;
       if (event.type === "failed" && "errorKind" in event) return event.errorKind;
@@ -1235,9 +1309,8 @@ export function renderGatewayReportText(input: {
     })
     .filter(Boolean)
     .join("\n");
-  const reason = humanReadableGatewayError(input.errorKind ?? outputSummary ?? "failed", failureEvidence || outputSummary, input.request.adapterType);
-  return ["\uC791\uC5C5 \uC2E4\uD589 \uC2E4\uD328", "\uC6D0\uC778: " + reason, "\uD544\uC694\uD558\uBA74 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uAC70\uB098 \uC791\uC5C5\uC790 \uBCF4\uC644\uC744 \uC694\uCCAD\uD574 \uC8FC\uC138\uC694."].join("\n");
 }
+
 function summarizeGatewayOutput(events: GatewayEvent[]): string | undefined {
   const stdout = [...events].reverse().find((event): event is GatewayEvent & { type: "stdout"; text: string } =>
     event.type === "stdout" && typeof event.text === "string" && event.text.trim().length > 0

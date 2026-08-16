@@ -576,3 +576,26 @@ test("소대장 판단과 감사는 읽기 전용으로 실행된다", () => {
   assert.equal(writable({ ...base, attemptId: "a1", adapterType: "claude_code", reportBotRole: "auditor" }), false, "검증자가 직접 고치면 자기검증이 된다");
   assert.equal(writable({ ...base, attemptId: "a2", adapterType: "claude_code", reportBotRole: "claude_leader" }), true, "승인된 작업은 쓸 수 있어야 한다");
 });
+
+// 라이브 결함 회귀 — Antigravity 감사가 "no output produced: 권한이 자동 거부됨" 으로
+// 빈손으로 끝났다. agy 는 Go 플래그를 써서 --print 가 프롬프트를 값으로 받는데, 우리가
+// --print 다음에 --output-format 을 두는 바람에 그게 프롬프트가 되고 첫 비플래그 인자에서
+// 파싱이 멈춰 권한 플래그가 통째로 사라졌다.
+test("antigravity 실행은 프롬프트를 --print 값으로 넘기고 권한 플래그를 잃지 않는다", () => {
+  const request: ExecutionRequest = {
+    roomId: "r", taskId: "t", attemptId: "a1-audit", actorId: "a", requestedBy: "1",
+    adapterType: "antigravity", projectPath: process.cwd(), prompt: "감사해줘",
+    timeoutMs: 900_000, idempotencyKey: "i", createdAt: "2026-08-16T00:00:00.000Z",
+    reportBotRole: "auditor"
+  };
+  const args = resolveAdapterPlan(request).args;
+
+  assert.equal(args[0], "--print");
+  assert.equal(args[1], "감사해줘", "프롬프트가 --print 바로 뒤에 오지 않으면 뒤 플래그가 전부 무시된다");
+  assert.equal(args.includes("--dangerously-skip-permissions"), true);
+  // 계획서만 쓰고 승인을 기다리는 모드라 비대화형에서는 아무것도 하지 않는다.
+  assert.equal(args.includes("plan"), false);
+  // agy 기본 대기는 5분이라, 더 긴 실행은 CLI 가 먼저 끊는다.
+  assert.equal(args.includes("--print-timeout"), true);
+  assert.equal(args[args.indexOf("--print-timeout") + 1], "900s");
+});

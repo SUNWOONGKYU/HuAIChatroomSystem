@@ -73,15 +73,26 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
     return platformPlan(
       "agy",
       [
+        // 프롬프트는 --print 의 값이다. agy 는 Go 플래그를 쓰므로 --print 다음에 다른
+        // 플래그를 두면 그게 프롬프트로 먹히고, 첫 비플래그 인자에서 파싱이 멈춰 뒤의
+        // 플래그가 통째로 무시된다. 라이브에서 그 탓에 권한 플래그가 사라져 감사가
+        // "no output produced — 권한이 자동 거부됨" 으로 빈손으로 끝났다.
         "--print",
+        request.prompt,
         "--output-format",
         "text",
-        // 읽기 전용은 plan 모드. 감사·소대장 판단이 파일을 고치면 AC-07/FR-008 이 뚫린다
-        // (위 readOnly 주석 참고) — Claude 의 dontAsk, Codex 의 --sandbox read-only 와 같은 자리다.
-        ...(readOnly ? ["--mode", "plan"] : ["--dangerously-skip-permissions"]),
+        // agy 에는 읽기 전용 모드가 없다. --mode plan 은 계획서만 쓰고 승인을 기다려
+        // 비대화형에서 아무것도 하지 않고, --sandbox 는 5분 자체 타임아웃까지 응답이
+        // 없었다(둘 다 실측). 그래서 감사도 같은 권한으로 돌린다 — Claude 의 dontAsk,
+        // Codex 의 --sandbox read-only 에 해당하는 자리가 이 CLI 에는 비어 있다.
+        // 감사가 파일을 고치지 않아야 한다는 요구(AC-07)는 여기서는 프롬프트로만
+        // 지켜지므로, 읽기 전용이 강제되는 Claude·Codex 보다 약하다.
+        "--dangerously-skip-permissions",
         `--add-dir=${request.projectPath}`,
-        ...(request.model ? ["--model", request.model] : []),
-        request.prompt
+        // agy 의 기본 대기는 5분이다. 게이트웨이가 더 길게 기다려도 CLI 가 먼저 끊는다.
+        "--print-timeout",
+        `${Math.ceil(request.timeoutMs / 1000)}s`,
+        ...(request.model ? ["--model", request.model] : [])
       ],
       request.projectPath,
       request.timeoutMs

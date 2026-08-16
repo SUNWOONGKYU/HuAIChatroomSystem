@@ -184,7 +184,12 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // 곧 실행 중인 것이고, 끝나면 sent/dead 로 바뀌어 표시도 자연히 멎는다.
   async listInFlightExecutions(): Promise<Array<{ telegramChatId: string; startedAtMs: number }>> {
     const rows = await this.client
-      .request("GET", "/huai_outbox?target_kind=eq.local_gateway&status=eq.processing&select=payload,locked_at,created_at&limit=50")
+      // 리스 전(pending)·재시도 대기(retry_pending)도 실행 중으로 친다.
+      //
+      // processing 만 세면 방장이 승인한 뒤 게이트웨이가 그 행을 집어갈 때까지, 그리고 감사
+      // 요청이 큐에 올라간 뒤 시작될 때까지 표시가 꺼진다. 방장 눈에는 "움직이던 게 멈췄는데
+      // 결과는 안 나온" 구간이 된다 — 실제로는 그 사이에도 일은 진행 중이다.
+      .request("GET", "/huai_outbox?target_kind=eq.local_gateway&status=in.(pending,processing,retry_pending)&select=payload,locked_at,created_at&limit=50")
       .then((response) => response.json<Array<{ payload?: Record<string, unknown>; locked_at?: string; created_at?: string }>>());
 
     return rows

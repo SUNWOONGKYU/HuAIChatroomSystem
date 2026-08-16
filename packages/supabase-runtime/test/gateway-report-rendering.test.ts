@@ -765,3 +765,41 @@ test("한도가 아닌 Codex 실패는 그대로 오류로 알린다", () => {
 
   assert.equal(text.includes("사용 한도 초과"), false);
 });
+
+// 라이브 결함 회귀 — 감사가 Codex 한도로 죽었는데 방에는 "작업 실행 실패"로 떴다.
+// 작업은 성공했고 파일도 바뀐 상태였다. 방장은 작업이 실패한 줄 알았다.
+test("감사 실패는 작업 실패와 다른 문구로 보고한다", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), reportBotRole: "auditor" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: '{"type":"error","message":"You\'ve hit your usage limit."}' }]
+  });
+
+  assert.equal(text.startsWith("감사 실행 실패"), true);
+  assert.equal(text.includes("작업 실행 실패"), false);
+  // 방장이 무엇을 잃었는지 알아야 승인 여부를 정할 수 있다.
+  assert.equal(text.includes("작업 결과 자체는 남아 있습니다"), true);
+});
+
+test("작업 실패 문구는 그대로 둔다", () => {
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "설정 파일을 읽지 못했습니다." }]
+  });
+
+  assert.equal(text.startsWith("작업 실행 실패"), true);
+  assert.equal(text.includes("감사"), false);
+});
+
+test("감사 성공도 작업 완료로 읽히지 않는다", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), reportBotRole: "auditor" },
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "판정: 통과. 지시한 줄이 그 위치에 그대로 있다." }]
+  });
+
+  assert.equal(text.startsWith("감사 실행 완료"), true);
+});

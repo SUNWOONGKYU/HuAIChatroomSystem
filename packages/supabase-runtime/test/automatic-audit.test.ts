@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, buildSingleWorkerAuditPrompt, engineActorName, nextEngineAfter, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
+import { SupabaseOutboxStore, auditProducedNoVerdict, buildSingleWorkerAuditPrompt, engineActorName, gatewayFailureEvidence, nextEngineAfter, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
 import { AI_ADAPTER_TYPES, type GatewayEvent } from "../../contracts/src/index.js";
 
 // 자동 검증 기준: 이 실행이 실제로 무언가를 만들거나 고쳤는가.
@@ -190,6 +190,27 @@ test("한도에 걸리면 다른 엔진으로 넘긴다", () => {
   assert.equal(shouldFallbackToOtherEngine(request, "agent-usage-limit", ""), true);
 });
 
+// 라이브 결함 회귀 — 한도 초과가 폴백되지 않고 실패로 끝났다(2026-08-16 12:36 감사).
+//
+// 방에 나간 문구는 "CodexBot 현재 상태: 사용 한도 초과"였는데도 폴백이 안 걸렸다. 보고문은
+// 원본 출력을 보고, 폴백 판정만 정제본을 봤기 때문이다. 아래 문자열은 그때 게이트웨이가
+// 실제로 받은 stdout 이다 — 한도 통보가 JSON 줄 안에 있고, 정제본은 그 줄을 버린다.
+test("한도 통보가 JSON 줄 안에 있어도 폴백한다", () => {
+  const codexQuotaStdout = [
+    '{"type":"thread.started","thread_id":"01a00a92-aa34-7013-a128-2418f6579470"}',
+    '{"type":"turn.started"}',
+    '{"type":"error","message":"You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 20th, 2026 12:40 PM."}',
+    '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit."}}'
+  ].join("\n");
+  const events: GatewayEvent[] = [
+    { type: "stdout", taskId: TASK_ID, attemptId: "attempt-1", text: codexQuotaStdout },
+    { type: "stderr", taskId: TASK_ID, attemptId: "attempt-1", text: "Reading additional input from stdin...\n" }
+  ];
+  const request = { ...auditRequest(), adapterType: "codex" as const };
+
+  assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", gatewayFailureEvidence(events)), true);
+});
+
 test("한도가 아닌 실패는 넘기지 않는다", () => {
   // 진짜 오류를 다른 엔진으로 넘기면 같은 실패를 두 번 하고 방만 시끄럽다.
   const request = { ...auditRequest(), adapterType: "codex" as const };
@@ -268,3 +289,19 @@ function auditRequest() {
     reportBotRole: "auditor" as const
   };
 }
+
+// 라이브 결함 회귀 — Antigravity 감사가 권한 때문에 도구를 하나도 못 쓰고 종료코드 0 으로
+// 끝났는데, 그 안내문이 감사 의견으로 기록돼 방에 "보완이 필요합니다"가 걸렸다.
+// 작업자는 고칠 것도 없는 수정 요구를 받았다.
+test("도구가 막혀 아무것도 못 본 감사는 판정으로 치지 않는다", () => {
+  const jetskiNoOutput = 'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.';
+
+  assert.equal(auditProducedNoVerdict(jetskiNoOutput), true);
+  assert.equal(auditProducedNoVerdict(""), true);
+  assert.equal(auditProducedNoVerdict("   \n  "), true);
+});
+
+test("실제 판정이 담긴 감사는 그대로 받는다", () => {
+  assert.equal(auditProducedNoVerdict("판정: 통과. 지시한 줄이 그 위치에 그대로 있고 다른 줄은 그대로다."), false);
+  assert.equal(auditProducedNoVerdict("판정: 불합격. README.md 89행이 지시와 다르다."), false);
+});
