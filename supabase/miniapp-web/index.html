@@ -72,6 +72,28 @@
     font-size: 11px;
     color: var(--hint);
   }
+  /* 진행률. 목표서 최상위 목표가 "표·진행률로 한눈에" 인데 개수만 있었다 —
+     숫자 다섯 개를 눈으로 더해야 얼마나 온 건지 알 수 있었다. */
+  .progress { margin-top: 10px; }
+  .progress-track {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bg-secondary, #e9edf2);
+    overflow: hidden;
+  }
+  .progress-fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--accent, #2f86eb);
+    transition: width 240ms ease;
+  }
+  .progress-caption {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--hint);
+  }
   button {
     font-family: inherit;
   }
@@ -336,6 +358,12 @@
   <header>
     <h1 id="room-title">HuAI 작업 현황판</h1>
     <p id="room-subtitle">불러오는 중…</p>
+    <div id="progress" class="progress" hidden>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="완료 진행률">
+        <span class="progress-fill" id="progress-fill"></span>
+      </div>
+      <p class="progress-caption" id="progress-caption"></p>
+    </div>
     <div class="refresh-row">
       <button type="button" class="btn btn-ghost" id="refresh-btn">새로고침</button>
       <span id="updated-at"></span>
@@ -538,6 +566,7 @@
         boardEl.hidden = false;
         titleEl.textContent = (data.room && data.room.purpose) || "HuAI 작업 현황판";
         subtitleEl.textContent = "작업 " + (data.tasks ? data.tasks.length : 0) + "건";
+        renderProgress(lastTasks);
         updatedAtEl.textContent = data.generatedAt ? "갱신 " + formatTime(data.generatedAt) : "";
         lastTasks = data.tasks || [];
         renderTabs();
@@ -693,6 +722,35 @@
 
   function countByBucket(bucketId) {
     return lastTasks.filter(function (t) { return t.bucket === bucketId; }).length;
+  }
+
+  // 완료 진행률. 방장이 묻는 것은 "얼마나 왔나"인데 화면에는 상태별 개수만 있어서
+  // 다섯 숫자를 눈으로 더해야 했다. 중단(stopped)은 분모에서 뺀다 — 취소·차단된 일까지
+  // 세면 손대지 않아도 진행률이 오르내려 숫자가 거짓말을 한다.
+  function computeProgress(tasks) {
+    var counted = tasks.filter(function (t) { return t.bucket !== "stopped"; });
+    var done = counted.filter(function (t) { return t.bucket === "done"; }).length;
+    return { done: done, total: counted.length, percent: counted.length === 0 ? 0 : Math.round((done / counted.length) * 100) };
+  }
+
+  function renderProgress(tasks) {
+    var progressEl = document.getElementById("progress");
+    var fillEl = document.getElementById("progress-fill");
+    var captionEl = document.getElementById("progress-caption");
+    if (!progressEl || !fillEl || !captionEl) return;
+
+    var p = computeProgress(tasks || []);
+    if (p.total === 0) {
+      progressEl.hidden = true;
+      return;
+    }
+    progressEl.hidden = false;
+    fillEl.style.width = p.percent + "%";
+    var track = progressEl.querySelector(".progress-track");
+    if (track) track.setAttribute("aria-valuenow", String(p.percent));
+
+    var stopped = (tasks || []).filter(function (t) { return t.bucket === "stopped"; }).length;
+    captionEl.textContent = "완료 " + p.done + " / " + p.total + " · " + p.percent + "%" + (stopped > 0 ? " (중단 " + stopped + "건 제외)" : "");
   }
 
   function renderTabs() {

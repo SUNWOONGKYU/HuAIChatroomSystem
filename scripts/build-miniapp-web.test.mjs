@@ -118,3 +118,23 @@ test("the shipped page still carries the placeholder the build fills", async () 
   const html = await readFile("supabase/miniapp-web/index.html", "utf8");
   assert.equal(html.includes(FUNCTIONS_BASE_URL_PLACEHOLDER), true);
 });
+
+test("현황판에 완료 진행률이 있다", async () => {
+  // 목표서 최상위 목표가 "작업 현황을 표·진행률로 한눈에" 인데 상태별 개수만 있었다.
+  const html = await readFile("supabase/miniapp-web/index.html", "utf8");
+
+  assert.match(html, /id="progress-fill"/);
+  assert.match(html, /role="progressbar"/, "화면 낭독기가 읽을 수 있어야 한다");
+  assert.match(html, /function computeProgress/);
+});
+
+test("진행률 분모에서 중단된 작업을 뺀다", async () => {
+  // 취소·차단된 일까지 분모에 세면, 아무것도 안 했는데 작업 하나가 중단될 때마다
+  // 진행률이 올라간다 — 숫자가 거짓말을 한다.
+  const html = await readFile("supabase/miniapp-web/index.html", "utf8");
+  const body = html.slice(html.indexOf("function computeProgress"));
+  const fn = body.slice(0, body.indexOf("function renderProgress"));
+
+  assert.match(fn, /bucket !== "stopped"/);
+  assert.match(fn, /bucket === "done"/);
+});
