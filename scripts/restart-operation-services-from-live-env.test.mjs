@@ -3,7 +3,8 @@ import test from "node:test";
 import {
   classifyServiceProcesses,
   mergePidSources,
-  parseEnvFile
+  parseEnvFile,
+  parseGatewayInstances
 } from "./restart-operation-services-from-live-env.mjs";
 
 // 라이브 사고 재현: PID 파일에는 41020/32880 이 적혀 있었는데 실제로 도는 건
@@ -113,4 +114,34 @@ test("= 가 없는 줄은 버린다", () => {
   const parsed = parseEnvFile(["쓰레기줄", "=값만있음", "OK=1"].join("\n"));
 
   assert.deepEqual(Object.keys(parsed), ["OK"]);
+});
+
+// 방마다 게이트웨이 하나. 잘못 적힌 설정으로 프로세스를 띄우면 그 방은 조용히 안 돈다 —
+// 큐에 일만 쌓이고 방에는 아무 말도 안 나간다. 그래서 뜨기 전에 막는다.
+test("방별 게이트웨이 설정을 라벨·id·포트·폴더로 가른다", () => {
+  const parsed = parseGatewayInstances(
+    "개인회생|16e2c574-3acb-45c0-a86b-0efd1f492b2d|8798|C:\Users\home\Desktop\pc;DCF|f0853c72-bd1f-4176-aff8-9d4dc1afe034|8800|G:\내 드라이브\DCF법_회계사용"
+  );
+
+  assert.equal(parsed.length, 2);
+  assert.deepEqual(parsed[0], {
+    label: "개인회생",
+    gatewayId: "16e2c574-3acb-45c0-a86b-0efd1f492b2d",
+    healthPort: 8798,
+    root: "C:\Users\home\Desktop\pc"
+  });
+  assert.equal(parsed[1].root, "G:\내 드라이브\DCF법_회계사용", "공백이 든 경로가 잘리면 안 된다");
+});
+
+test("설정이 비어 있으면 방별 게이트웨이는 안 띄운다", () => {
+  assert.deepEqual(parseGatewayInstances(undefined), []);
+  assert.deepEqual(parseGatewayInstances(""), []);
+  assert.deepEqual(parseGatewayInstances("   ;  "), []);
+});
+
+test("빠진 항목이 있으면 띄우지 않고 멈춘다", () => {
+  // 포트 없이 띄우면 기본 포트로 두 프로세스가 붙어 한쪽이 죽는다.
+  assert.throws(() => parseGatewayInstances("개인회생|16e2c574||C:\Users\home\Desktop\pc"), /invalid-env/);
+  assert.throws(() => parseGatewayInstances("개인회생|16e2c574|8798|"), /invalid-env/);
+  assert.throws(() => parseGatewayInstances("|16e2c574|8798|C:\work"), /invalid-env/);
 });

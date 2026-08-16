@@ -102,6 +102,51 @@ async function restartOperationServices() {
 
   console.log(`bot_service_pid=${bot.pid}`);
   console.log(`local_gateway_pid=${gateway.pid}`);
+
+  // 방마다 게이트웨이를 하나씩 띄운다.
+  //
+  // 게이트웨이는 자기 gateway_id 로 온 일만 리스하고 자기 allowed roots 안에서만 실행한다.
+  // 그래서 방이 늘면 프로세스도 늘어야 한다 — 하나로 여러 방을 맡는 길은 아직 없다.
+  // 방을 섞지 않는 것이 이 구조의 값이다: 개인회생 방의 실행이 회계 자료 폴더를 열 수
+  // 없고, 그 반대도 마찬가지다.
+  for (const instance of parseGatewayInstances(mergedEnv.LOCAL_GATEWAY_EXTRA_INSTANCES)) {
+    const log = openSync(`${LOG_DIR}\\local-gateway.${instance.label}.log`, "a");
+    const child = spawn("node", ["dist/apps/local-gateway/src/cli.js"], {
+      cwd: ROOT,
+      detached: true,
+      stdio: ["ignore", log, log],
+      windowsHide: true,
+      env: {
+        ...mergedEnv,
+        LOCAL_GATEWAY_ID: instance.gatewayId,
+        LOCAL_GATEWAY_ALLOWED_ROOTS: instance.root,
+        LOCAL_GATEWAY_HEALTH_PORT: String(instance.healthPort)
+      }
+    });
+    child.unref();
+    writeFileSync(`C:\\tmp\\huai-local-gateway.${instance.label}.pid`, String(child.pid));
+    console.log(`local_gateway_pid[${instance.label}]=${child.pid} port=${instance.healthPort}`);
+  }
+}
+
+// LOCAL_GATEWAY_EXTRA_INSTANCES=라벨|gatewayId|건강검진포트|작업폴더;라벨|...
+//
+// 라벨은 로그·PID 파일 이름이 된다. 사람이 어느 방 로그인지 알아보려면 uuid 보다 이름이 낫다.
+export function parseGatewayInstances(value) {
+  const instances = [];
+  for (const entry of String(value ?? "").split(";")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const [label, gatewayId, healthPort, ...rootParts] = trimmed.split("|");
+    // 경로에 | 는 들어갈 수 없지만, 나머지를 다시 붙여 두면 규칙이 바뀌어도 경로가 잘리지 않는다.
+    const root = rootParts.join("|").trim();
+    const port = positiveInteger(healthPort);
+    if (!label?.trim() || !gatewayId?.trim() || !port || !root) {
+      throw new Error(`invalid-env:LOCAL_GATEWAY_EXTRA_INSTANCES:${trimmed}`);
+    }
+    instances.push({ label: label.trim(), gatewayId: gatewayId.trim(), healthPort: port, root });
+  }
+  return instances;
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
