@@ -5,6 +5,7 @@ import { buildTelegramBotTokenResolverFromEnv } from "./bot-token-resolver.js";
 import { createTelegramFetchSender, createTelegramGrammySender } from "./outbox.js";
 import { startOutboxConsumerLoop, type OutboxConsumerHandle } from "./consumer.js";
 import { startMiniAppDecisionPollerLoop, type MiniAppDecisionPollerHandle } from "./miniapp-decision-poller.js";
+import { startExecutionHeartbeatLoop, type ExecutionHeartbeatHandle } from "./execution-heartbeat.js";
 
 export type BotServiceServerHandle = {
   close(): Promise<void>;
@@ -39,6 +40,7 @@ export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.en
   const outboxLoop = maybeStartOutboxLoop(env, runtime);
   const miniAppDecisionPolling = maybeStartMiniAppDecisionPolling(env, runtime);
   const polling = await maybeStartTelegramPolling(env, runtime);
+  const executionHeartbeat = maybeStartExecutionHeartbeat(env, runtime);
 
   await new Promise<void>((resolve) => {
     server.listen(port, "127.0.0.1", resolve);
@@ -51,6 +53,7 @@ export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.en
       outboxLoop?.stop();
       miniAppDecisionPolling?.stop();
       polling?.stop();
+      executionHeartbeat?.stop();
       return new Promise((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error);
@@ -124,6 +127,35 @@ function telegramPollingBotsFromEnv(env: NodeJS.ProcessEnv): TelegramPollingBot[
   return pairs
     .filter((pair): pair is [string, string] => Boolean(pair[0] && pair[1]))
     .map(([botUsername, token]) => ({ botUsername: botUsername.replace(/^@/, ""), token }));
+}
+
+// 실행이 도는 동안 방 상단에 "…이 입력 중" 을 유지한다.
+//
+// 실행 버튼을 누르면 그 메시지가 "▶ 실행 중입니다" 로 바뀌지만 거기서 멈춘다. 작업자가
+// 몇 분씩 도는 동안 방에는 아무 변화가 없어 방장이 "먹통인지 도는 건지 모르겠다"고
+// 반복해 제기했다. Telegram 에서 봇이 낼 수 있는 움직이는 신호는 이것뿐이다 — 버튼 색도
+// 애니메이션도 봇이 정할 수 없다.
+//
+// 무엇이 도는지는 huai_outbox 의 local_gateway 행이 processing 인지로 안다. 게이트웨이가
+// 리스한 것이 곧 실행 중인 것이라 별도 상태를 만들지 않는다.
+function maybeStartExecutionHeartbeat(
+  env: NodeJS.ProcessEnv,
+  runtime: Awaited<ReturnType<typeof buildBotServiceRuntimeFromEnvAsync>>
+): ExecutionHeartbeatHandle | undefined {
+  if (!runtime.inFlightExecutions || env.BOT_SERVICE_EXECUTION_HEARTBEAT_ENABLED === "false") return undefined;
+
+  const sender = createTelegramRuntimeSender(env);
+  if (!sender.sendChatAction) return undefined;
+
+  return startExecutionHeartbeatLoop({
+    // Telegram 의 입력 표시는 약 5초 뒤 사라진다. 그보다 짧게 보내야 끊기지 않는다.
+    intervalMs: parsePositiveInteger(env.BOT_SERVICE_EXECUTION_HEARTBEAT_MS ?? "4000", "BOT_SERVICE_EXECUTION_HEARTBEAT_MS"),
+    listInFlightExecutions: () => runtime.inFlightExecutions!.listInFlightExecutions(),
+    sendTypingAction: (telegramChatId) => sender.sendChatAction!({ botRole: "platoon_leader", telegramChatId, action: "typing" }),
+    onError(error) {
+      console.error(`bot-service-execution-heartbeat-error:${maskServerError(error)}`);
+    }
+  });
 }
 
 function maybeStartOutboxLoop(

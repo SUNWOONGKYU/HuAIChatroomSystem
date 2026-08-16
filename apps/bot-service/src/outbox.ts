@@ -37,6 +37,8 @@ export type TelegramMessageSender = {
   sendMessage(request: TelegramSendMessageRequest): Promise<TelegramSendResult>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSendResult>;
   answerCallbackQuery?(request: { botRole: TelegramBotRole; callbackQueryId: string; text?: string }): Promise<TelegramSendResult>;
+  // 실행이 도는 동안 방 상단에 "…이 입력 중" 을 띄운다. 봇이 낼 수 있는 유일한 움직이는 신호다.
+  sendChatAction?(request: { botRole: TelegramBotRole; telegramChatId: string; action: "typing" }): Promise<void>;
 };
 
 export type TelegramBotTokenResolver = {
@@ -185,6 +187,21 @@ export function createTelegramFetchSender(input: {
         callback_query_id: request.callbackQueryId,
         text: request.text
       }, timeoutMs);
+    },
+    async sendChatAction(request) {
+      // 표시가 안 떠도 작업 자체를 막을 이유가 없다. 실패는 삼키되 로그로 남긴다 —
+      // 조용히 없어지면 "왜 표시가 안 뜨지"를 나중에 추적할 수 없다.
+      try {
+        const token = await input.tokenResolver.resolveBotToken(request.botRole);
+        await fetchImpl(`https://api.telegram.org/bot${token}/sendChatAction`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ chat_id: request.telegramChatId, action: request.action }),
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+      } catch (error) {
+        console.error(`telegram-chat-action-failed:${maskSensitiveText(String(error).slice(0, 200))}`);
+      }
     }
   };
 }

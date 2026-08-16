@@ -177,6 +177,26 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     });
   }
 
+  // 지금 실행 중인 것들을 방 단위로 알려준다.
+  //
+  // 실행 중 표시("…이 입력 중")를 유지하려면 어느 방이 도는지 알아야 한다. 별도 상태를
+  // 만들지 않고 huai_outbox 를 그대로 읽는다 — 게이트웨이가 리스해서 processing 인 행이
+  // 곧 실행 중인 것이고, 끝나면 sent/dead 로 바뀌어 표시도 자연히 멎는다.
+  async listInFlightExecutions(): Promise<Array<{ telegramChatId: string; startedAtMs: number }>> {
+    const rows = await this.client
+      .request("GET", "/huai_outbox?target_kind=eq.local_gateway&status=eq.processing&select=payload,locked_at,created_at&limit=50")
+      .then((response) => response.json<Array<{ payload?: Record<string, unknown>; locked_at?: string; created_at?: string }>>());
+
+    return rows
+      .map((row) => {
+        const telegramChatId = typeof row.payload?.telegramChatId === "string" ? row.payload.telegramChatId : "";
+        // 언제부터 돌았는지는 리스한 시각이 가장 가깝다. 없으면 행이 생긴 시각으로 대체한다.
+        const startedAt = Date.parse(String(row.locked_at ?? row.created_at ?? ""));
+        return { telegramChatId, startedAtMs: Number.isFinite(startedAt) ? startedAt : Date.now() };
+      })
+      .filter((execution) => execution.telegramChatId.length > 0);
+  }
+
   async leasePending(limit: number, leaseUntil: string): Promise<OutboxRecord[]> {
     return this.leaseOutbox(limit, leaseUntil, "telegram_bot");
   }

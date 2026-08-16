@@ -14,6 +14,7 @@ import {
 } from "../../../packages/contracts/src/index.js";
 import { processTelegramInboundWithPersistence, type OrchestratorPersistencePort } from "./persistence.js";
 import { SupabaseBotServiceStore, buildSupabaseBotServiceStoreFromEnv } from "./supabase-store.js";
+import { type InFlightExecution } from "./execution-heartbeat.js";
 import { loadSupabaseBotServiceRuntimeConfig, type LoadedSupabaseRoom } from "./supabase-runtime-loader.js";
 import { type OutboxDispatcherStore } from "./outbox.js";
 import { type MiniAppDecisionPollerRoom } from "./miniapp-decision-poller.js";
@@ -27,6 +28,9 @@ export type LocalBotServiceRuntime = {
   // Mini App 승인 폴러(server.ts 가 실제 주기 루프를 돈다)가 필요로 하는 것들.
   // supabase 모드에서만 채워진다 — local 모드는 방 개념이 없다.
   miniAppDecisionPolling?: MiniAppDecisionPollingSupport;
+  // 실행 중 표시("…이 입력 중")를 유지하려면 지금 무엇이 도는지 알아야 한다.
+  // 게이트웨이가 리스한 local_gateway 행이 곧 실행 중인 것이라 별도 상태를 만들지 않는다.
+  inFlightExecutions?: { listInFlightExecutions(): Promise<InFlightExecution[]> };
 };
 
 export type MiniAppDecisionPollingSupport = {
@@ -205,7 +209,8 @@ export async function buildSupabaseBotServiceRuntimeFromDatabase(
       authorization: loaded.authorization,
       executionDefaultsByChatId,
       persistence: store
-    }
+    },
+    inFlightExecutions: store
   };
 }
 export function buildLocalBotServiceConfig(env: NodeJS.ProcessEnv = process.env): BotServiceConfig {
