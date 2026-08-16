@@ -158,7 +158,41 @@ export class SupabaseOutboxStore {
 
     if (input.status === "completed" && shouldRunAutomaticAudit(input.request, input.events)) {
       await this.enqueueSingleWorkerAudit(input, resultSummary, telegramChatId, event.event_id);
+    } else if (input.status === "completed" && !isLeaderPlanningAttempt(input.request.attemptId) && input.request.reportBotRole !== "auditor") {
+      await this.closeWithoutAudit(input.request, telegramChatId, event.event_id);
     }
+  }
+
+  // 감사가 붙지 않는 실행을 완료 승인 대기까지 보낸다.
+  //
+  // 실행이 끝나면 작업은 verification_pending 으로 간다. 원래는 감사가 그 뒤를 이어
+  // 통과시켜 완료 승인 대기로 올렸다. 그런데 파일을 바꾸지 않은 실행("줄 수 알려줘")은
+  // 감사를 붙이지 않기로 했으므로, 그 자리에서 깨울 사람이 없어 영영 멈춘다 —
+  // 라이브에서 조회 작업 5건이 검증 대기에 묶여 현황판 "대기" 칸만 불렸다.
+  //
+  // 자동으로 완료 처리하지는 않는다. 마지막 한 번은 방장이 누른다(FR-015). 감사할
+  // 대상이 없다는 것이 방장 확인까지 건너뛸 이유는 아니다.
+  private async closeWithoutAudit(request: ExecutionRequest, telegramChatId: string, sourceEventId: string): Promise<void> {
+    if (!isUuid(request.taskId)) return;
+    await this.advanceTaskStatus(request.taskId, "verification_started", { isVerifier: true, actorRole: "auditor", verifierActorId: request.actorId, authorActorId: "system" });
+    await this.advanceTaskStatus(request.taskId, "verification_passed", { isVerifier: true, actorRole: "auditor" });
+    await this.advanceTaskStatus(request.taskId, "commander_completion_approved", { actorRole: "platoon_leader" });
+
+    const idempotencyKey = "telegram-completion-review:" + request.attemptId;
+    await this.insertOutboxIdempotently({
+      event_id: sourceEventId,
+      idempotency_key: idempotencyKey,
+      target_kind: "telegram_bot",
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      payload: {
+        botRole: "platoon_leader",
+        telegramChatId,
+        text: "바꾼 파일이 없어 별도 검증 없이 마쳤습니다.\n완료 승인은 고정된 작업 현황판에서 결정해 주세요.",
+        binding: { kind: "event", eventId: sourceEventId },
+        idempotencyKey
+      },
+      room_id: request.roomId
+    });
   }
 
   // 파일을 바꾼 작업은 방장이 버튼을 누르지 않아도 감사가 돈다.

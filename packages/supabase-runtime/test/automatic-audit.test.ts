@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSingleWorkerAuditPrompt, producedRealArtifacts, realArtifactPaths } from "../src/index.js";
+import { SupabaseOutboxStore, buildSingleWorkerAuditPrompt, producedRealArtifacts, realArtifactPaths } from "../src/index.js";
 import { type GatewayEvent } from "../../contracts/src/index.js";
 
 // 자동 검증 기준: 이 실행이 실제로 무언가를 만들거나 고쳤는가.
@@ -80,4 +80,101 @@ function artifact(path: string): GatewayEvent {
     taskId: "task-1",
     artifact: { path, uri: path.startsWith("C:") ? path : `file:///C:/Dev/HuAIChatroomSystem/${path}`, version: "attempt-1" }
   } as GatewayEvent;
+}
+
+// 라이브 결함 회귀 — 감사가 안 붙는 작업이 검증 대기에서 멎던 문제.
+//
+// 파일을 바꾸지 않은 실행은 감사를 붙이지 않기로 했는데, 그러자 그 작업이
+// verification_pending 에서 깨울 사람 없이 영영 멈췄다. 조회 작업 5건이 그렇게 묶여
+// 현황판 "대기" 칸만 불렸다. 감사할 대상이 없다는 것이 작업을 방치할 이유는 아니다.
+test("감사가 안 붙는 실행도 완료 승인 대기까지는 간다", async () => {
+  const calls = makeStoreCalls();
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "k", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: readOnlyRequest(),
+    status: "completed",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "attempt-readonly", text: "86줄입니다." }],
+    occurredAt: "2026-08-16T00:00:00.000Z"
+  });
+
+  const patched = calls.requests
+    .filter((r) => r.method === "PATCH" && /huai_tasks/.test(r.url))
+    .map((r) => r.body.status);
+  assert.equal(patched.length > 0, true, "상태가 한 번도 안 움직였다 — 검증 대기에 묶인다");
+
+  const review = calls.requests.find((r) => String(r.body?.idempotency_key ?? "").startsWith("telegram-completion-review:"));
+  assert.ok(review, "방장이 완료를 결정할 창구가 안 열렸다");
+  assert.match(String(review.body.payload.text), /작업 현황판/, "어디서 결정하는지 알려줘야 한다");
+  assert.equal(review.body.payload.keyboard, undefined, "결정은 현황판에서 한다");
+});
+
+test("감사가 붙는 실행은 감사에 맡기고 먼저 닫지 않는다", async () => {
+  // 파일을 바꾼 실행까지 여기서 통과시키면 독립 검증이 통째로 건너뛰어진다.
+  //
+  // 자동 감사는 HUAI_AUTO_AUDIT_ENABLED 로 켠다. 꺼져 있으면 파일을 바꾼 작업도
+  // 감사 없이 닫히는 게 맞다 — 아무도 안 깨우면 검증 대기에 묶이기 때문이다.
+  // 이 테스트가 지키려는 것은 "켜져 있을 때 감사를 건너뛰지 않는다"이므로 켜고 잰다.
+  const previous = process.env.HUAI_AUTO_AUDIT_ENABLED;
+  process.env.HUAI_AUTO_AUDIT_ENABLED = "true";
+  test.after(() => {
+    if (previous === undefined) delete process.env.HUAI_AUTO_AUDIT_ENABLED;
+    else process.env.HUAI_AUTO_AUDIT_ENABLED = previous;
+  });
+
+  const calls = makeStoreCalls();
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "k", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: readOnlyRequest(),
+    status: "completed",
+    events: [
+      { type: "stdout", taskId: TASK_ID, attemptId: "attempt-readonly", text: "고쳤습니다." },
+      artifact("packages/workflow/src/index.ts")
+    ],
+    occurredAt: "2026-08-16T00:00:00.000Z"
+  });
+
+  const review = calls.requests.find((r) => String(r.body?.idempotency_key ?? "").startsWith("telegram-completion-review:"));
+  assert.equal(review, undefined, "감사 전에 완료 결정 창구가 열렸다");
+});
+
+const TASK_ID = "88888888-8888-4888-8888-888888888888";
+
+function readOnlyRequest() {
+  return {
+    roomId: "99999999-9999-4999-8999-999999999999",
+    taskId: TASK_ID,
+    attemptId: "attempt-readonly",
+    actorId: "77777777-7777-4777-8777-777777777777",
+    requestedBy: "5001",
+    adapterType: "claude_code" as const,
+    projectPath: "C:/work",
+    prompt: "줄 수 알려줘",
+    timeoutMs: 30_000,
+    idempotencyKey: "exec-readonly",
+    createdAt: "2026-08-16T00:00:00.000Z",
+    reportBotRole: "claude_leader" as const
+  };
+}
+
+function makeStoreCalls() {
+  const requests: Array<{ url: string; method: string; body: any }> = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    const method = String(init?.method ?? "GET");
+    requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    const path = url.split("/rest/v1")[1] ?? url;
+    if (path.includes("huai_rooms")) return json(200, [{ telegram_chat_id: "1001" }]);
+    if (path.includes("huai_tasks") && method === "GET") return json(200, [{ status: "in_progress" }]);
+    if (path.includes("huai_events") && method === "POST") {
+      return json(201, [{ event_id: "event-1", room_id: "r", task_id: TASK_ID, event_type: "x", idempotency_key: "k", payload: {}, created_at: "2026-08-16T00:00:00.000Z" }]);
+    }
+    return json(200, []);
+  };
+  return { fetchImpl, requests };
+}
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
