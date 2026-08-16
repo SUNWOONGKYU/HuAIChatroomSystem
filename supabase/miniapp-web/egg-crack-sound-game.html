@@ -19,6 +19,15 @@
   }
   h1 { color: #6b4a1f; font-size: 22px; margin-bottom: 6px; }
   p { color: #8a6a35; font-size: 14px; margin-top: 0; }
+  #score {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 16px;
+    font-weight: 700;
+    color: #6b4a1f;
+  }
   #egg {
     font-size: 140px;
     line-height: 1;
@@ -43,6 +52,7 @@
 </style>
 </head>
 <body>
+<div id="score" aria-live="polite">🥚 0개</div>
 <main>
   <h1>달걀을 클릭하면 깨져요</h1>
   <p id="msg">달걀을 클릭(탭)해보세요</p>
@@ -54,7 +64,9 @@
   var egg = document.getElementById("egg");
   var msg = document.getElementById("msg");
   var reset = document.getElementById("reset");
+  var score = document.getElementById("score");
   var stage = 0;
+  var crackedCount = 0;
   var audioCtx = null;
 
   function playCrackSound() {
@@ -102,6 +114,8 @@
       egg.className = "broken";
       msg.textContent = "짜잔! 달걀이 깨졌어요";
       reset.style.display = "inline-block";
+      crackedCount += 1;
+      score.textContent = "🥚 " + crackedCount + "개";
     }
   });
 

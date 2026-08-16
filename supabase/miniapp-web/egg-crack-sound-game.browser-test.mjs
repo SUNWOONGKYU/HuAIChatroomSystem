@@ -63,11 +63,13 @@ assert.equal(await evaluate(`location.href`), gameUrl, "game page did not open f
 const initial = await evaluate(`({
   eggText: document.querySelector('#egg').textContent,
   resetVisible: getComputedStyle(document.querySelector('#reset')).display !== 'none',
-  audioSupported: Boolean(window.AudioContext || window.webkitAudioContext)
+  audioSupported: Boolean(window.AudioContext || window.webkitAudioContext),
+  scoreText: document.querySelector('#score').textContent
 })`);
 assert.equal(initial.eggText, "🥚");
 assert.equal(initial.resetVisible, false);
 assert.equal(initial.audioSupported, true, "Web Audio is unavailable");
+assert.equal(initial.scoreText, "🥚 0개", "initial score must show 0");
 
 async function click(selector) {
   const center = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x+r.width/2, y:r.y+r.height/2 }; })()`);
@@ -86,20 +88,27 @@ const afterSecond = await evaluate(`({
   cls: document.querySelector('#egg').className,
   eggText: document.querySelector('#egg').textContent,
   resetVisible: getComputedStyle(document.querySelector('#reset')).display !== 'none',
-  audioStarts: window.__eggAudioStarts
+  audioStarts: window.__eggAudioStarts,
+  scoreText: document.querySelector('#score').textContent
 })`);
 assert.equal(afterSecond.cls, "broken", "second click did not show broken state");
 assert.equal(afterSecond.eggText, "🐣");
 assert.equal(afterSecond.resetVisible, true, "reset button did not appear after breaking");
 assert.equal(afterSecond.audioStarts, 2, "second click did not start a sound");
+assert.equal(afterSecond.scoreText, "🥚 1개", "score did not increment when the egg fully broke");
 
 const shot = await send("Page.captureScreenshot", { format: "png" });
 await writeFile(new URL("./egg-crack-sound-game-broken.png", import.meta.url), Buffer.from(shot.data, "base64"));
 
 await click("#reset");
-const afterReset = await evaluate(`({ cls: document.querySelector('#egg').className, eggText: document.querySelector('#egg').textContent })`);
+const afterReset = await evaluate(`({ cls: document.querySelector('#egg').className, eggText: document.querySelector('#egg').textContent, scoreText: document.querySelector('#score').textContent })`);
 assert.equal(afterReset.cls, "");
 assert.equal(afterReset.eggText, "🥚");
+assert.equal(afterReset.scoreText, "🥚 1개", "score must stay cumulative across reset");
+
+await click("#egg");
+await click("#egg");
+assert.equal(await evaluate(`document.querySelector('#score').textContent`), "🥚 2개", "score did not increment on second egg");
 
 console.log(JSON.stringify({ result: "pass", stages: ["initial", "crack1", "broken", "reset"], audioStarts: afterSecond.audioStarts, screenshot: "egg-crack-sound-game-broken.png" }));
 socket.close();

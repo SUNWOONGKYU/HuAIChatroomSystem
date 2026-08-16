@@ -260,7 +260,16 @@ export class SupabaseOutboxStore {
       target_kind: "local_gateway",
       target: JSON.stringify({ kind: "local_gateway", gatewayId }),
       payload: {
-        executionRequest: { ...request, attemptId, adapterType: fallbackAdapter, idempotencyKey: "engine-fallback:" + attemptId },
+        executionRequest: {
+          ...request,
+          attemptId,
+          adapterType: fallbackAdapter,
+          // 보고자도 같이 바꾼다. 엔진만 바꾸면 ClaudeBot 이 한 작업을 CodexBot 이름으로
+          // 보고한다 — 라이브에서 방장이 "엉터리"라고 지적한 그 화면이다. 감사 보고는
+          // 엔진과 무관하게 AuditorBot 이 내므로 그대로 둔다.
+          reportBotRole: isAudit ? request.reportBotRole : reportBotRoleForAdapter(fallbackAdapter),
+          idempotencyKey: "engine-fallback:" + attemptId
+        },
         telegramChatId
       },
       room_id: request.roomId
@@ -1226,6 +1235,13 @@ export function nextEngineAfter(
 }
 
 // 방에 올리는 이름. 사람은 adapterType 을 읽지 않는다.
+// 어느 봇 이름으로 방에 보고할지. 실제로 일한 엔진과 맞아야 한다.
+export function reportBotRoleForAdapter(adapterType: AiAdapterType): "claude_leader" | "codex_leader" {
+  // antigravity 는 아직 자기 봇이 없다. 방에 나가는 문구는 engineActorName 이 정확히
+  // 밝히므로(AntigravityBot), 발신 봇만 claude_leader 를 빌려 쓴다.
+  return adapterType === "codex" ? "codex_leader" : "claude_leader";
+}
+
 export function engineActorName(adapterType: AiAdapterType): string {
   if (adapterType === "codex") return "CodexBot";
   if (adapterType === "antigravity") return "AntigravityBot";

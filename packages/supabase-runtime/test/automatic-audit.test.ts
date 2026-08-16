@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, auditProducedNoVerdict, buildSingleWorkerAuditPrompt, engineActorName, gatewayFailureEvidence, nextEngineAfter, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
+import { SupabaseOutboxStore, auditProducedNoVerdict, reportBotRoleForAdapter, buildSingleWorkerAuditPrompt, engineActorName, gatewayFailureEvidence, nextEngineAfter, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
 import { AI_ADAPTER_TYPES, type GatewayEvent } from "../../contracts/src/index.js";
 
 // 자동 검증 기준: 이 실행이 실제로 무언가를 만들거나 고쳤는가.
@@ -304,4 +304,15 @@ test("도구가 막혀 아무것도 못 본 감사는 판정으로 치지 않는
 test("실제 판정이 담긴 감사는 그대로 받는다", () => {
   assert.equal(auditProducedNoVerdict("판정: 통과. 지시한 줄이 그 위치에 그대로 있고 다른 줄은 그대로다."), false);
   assert.equal(auditProducedNoVerdict("판정: 불합격. README.md 89행이 지시와 다르다."), false);
+});
+
+// 라이브 결함 회귀 — Codex 한도 초과로 ClaudeBot 이 이어받아 작업했는데, 완료 보고는
+// CodexBot 이름으로 방에 떴다. 폴백이 실행 엔진만 바꾸고 보고자는 원래 값을 물려받았다.
+// 방장이 "이런 엉터리가 어디 있냐"고 지적한 화면이다.
+test("작업이 넘어가면 보고하는 봇도 같이 바뀐다", () => {
+  assert.equal(reportBotRoleForAdapter("claude_code"), "claude_leader");
+  assert.equal(reportBotRoleForAdapter("codex"), "codex_leader");
+  // antigravity 는 자기 봇이 없다. 방에 나가는 문구가 AntigravityBot 이라고 밝히므로
+  // 발신 봇만 빌려 쓴다.
+  assert.equal(reportBotRoleForAdapter("antigravity"), "claude_leader");
 });

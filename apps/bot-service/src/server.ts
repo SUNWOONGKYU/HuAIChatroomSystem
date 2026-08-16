@@ -145,13 +145,16 @@ function maybeStartExecutionHeartbeat(
   if (!runtime.inFlightExecutions || env.BOT_SERVICE_EXECUTION_HEARTBEAT_ENABLED === "false") return undefined;
 
   const sender = createTelegramRuntimeSender(env);
-  if (!sender.sendChatAction) return undefined;
 
   return startExecutionHeartbeatLoop({
     // Telegram 의 입력 표시는 약 5초 뒤 사라진다. 그보다 짧게 보내야 끊기지 않는다.
     intervalMs: parsePositiveInteger(env.BOT_SERVICE_EXECUTION_HEARTBEAT_MS ?? "4000", "BOT_SERVICE_EXECUTION_HEARTBEAT_MS"),
     listInFlightExecutions: () => runtime.inFlightExecutions!.listInFlightExecutions(),
-    sendTypingAction: (telegramChatId) => sender.sendChatAction!({ botRole: "platoon_leader", telegramChatId, action: "typing" }),
+    // 입력중 표시는 있으면 쓰고 없으면 건너뛴다. 경과 시간 메시지가 본체이므로, 이것 때문에
+    // 하트비트 전체를 멈추지 않는다 — 실제로 그렇게 막혀 아무 표시도 안 나갔다.
+    sendTypingAction: async (telegramChatId) => {
+      await sender.sendChatAction?.({ botRole: "platoon_leader", telegramChatId, action: "typing" });
+    },
     async sendProgressMessage(telegramChatId, text, messageThreadId) {
       const result = await sender.sendMessage({ botRole: "platoon_leader", telegramChatId, messageThreadId, text });
       return result.telegramMessageId;

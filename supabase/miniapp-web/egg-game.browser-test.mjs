@@ -71,8 +71,10 @@ const initial = await evaluate(`({
   touchAction: getComputedStyle(document.querySelector('#egg')).touchAction,
   targetWidth: document.querySelector('#egg').getBoundingClientRect().width
   ,audioSupported: Boolean(window.AudioContext || window.webkitAudioContext)
+  ,scoreText: document.querySelector('#score').textContent
 })`);
 assert.equal(initial.stage, "0");
+assert.equal(initial.scoreText, "🥚 0개", "initial score must show 0");
 assert.equal(initial.width, initial.viewport, "mobile horizontal overflow detected");
 assert.equal(initial.touchAction, "manipulation");
 assert.ok(initial.targetWidth >= 44);
@@ -97,12 +99,14 @@ const broken = await evaluate(`({
   stage: document.querySelector('#egg').dataset.stage,
   resetVisible: !document.querySelector('#reset').hidden,
   latency: Number((document.querySelector('#latency').textContent.match(/\\d+/)||[])[0]),
-  audioStarts: window.__eggAudioStarts
+  audioStarts: window.__eggAudioStarts,
+  scoreText: document.querySelector('#score').textContent
 })`);
 assert.equal(broken.stage, "2");
 assert.equal(broken.resetVisible, true);
 assert.ok(Number.isFinite(broken.latency) && broken.latency < 100, `visual response was ${broken.latency}ms`);
 assert.equal(broken.audioStarts, 2, "each egg tap must start one sound");
+assert.equal(broken.scoreText, "🥚 1개", "score did not increment when the egg fully broke");
 
 const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
 await writeFile(new URL("./egg-game-broken.png", import.meta.url), Buffer.from(shot.data, "base64"));
@@ -110,6 +114,11 @@ await writeFile(new URL("./egg-game-broken.png", import.meta.url), Buffer.from(s
 await tap("#reset");
 assert.equal(await evaluate(`document.querySelector('#egg').dataset.stage`), "0");
 assert.equal(await evaluate(`window.__eggAudioStarts`), 3, "reset tap did not start its sound");
+assert.equal(await evaluate(`document.querySelector('#score').textContent`), "🥚 1개", "score must stay cumulative across reset");
+
+await tap("#egg");
+await tap("#egg");
+assert.equal(await evaluate(`document.querySelector('#score').textContent`), "🥚 2개", "score did not increment on second egg");
 
 console.log(JSON.stringify({ result: "pass", viewport: "390x844", stages: [0, 1, 2, 0], latencyMs: broken.latency, screenshot: "egg-game-broken.png" }));
 socket.close();

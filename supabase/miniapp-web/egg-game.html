@@ -59,6 +59,12 @@
   .back:active, .reset:active { transform: translateY(2px) scale(.97); }
   .back:focus-visible, .reset:focus-visible, .egg-button:focus-visible { outline: 4px solid #175a62; outline-offset: 4px; }
   .title { margin: 0; font-size: clamp(20px, 6vw, 30px); letter-spacing: -.04em; }
+  .score {
+    min-width: 48px;
+    text-align: right;
+    font: 700 15px/1 "Trebuchet MS", "Apple SD Gothic Neo", sans-serif;
+    color: var(--ink);
+  }
   .stage { min-height: 0; display: grid; place-items: center; align-content: center; }
   .prompt { margin: 12px 0 4px; font-size: clamp(21px, 6.3vw, 34px); letter-spacing: -.035em; }
   .sub { min-height: 25px; margin: 0 0 8px; color: var(--muted); font: 700 15px/1.6 "Trebuchet MS", "Apple SD Gothic Neo", sans-serif; }
@@ -120,7 +126,7 @@
   <header class="topbar">
     <a class="back" href="./index.html" aria-label="작업 현황판으로 돌아가기">← 작업 현황판</a>
     <h1 class="title">톡! 달걀깨기</h1>
-    <span aria-hidden="true" style="width:48px"></span>
+    <span class="score" id="score" aria-live="polite">🥚 0개</span>
   </header>
   <section class="stage" aria-labelledby="prompt">
     <h2 class="prompt" id="prompt">달걀을 톡 건드려요</h2>
@@ -152,7 +158,9 @@
   var sub = document.getElementById("sub");
   var reset = document.getElementById("reset");
   var latency = document.getElementById("latency");
+  var score = document.getElementById("score");
   var stage = 0;
+  var crackedCount = 0;
   var ignoreClickUntil = 0;
   var audioContext = null;
 
@@ -195,6 +203,8 @@
       egg.setAttribute("aria-label", "달걀이 깨진 상태");
       reset.hidden = false;
       if (navigator.vibrate) navigator.vibrate(22);
+      crackedCount += 1;
+      score.textContent = "🥚 " + crackedCount + "개";
     }
     requestAnimationFrame(function () {
       var elapsed = Math.max(0, Math.round(performance.now() - startedAt));

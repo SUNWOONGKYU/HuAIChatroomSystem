@@ -542,7 +542,7 @@ test("room facts(소대장 판단 프롬프트)는 작업 상태를 raw 값이 �
 // 방장 제기 — 포럼 그룹은 주제마다 고정 바가 따로라, 그룹에 하나 고정해 둔 작업 현황판이
 // 다른 주제에서는 보이지 않았다. 그 주제에서 일을 시키고도 결과를 확인할 창구가 없었다.
 test("주제로 나가는 메시지가 있으면 그 주제에 현황판을 올려 고정한다", async () => {
-  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, [])]);
+  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, []), jsonResponse(201, [])]);
   const store = new SupabaseBotServiceStore({
     url: "https://example.supabase.co",
     serviceRoleKey: "service-role-key-for-test",
@@ -564,6 +564,7 @@ test("주제로 나가는 메시지가 있으면 그 주제에 현황판을 올�
     .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
   const board = inserted.find((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:topic-board:"));
 
+  // 현황판 행은 본 배치와 따로 들어간다 — 같이 넣으면 두 번째 메시지부터 배치가 통째로 막힌다.
   assert.ok(board, "그 주제에 현황판이 올라가지 않았다");
   assert.equal(board.payload.messageThreadId, "613", "현황판이 다른 주제에 올라가면 소용이 없다");
   assert.equal(board.payload.pinMessage, true, "고정하지 않으면 대화에 밀려 사라진다");
@@ -572,7 +573,7 @@ test("주제로 나가는 메시지가 있으면 그 주제에 현황판을 올�
 
 test("주제 없는 그룹에는 현황판을 따로 올리지 않는다", async () => {
   // 일반 그룹은 고정 바가 하나라 이미 고정해 둔 것으로 충분하다.
-  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, [])]);
+  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, []), jsonResponse(201, [])]);
   const store = new SupabaseBotServiceStore({
     url: "https://example.supabase.co",
     serviceRoleKey: "service-role-key-for-test",
@@ -593,4 +594,39 @@ test("주제 없는 그룹에는 현황판을 따로 올리지 않는다", async
     .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
 
   assert.equal(inserted.some((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:topic-board:")), false);
+});
+
+// 라이브 결함 회귀 — 현황판 행을 본 배치에 같이 넣었더니, 그 주제의 두 번째 메시지부터
+// outbox-idempotency-conflict 로 처리 전체가 실패했다(제안 메시지조차 안 나갔다).
+// 배치 삽입은 "행 하나라도 이미 있으면 전체 실패"이고, 현황판 행은 주제당 하나뿐이라
+// 두 번째부터는 반드시 이미 존재한다.
+test("현황판 행이 이미 있어도 그 주제의 다음 메시지가 막히지 않는다", async () => {
+  const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
+    // 현황판 행 단건 삽입 → 이미 있음.
+    jsonResponse(409, { message: "duplicate key" }),
+    // 본 배치는 그대로 성공해야 한다.
+    jsonResponse(201, [])
+  ]);
+  const store = new SupabaseBotServiceStore({
+    url: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key-for-test",
+    fetchImpl: calls.fetchImpl,
+    miniAppDirectLinkBaseUrl: "https://t.me/leader_chatroom_bot/board"
+  });
+
+  await store.commitTelegramInputResult(
+    makeOutboxCommit("telegram:proposal:p_1", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
+      botRole: "platoon_leader",
+      telegramChatId: "1001",
+      messageThreadId: "613",
+      text: "📋 작업 제안입니다."
+    })
+  );
+
+  const posts = calls.requests.filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url));
+  assert.equal(posts.length, 2, "현황판 행과 본 배치는 따로 들어가야 한다");
+  const batch = posts[posts.length - 1]?.body;
+  assert.equal(Array.isArray(batch) && batch.length, 1, "본 배치에 현황판 행이 섞이면 안 된다");
+  assert.equal(Array.isArray(batch) && batch[0].idempotency_key, "telegram:proposal:p_1");
 });

@@ -167,8 +167,11 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows, roomId);
     const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows, roomId);
     const hydratedOutboxRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
-    const withTopicBoard = this.withTopicBoardPin(hydratedOutboxRows, roomId);
-    const insertedOutbox = await this.insertOutboxRowsIdempotently(withTopicBoard);
+    // 현황판 행은 주제당 하나뿐이라 두 번째 메시지부터는 반드시 이미 존재한다. 아래 배치
+    // 삽입은 "행 하나라도 이미 있으면 전체 실패"라서, 같이 넣으면 그 주제의 모든 처리가
+    // 멎는다(라이브에서 outbox-idempotency-conflict 로 제안 메시지가 통째로 안 나갔다).
+    await this.ensureTopicBoardRows(hydratedOutboxRows, roomId);
+    const insertedOutbox = await this.insertOutboxRowsIdempotently(hydratedOutboxRows);
 
     return {
       events: persistedEvents.map((event) => ({ ...event, createdAt: event.createdAt ?? createdAt })),
@@ -348,8 +351,20 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   //
   // 한 주제에 한 번만 올린다 — 아웃박스의 idempotency_key 가 그 보증이다(같은 키는 두 번
   // 안 들어간다). 별도 표를 두고 "이미 고정했는가"를 관리하지 않는 이유이기도 하다.
-  private withTopicBoardPin(rows: OutboxInsertRow[], roomId: string): OutboxInsertRow[] {
-    if (!this.miniAppDirectLinkBaseUrl) return rows;
+  private async ensureTopicBoardRows(rows: OutboxInsertRow[], roomId: string): Promise<void> {
+    for (const row of this.buildTopicBoardRows(rows, roomId)) {
+      // 이미 있으면 그대로 둔다 — 현황판은 주제마다 하나면 된다.
+      const response = await this.client.request("POST", "/huai_outbox", {
+        body: { ...row, event_id: row.event_id ?? null },
+        prefer: "return=minimal"
+      });
+      if (response.status !== 409) await response.expectOk();
+    }
+  }
+
+  private buildTopicBoardRows(rows: OutboxInsertRow[], roomId: string): OutboxInsertRow[] {
+    // 현황판 링크를 만들 수 없으면 올릴 것도 없다.
+    if (!this.miniAppDirectLinkBaseUrl) return [];
 
     const seeded = new Set<string>();
     const boardRows: OutboxInsertRow[] = [];
@@ -381,7 +396,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       });
     }
 
-    return boardRows.length === 0 ? rows : [...boardRows, ...rows];
+    return boardRows;
   }
 
   // "작업 실행을 시작했습니다: p_032d2db2..." 처럼 내부 id 만 보여주면

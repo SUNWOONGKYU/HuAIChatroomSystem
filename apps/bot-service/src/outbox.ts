@@ -2,7 +2,7 @@ import {
   maskTelegramSensitiveText as maskSensitiveText,
   sanitizeTelegramVisibleText
 } from "../../../packages/telegram-ui/src/sanitize.js";
-import { Api, GrammyError } from "grammy";
+import { Api, GrammyError, InputFile } from "grammy";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
@@ -57,7 +57,7 @@ export type TelegramBotTokenResolver = {
   resolveBotToken(botRole: TelegramBotRole): Promise<string>;
 };
 
-type GrammyApiLike = Pick<Api, "sendMessage" | "editMessageText" | "answerCallbackQuery" | "pinChatMessage">;
+type GrammyApiLike = Pick<Api, "sendMessage" | "editMessageText" | "answerCallbackQuery" | "pinChatMessage" | "sendChatAction" | "sendDocument">;
 
 export function createTelegramGrammySender(input: {
   tokenResolver: TelegramBotTokenResolver;
@@ -92,6 +92,35 @@ export function createTelegramGrammySender(input: {
         }
       }
       return result ?? { telegramMessageId: "" };
+    },
+    // 문서 산출물 업로드. 이것도 fetch 발신기에만 있어서 라이브에서 전송이 통째로
+    // 죽었다(unsupported-document-send). 두 발신기의 기능이 어긋나면, 어느 쪽을 쓰는지에
+    // 따라 기능이 있다가 없다가 한다.
+    async sendDocument(request) {
+      const api = await resolveApi(request.botRole);
+      try {
+        const message = await api.sendDocument(
+          request.telegramChatId,
+          new InputFile(request.documentPath),
+          stripUndefined({
+            message_thread_id: optionalNumericMessageId(request.messageThreadId),
+            caption: request.caption?.slice(0, 1024)
+          })
+        );
+        return { telegramMessageId: String(message.message_id), raw: message };
+      } catch (error) {
+        throw normalizeTelegramError(error);
+      }
+    },
+    // 실행 중 표시. 이게 grammy 발신기에 없어서 하트비트가 통째로 시작되지 못했고,
+    // 방에는 아무 움직임도 안 떴다(라이브에서 방장이 네 번 제기했다).
+    async sendChatAction(request) {
+      const api = await resolveApi(request.botRole);
+      try {
+        await api.sendChatAction(request.telegramChatId, request.action);
+      } catch {
+        // 표시가 안 되는 것은 작업 자체를 막을 이유가 아니다.
+      }
     },
     async pinMessage(request) {
       const api = await resolveApi(request.botRole);

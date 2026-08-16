@@ -31,3 +31,5 @@ _WorkLog/
 *.jpg
 *.jpeg
 *.pnglogs/
+
+.vercel

@@ -39,7 +39,9 @@ test("grammy sender sends messages without optional reply id", async () => {
       async sendMessage() { return { message_id: 123 } as never; },
       async editMessageText() { return { message_id: 124 } as never; },
       async answerCallbackQuery() { return true; },
-      async pinChatMessage() { return true; }
+      async pinChatMessage() { return true; },
+      async sendChatAction() { return true; },
+      async sendDocument() { return { message_id: 125 } as never; }
     })
   });
   const sent = await sender.sendMessage({ botRole: "platoon_leader", telegramChatId: "1001", text: "hello" });
@@ -204,4 +206,56 @@ test("fetch sender attaches timeout signal to Telegram API calls", async () => {
 
   await sender.sendMessage({ botRole: "platoon_leader", telegramChatId: "1001", text: "hello" });
   assert.equal(signal instanceof AbortSignal, true);
+});
+
+// 라이브 결함 회귀 — 실행 중 표시가 fetch 발신기에만 있었고, 실제로 쓰는 grammy 발신기에는
+// 없었다. server.ts 가 그 유무로 하트비트 시작을 가로막아, 방에는 아무 움직임도 안 떴다.
+// 방장이 "실행 버튼 깜빡이는 게 결과 나오기 전에 멈춘다"고 네 번 제기한 것이 이 상태다.
+test("grammy sender 도 실행 중 표시를 보낼 수 있다", async () => {
+  const calls: Array<{ chatId: string; action: string }> = [];
+  const sender = createTelegramGrammySender({
+    tokenResolver: { async resolveBotToken() { return "token"; } },
+    apiFactory: () => ({
+      async sendMessage() { return { message_id: 1 } as never; },
+      async editMessageText() { return { message_id: 1 } as never; },
+      async answerCallbackQuery() { return true; },
+      async pinChatMessage() { return true; },
+      async sendChatAction(chatId: unknown, action: unknown) {
+        calls.push({ chatId: String(chatId), action: String(action) });
+        return true;
+      },
+      async sendDocument() { return { message_id: 125 } as never; }
+    })
+  });
+
+  assert.ok(sender.sendChatAction, "이 함수가 없으면 하트비트가 시작조차 안 된다");
+  await sender.sendChatAction!({ botRole: "platoon_leader", telegramChatId: "1001", action: "typing" });
+  assert.deepEqual(calls, [{ chatId: "1001", action: "typing" }]);
+});
+
+// 라이브 결함 회귀(두 번) — 실행 중 표시와 문서 업로드를 fetch 발신기에만 붙였는데, 운영이
+// 쓰는 것은 grammy 발신기였다. 첫 번째는 하트비트가 통째로 안 떴고, 두 번째는 결과물 전송이
+// unsupported-document-send 로 죽었다. 어느 쪽이 부족한지는 라이브에서야 드러났다.
+test("두 발신기가 같은 기능 집합을 갖는다", () => {
+  const tokenResolver = { async resolveBotToken() { return "token"; } };
+  const grammy = createTelegramGrammySender({
+    tokenResolver,
+    apiFactory: () => ({
+      async sendMessage() { return { message_id: 1 } as never; },
+      async editMessageText() { return { message_id: 1 } as never; },
+      async answerCallbackQuery() { return true; },
+      async pinChatMessage() { return true; },
+      async sendChatAction() { return true; },
+      async sendDocument() { return { message_id: 1 } as never; }
+    })
+  });
+  const fetchSender = createTelegramFetchSender({ tokenResolver });
+
+  const capabilities = (sender: object) => Object.keys(sender).filter((key) => typeof (sender as Record<string, unknown>)[key] === "function").sort();
+
+  assert.deepEqual(
+    capabilities(grammy),
+    capabilities(fetchSender),
+    "한쪽에만 있는 기능은 운영이 어느 발신기를 쓰느냐에 따라 있다가 없다가 한다"
+  );
 });
