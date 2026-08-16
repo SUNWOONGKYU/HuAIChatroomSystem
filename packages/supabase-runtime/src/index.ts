@@ -1131,10 +1131,23 @@ function cleanHumanVisibleOutput(text: string): string | undefined {
 //
 // 그래서 고르지 않는다. 작업자가 쓴 순서 그대로 두고 길이로만 자른다 — 답은 보통
 // 맨 앞에 오므로, 잘리더라도 사라지는 건 꼬리지 답이 아니다.
-const HUMAN_VISIBLE_MAX_LENGTH = 3200;
+// 보고가 잘리는 지점.
+//
+// 예전 값 3200 은 "한 메시지에 담자"로 정한 것인데, 전송 쪽에는 이미 분할이 있다
+// (apps/bot-service/src/outbox.ts splitTelegramText, 3900자마다 쪼개 여러 메시지로
+// 보낸다). 그래서 3200 은 Telegram 의 한계가 아니라 우리가 스스로 버린 양이었다 —
+// 방장이 긴 보고를 받으면 뒷부분이 사라졌다.
+//
+// 완전히 풀지는 않는다. 작업자가 로그를 통째로 뱉으면 방이 그걸로 덮인다. 세 메시지쯤
+// 되는 12000자를 상한으로 두고, 넘으면 잘렸다는 사실을 문장으로 알린다 — "..." 만
+// 붙으면 뒤에 뭐가 더 있었는지 방장이 알 수 없다.
+const HUMAN_VISIBLE_MAX_LENGTH = 12000;
 
 function compactHumanVisibleLines(lines: string[]): string {
-  return truncate(lines.join("\n").trim(), HUMAN_VISIBLE_MAX_LENGTH);
+  const joined = lines.join("\n").trim();
+  if (joined.length <= HUMAN_VISIBLE_MAX_LENGTH) return joined;
+  const kept = joined.slice(0, HUMAN_VISIBLE_MAX_LENGTH).trimEnd();
+  return `${kept}\n\n(보고가 길어 여기까지만 표시했습니다. 전체는 /trace 로 확인해 주세요.)`;
 }
 
 function isLowValueHumanLine(line: string): boolean {

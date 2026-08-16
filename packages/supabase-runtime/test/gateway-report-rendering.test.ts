@@ -199,14 +199,31 @@ test("gateway report removes execution wrapper labels from Telegram text", () =>
 });
 
 test("gateway report compacts long human visible output", () => {
+  // 3000자짜리 보고는 이제 안 잘린다. 예전 상한 3200 은 "한 메시지에 담자"로 정한
+  // 값이었는데, 전송 쪽에 이미 분할이 있어서(splitTelegramText) 스스로 버린 양이었다.
   const longSummary = "가".repeat(3000) + "끝";
   const text = renderGatewayReportText({
     request: makeRequest(),
     status: "completed",
     events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: longSummary }]
   });
-  assert.equal(text.length <= 3300, true);
-  assert.equal(text.includes("끝"), true);
+  assert.equal(text.includes("끝"), true, "보고 끝부분이 잘려나갔다");
+  assert.equal(text.includes("여기까지만 표시"), false, "이 길이는 자를 필요가 없다");
+});
+
+test("보고가 아주 길면 자르되 잘렸다고 알린다", () => {
+  // 작업자가 로그를 통째로 뱉으면 방이 그걸로 덮인다. 다만 "..." 만 붙으면 뒤에 뭐가
+  // 더 있었는지 방장이 알 수 없으므로, 잘렸다는 사실과 어디서 전체를 보는지를 남긴다.
+  const huge = "나".repeat(20000) + "마지막줄";
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: huge }]
+  });
+
+  assert.equal(text.includes("마지막줄"), false);
+  assert.match(text, /여기까지만 표시/);
+  assert.match(text, /\/trace/, "전체를 어디서 보는지 알려줘야 한다");
 });
 
 test("gateway report removes low-value implementation details from Telegram text", () => {
