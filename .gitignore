@@ -14,6 +14,7 @@ coverage/
 *.pid
 __huai_*_smoke*.txt
 .codex-remote-attachments/
+.codex-browser-profile-*/
 supabase/.temp/
 
 # OS/editor

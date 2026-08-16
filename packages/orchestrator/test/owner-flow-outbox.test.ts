@@ -346,7 +346,10 @@ test("task list command includes structured DB query payload", () => {
   );
 
   assert.equal(result.accepted, true);
-  assert.deepEqual(result.outbox[0]?.payload.query, { kind: "tasks", limit: 10 });
+  // 상한이 10 이던 때, 방에 작업이 쌓이면 지금 돌고 있는 것이 목록 밖으로 밀려
+  // "진행상황이 안 보인다"가 됐다. 조회 쪽에서 진행 중을 따로 뽑아 항상 포함시키도록
+  // 바뀌었고(supabase-store renderTaskListQuery), 창 자체도 넓혔다.
+  assert.deepEqual(result.outbox[0]?.payload.query, { kind: "tasks", limit: 30 });
 });
 
 test("task detail command includes structured DB query payload", () => {

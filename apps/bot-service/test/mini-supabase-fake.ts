@@ -231,6 +231,10 @@ function matchesCondition(row: MiniRow, key: string, raw: string): boolean {
     const target = decodeURIComponent(raw.slice(4));
     return String(row[key] ?? "") >= target;
   }
+  if (raw.startsWith("neq.")) {
+    const target = decodeURIComponent(raw.slice(4));
+    return String(row[key] ?? "") !== target;
+  }
   if (raw.startsWith("gt.")) {
     const target = decodeURIComponent(raw.slice(3));
     return String(row[key] ?? "") > target;

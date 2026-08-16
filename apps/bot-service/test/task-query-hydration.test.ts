@@ -11,11 +11,18 @@ function roomResolutionResponse(): Response {
 }
 
 test("hydrates /tasks outbox from Supabase task rows", async () => {
+  // 작업 목록은 조회를 두 번 한다.
+  //
+  // 진행 중(in_progress) 작업은 오래 돌면서 updated_at 이 밀려, 하나의
+  // `order=updated_at.desc&limit=N` 창에서 뒤로 떨어져 나간다. 그러면 방장이 /tasks 를
+  // 쳤을 때 지금 돌고 있는 작업이 목록에 안 보인다 — 라이브에서 "진행상황이 안 보인다"로
+  // 제기된 결함이다. 그래서 진행 중은 따로 뽑아 항상 포함시키고, 나머지를 남은 자리에 채운다.
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "Telegram UX 개선", status: "in_progress", priority: "high", assignee_actor_id: "actor-codex", updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
     ]),
+    jsonResponse(200, []),
     jsonResponse(200, [{ actor_id: "actor-codex", role: "codex_leader" }]),
     jsonResponse(201, [outboxRow({ text: "작업 목록" })])
   ]);
@@ -23,8 +30,14 @@ test("hydrates /tasks outbox from Supabase task rows", async () => {
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "작업 목록 조회 요청을 접수했습니다.", query: { kind: "tasks", limit: 10 } }));
 
+  // 조회가 둘로 갈라졌으므로 방 격리 조건이 양쪽 모두에 걸려야 한다. 한쪽만 걸리면
+  // 그 쪽으로 다른 방 작업이 새어 들어온다.
   assert.match(calls.requests[1]?.url ?? "", /\/huai_tasks\?room_id=eq\./);
-  const text = calls.requests[3]?.body[0].payload.text;
+  assert.match(calls.requests[1]?.url ?? "", /status=eq\.in_progress/);
+  assert.match(calls.requests[2]?.url ?? "", /\/huai_tasks\?room_id=eq\./);
+  assert.match(calls.requests[2]?.url ?? "", /status=neq\.in_progress/);
+
+  const text = calls.requests[4]?.body[0].payload.text;
   assert.match(text, /작업 목록/);
   assert.match(text, /Telegram UX 개선/);
   assert.match(text, /진행 중/); // 그룹 헤더

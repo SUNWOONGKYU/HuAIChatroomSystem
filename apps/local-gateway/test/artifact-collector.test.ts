@@ -232,3 +232,65 @@ async function seedLocalGatewayOutbox(
     }
   });
 }
+
+// 라이브 결함 회귀 — 조회만 한 작업이 파일을 바꾼 것으로 판정된 사건.
+//
+// "package.json version 값 조사"는 아무것도 안 고쳤는데 `.codex-browser-profile-egg/`
+// 안의 브라우저 캐시가 산출물로 수집됐다. 그 때문에 자동 감사(AI 실행 한 번)까지 붙었다.
+// 무엇이 부산물인지는 저장소가 .gitignore 에 이미 적어두고 있으므로 그 답을 쓴다.
+test("저장소가 무시하는 파일은 산출물로 수집하지 않는다", async () => {
+  const collector = createArtifactCollector(
+    fakeFileSystem([
+      entry(".codex-browser-profile-egg/GrShaderCache/data_1", "cache", RUN_STARTED_MS + 1_000),
+      entry("sessions/raw/2026_08_16.jsonl", "log", RUN_STARTED_MS + 900),
+      entry("packages/orchestrator/src/index.ts", "export const a = 1;", RUN_STARTED_MS + 800)
+    ]),
+    fakeIgnoreLookup([".codex-browser-profile-egg/GrShaderCache/data_1", "sessions/raw/2026_08_16.jsonl"])
+  );
+
+  const artifacts = await collector.collect({ request: makeExecutionRequest(), startedAtMs: RUN_STARTED_MS });
+
+  assert.deepEqual(artifacts.map((artifact) => artifact.path), ["packages/orchestrator/src/index.ts"]);
+});
+
+test("무시 목록이 비면 예전처럼 전부 수집한다", async () => {
+  // git 이 없거나 저장소가 아닌 환경에서 수집이 통째로 멎으면 안 된다.
+  const collector = createArtifactCollector(
+    fakeFileSystem([entry("docs/report.md", "결과", RUN_STARTED_MS + 100)]),
+    fakeIgnoreLookup([])
+  );
+
+  const artifacts = await collector.collect({ request: makeExecutionRequest(), startedAtMs: RUN_STARTED_MS });
+
+  assert.deepEqual(artifacts.map((artifact) => artifact.path), ["docs/report.md"]);
+});
+
+test("무시 판정은 파일마다가 아니라 한 번에 묻는다", async () => {
+  // 수집 파일 수만큼 git 을 부르면 실행 종료가 그만큼 느려진다.
+  let calls = 0;
+  const collector = createArtifactCollector(
+    fakeFileSystem([
+      entry("a.ts", "1", RUN_STARTED_MS + 30),
+      entry("b.ts", "2", RUN_STARTED_MS + 20),
+      entry("c.ts", "3", RUN_STARTED_MS + 10)
+    ]),
+    {
+      async ignoredPaths() {
+        calls += 1;
+        return new Set<string>();
+      }
+    }
+  );
+
+  await collector.collect({ request: makeExecutionRequest(), startedAtMs: RUN_STARTED_MS });
+
+  assert.equal(calls, 1);
+});
+
+function fakeIgnoreLookup(ignored: readonly string[]) {
+  return {
+    async ignoredPaths(_root: string, relativePaths: readonly string[]) {
+      return new Set(relativePaths.filter((path) => ignored.includes(path)));
+    }
+  };
+}

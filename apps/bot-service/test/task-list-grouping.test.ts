@@ -53,8 +53,10 @@ test("그룹 헤더 + 세부 상태 라벨이 모두 나오고, 그룹 순서가
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(200, [
+      { task_id: "22222222-2222-4222-8222-222222222222", title: "진행 중 작업", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
+    ]),
+    jsonResponse(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "차단된 작업", status: "blocked", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" },
-      { task_id: "22222222-2222-4222-8222-222222222222", title: "진행 중 작업", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" },
       { task_id: "33333333-3333-4333-8333-333333333333", title: "검증 대기 작업", status: "verification_pending", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
     ]),
     jsonResponse(201, [outboxRow({ text: "placeholder" })])
@@ -63,7 +65,7 @@ test("그룹 헤더 + 세부 상태 라벨이 모두 나오고, 그룹 순서가
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const text = calls.requests[2]?.body[0].payload.text as string;
+  const text = calls.requests[3]?.body[0].payload.text as string;
 
   // 그룹 헤더
   assert.match(text, /⚠️ 조치 필요/);
@@ -86,8 +88,10 @@ test("경과시간이 주입한 now 를 기준으로 정확히 계산된다", as
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(200, [
+      { task_id: "22222222-2222-4222-8222-222222222222", title: "이틀 전 작업", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T03:00:00.000Z", created_at: "2026-08-13T03:00:00.000Z" }
+    ]),
+    jsonResponse(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "세 시간 전 작업", status: "blocked", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-15T00:00:00.000Z", created_at: "2026-08-15T00:00:00.000Z" },
-      { task_id: "22222222-2222-4222-8222-222222222222", title: "이틀 전 작업", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T03:00:00.000Z", created_at: "2026-08-13T03:00:00.000Z" },
       { task_id: "33333333-3333-4333-8333-333333333333", title: "방금 작업", status: "verification_pending", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-15T02:59:40.000Z", created_at: "2026-08-15T02:59:40.000Z" }
     ]),
     jsonResponse(201, [outboxRow({ text: "placeholder" })])
@@ -96,7 +100,7 @@ test("경과시간이 주입한 now 를 기준으로 정확히 계산된다", as
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const text = calls.requests[2]?.body[0].payload.text as string;
+  const text = calls.requests[3]?.body[0].payload.text as string;
   const lines = text.split("\n");
 
   const threeHourLineIdx = lines.findIndex((line) => line.includes("세 시간 전 작업"));
@@ -112,6 +116,7 @@ test("경과시간이 주입한 now 를 기준으로 정확히 계산된다", as
 test("비어있는 그룹은 출력되지 않는다", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
+    jsonResponse(200, []),
     jsonResponse(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "완료된 작업 1", status: "completed", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" },
       { task_id: "22222222-2222-4222-8222-222222222222", title: "완료된 작업 2", status: "completed", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
@@ -122,7 +127,7 @@ test("비어있는 그룹은 출력되지 않는다", async () => {
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const text = calls.requests[2]?.body[0].payload.text as string;
+  const text = calls.requests[3]?.body[0].payload.text as string;
 
   assert.match(text, /✅ 완료/);
   assert.equal(text.includes("🗳️ 승인 대기"), false);
@@ -137,13 +142,14 @@ test("작업이 0건일 때 정확한 문구가 나온다", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(200, []),
+    jsonResponse(200, []),
     jsonResponse(201, [outboxRow({ text: "placeholder" })])
   ]);
   const store = makeStore(calls.fetchImpl);
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const text = calls.requests[2]?.body[0].payload.text as string;
+  const text = calls.requests[3]?.body[0].payload.text as string;
   assert.equal(text, "작업 목록\n현재 등록된 작업이 없습니다.");
 
   const actorsRequest = calls.requests.find((request) => request.url.includes("/huai_ai_actors"));
@@ -153,6 +159,7 @@ test("작업이 0건일 때 정확한 문구가 나온다", async () => {
 test("담당자 없는 task 는 \"미배정\"으로 표시되고, 담당자 조회 자체가 스킵된다", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
+    jsonResponse(200, []),
     jsonResponse(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "담당자 없는 작업", status: "blocked", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
     ]),
@@ -162,7 +169,7 @@ test("담당자 없는 task 는 \"미배정\"으로 표시되고, 담당자 조�
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const text = calls.requests[2]?.body[0].payload.text as string;
+  const text = calls.requests[3]?.body[0].payload.text as string;
   assert.match(text, /미배정/);
 
   const actorsRequest = calls.requests.find((request) => request.url.includes("/huai_ai_actors"));
@@ -172,6 +179,7 @@ test("담당자 없는 task 는 \"미배정\"으로 표시되고, 담당자 조�
 test("알 수 없는 role 이 와도 원본 role 문자열로 폴백한다(깨지지 않는다)", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
+    jsonResponse(200, []),
     jsonResponse(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "미지의 역할 작업", status: "blocked", priority: "normal", assignee_actor_id: "actor-mystery", updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
     ]),
@@ -184,7 +192,7 @@ test("알 수 없는 role 이 와도 원본 role 문자열로 폴백한다(깨�
     store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }))
   );
 
-  const text = calls.requests[3]?.body[0].payload.text as string;
+  const text = calls.requests[4]?.body[0].payload.text as string;
   assert.match(text, /some_future_role/);
 });
 
@@ -203,14 +211,15 @@ test("방에 표시 한도보다 많은 작업이 있으면 '더 있음'을 명�
   }));
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
-    jsonResponseWithRange(200, rows, 25), // 방엔 실제로 25건 있는데 limit=10 으로 10건만 옴
+    jsonResponseWithRange(200, rows, 25), // 방엔 실제로 25건 있는데 limit=30 으로 10건만 옴(in_progress 전량)
+    jsonResponse(200, []), // non-in_progress: 0건
     jsonResponse(201, [outboxRow({ text: "placeholder" })])
   ]);
   const store = makeStore(calls.fetchImpl);
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const text = calls.requests[2]?.body[0].payload.text as string;
+  const text = calls.requests[3]?.body[0].payload.text as string;
   assert.match(text, /최근 10건/);
   assert.match(text, /전체 25건/);
   assert.match(text, /15건 더 있음/);
@@ -224,13 +233,14 @@ test("표시된 것이 방의 전부일 때는 여전히 '총 N건'으로 정확
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponseWithRange(200, rows, 1), // 방에도 딱 1건뿐이다 — 보여준 게 전부
+    jsonResponse(200, []), // non-in_progress: 0건
     jsonResponse(201, [outboxRow({ text: "placeholder" })])
   ]);
   const store = makeStore(calls.fetchImpl);
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const text = calls.requests[2]?.body[0].payload.text as string;
+  const text = calls.requests[3]?.body[0].payload.text as string;
   assert.match(text, /총 1건/);
   assert.equal(text.includes("더 있음"), false);
 });
@@ -245,13 +255,14 @@ test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '작업�
     jsonResponseWithRange(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "작업 1", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
     ], 1),
+    jsonResponse(200, []),
     jsonResponse(201, [outboxRow({ text: "placeholder" })])
   ]);
   const store = makeStore(calls.fetchImpl, undefined, "https://t.me/leader_chatroom_bot/board");
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const keyboard = calls.requests[2]?.body[0].payload.keyboard;
+  const keyboard = calls.requests[3]?.body[0].payload.keyboard;
   assert.ok(keyboard, "keyboard 필드가 있어야 한다");
   const button = keyboard.inline_keyboard[0][0];
   assert.equal(button.text, "작업판 열기");
@@ -269,13 +280,14 @@ test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 미설정이면 /tasks 응답에 keybo
     jsonResponseWithRange(200, [
       { task_id: "11111111-1111-4111-8111-111111111111", title: "작업 1", status: "in_progress", priority: "normal", assignee_actor_id: null, updated_at: "2026-08-13T01:00:00.000Z", created_at: "2026-08-13T00:00:00.000Z" }
     ], 1),
+    jsonResponse(200, []),
     jsonResponse(201, [outboxRow({ text: "placeholder" })])
   ]);
   const store = makeStore(calls.fetchImpl); // miniAppDirectLinkBaseUrl 안 넘김
 
   await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:tasks", { text: "placeholder", query: { kind: "tasks", limit: 10 } }));
 
-  const payload = calls.requests[2]?.body[0].payload;
+  const payload = calls.requests[3]?.body[0].payload;
   assert.equal("keyboard" in payload, false, "미설정 시 keyboard 키 자체가 없어야 한다");
 });
 

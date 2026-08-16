@@ -632,7 +632,7 @@ export function renderTelegramQuery(
   input: Extract<NormalizedTelegramInput, { kind: "command" }>
 ): Extract<TelegramInputHandlingResult, { accepted: true }> {
   const query = input.command.name === "/tasks"
-    ? { kind: "tasks" as const, limit: 10 }
+    ? { kind: "tasks" as const, limit: 30 }
     : input.command.name === "/task"
       ? { kind: "task" as const, taskId: input.command.args[0] ?? "" }
       : input.command.name === "/search"

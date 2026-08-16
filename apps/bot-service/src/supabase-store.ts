@@ -611,23 +611,32 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // Phase 3: /tasks 를 평문 나열에서 상태별 그룹 + 경과시간 + 담당자 표시로 바꾼다.
   // 상태 분류표는 TASK_STATUS_META(전수 커버리지, huai_tasks_status_check 기준) 참고.
   private async renderTaskListQuery(limit: number, roomId: string): Promise<string> {
-    const safeLimit = Math.max(1, Math.min(limit, 20));
-    // count=exact 를 실으면 PostgREST 가 이 요청 하나에 Content-Range 헤더로 room 전체
-    // 건수를 같이 돌려준다 — 별도 조회 없이 "방장이 지금 전부를 본 게 아니다"를 알 수 있다.
-    // (safeLimit 로 잘린 결과만 보고 총 건수를 rows.length 로 표시하던 게 결함이었다 —
-    // 25건 있는 방인데 "총 10건"으로 보였다.)
-    const response = await this.client.request(
+    const safeLimit = Math.max(1, Math.min(limit, 30));
+    // in_progress 작업은 장기 체류로 updated_at 이 밀려 단일 updated_at.desc 쿼리에서
+    // 창 밖으로 탈락하는 결함이 있었다. 별도 조회로 항상 포함시킨다.
+    const IN_PROGRESS_CAP = 30;
+    const taskSelect = "task_id,title,status,priority,assignee_actor_id,updated_at,created_at";
+    const inProgressResponse = await this.client.request(
       "GET",
-      "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&select=task_id,title,status,priority,assignee_actor_id,updated_at,created_at&order=updated_at.desc&limit=" + safeLimit,
+      "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.in_progress&select=" + taskSelect + "&order=updated_at.desc&limit=" + IN_PROGRESS_CAP,
       { prefer: "count=exact" }
     );
-    const rows = await response.json<TaskSummaryRow[]>();
+    const inProgressRows = await inProgressResponse.json<TaskSummaryRow[]>();
+    const inProgressTotal = parseContentRangeTotal(inProgressResponse.header("content-range")) ?? inProgressRows.length;
+
+    const otherLimit = Math.max(1, safeLimit - inProgressRows.length);
+    const otherResponse = await this.client.request(
+      "GET",
+      "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&status=neq.in_progress&select=" + taskSelect + "&order=updated_at.desc&limit=" + otherLimit,
+      { prefer: "count=exact" }
+    );
+    const otherRows = await otherResponse.json<TaskSummaryRow[]>();
+    const otherTotal = parseContentRangeTotal(otherResponse.header("content-range")) ?? otherRows.length;
+
+    const rows = [...inProgressRows, ...otherRows];
+    const totalCount = inProgressTotal + otherTotal;
 
     if (rows.length === 0) return "작업 목록\n현재 등록된 작업이 없습니다.";
-
-    // Content-Range 헤더가 없거나 파싱 실패하면(테스트 목업 등) 안전하게 "보이는 만큼이 전부"로
-    // 가정한다 — 실제보다 더 많다고 거짓으로 알리지 않기 위함이다.
-    const totalCount = parseContentRangeTotal(response.header("content-range")) ?? rows.length;
 
     const assigneeActorIds = Array.from(new Set(rows.map((task) => task.assignee_actor_id).filter((value): value is string => Boolean(value))));
     const roleByActorId = await this.fetchActorRolesByActorIds(assigneeActorIds);

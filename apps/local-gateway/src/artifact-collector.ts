@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
@@ -42,14 +43,35 @@ const EXCLUDED_DIRECTORIES = new Set([
   "__pycache__"
 ]);
 
-export function createArtifactCollector(fileSystem: ArtifactFileSystem = createNodeArtifactFileSystem()): ArtifactCollector {
+// 저장소가 무시하는 파일은 작업 산출물이 아니다.
+//
+// EXCLUDED_DIRECTORIES 는 이름을 하나씩 적어두는 방식이라 늘 뒤처진다. 라이브에서
+// `.codex-browser-profile-egg/` 안의 브라우저 캐시가 산출물로 수집됐고, 그 때문에
+// "package.json version 값 조사" 같은 순수 조회 작업이 파일을 바꾼 것으로 판정되어
+// 자동 감사(AI 실행 한 번)까지 붙었다. 목록에 그 이름을 추가하면 다음 부산물에서 또 같은
+// 일이 난다.
+//
+// 무엇이 부산물인지는 저장소가 이미 .gitignore 에 적어두고 있다. 그 답을 쓴다.
+// git 이 없거나 저장소가 아니면(isIgnored 가 undefined) 예전대로 전부 수집한다 —
+// 수집이 과해지는 것이지 없어지는 것이 아니라, 못 쓰게 만드는 것보다 낫다.
+export function createArtifactCollector(
+  fileSystem: ArtifactFileSystem = createNodeArtifactFileSystem(),
+  ignoreLookup: ArtifactIgnoreLookup = createGitArtifactIgnoreLookup()
+): ArtifactCollector {
   return {
     async collect(input) {
       const policy = normalizeArtifactPolicy(input.request.artifactPolicy);
       const entries = await fileSystem.listChangedFiles(input.request.projectPath, input.startedAtMs);
-      const matched = entries
+      const candidates = entries
         .filter((entry) => entry.sizeBytes <= policy.maxArtifactBytes)
-        .filter((entry) => matchesAnyGlob(entry.relativePath, policy.collectGlobs))
+        .filter((entry) => matchesAnyGlob(entry.relativePath, policy.collectGlobs));
+
+      const ignored = await ignoreLookup.ignoredPaths(
+        input.request.projectPath,
+        candidates.map((entry) => entry.relativePath)
+      );
+      const matched = candidates
+        .filter((entry) => !ignored.has(entry.relativePath))
         .sort((left, right) => right.modifiedAtMs - left.modifiedAtMs)
         .slice(0, MAX_COLLECTED_ARTIFACTS);
 
@@ -110,6 +132,42 @@ export function toArtifactUri(projectPath: string, relativePath: string): string
 
 export function sha256Hex(content: Uint8Array): string {
   return createHash("sha256").update(content).digest("hex");
+}
+
+export type ArtifactIgnoreLookup = {
+  ignoredPaths(root: string, relativePaths: readonly string[]): Promise<Set<string>>;
+};
+
+// `git check-ignore --stdin` 한 번으로 전부 판정한다. 파일마다 부르면 수집이 느려진다.
+export function createGitArtifactIgnoreLookup(): ArtifactIgnoreLookup {
+  return {
+    async ignoredPaths(root, relativePaths) {
+      if (relativePaths.length === 0) return new Set();
+      try {
+        const output = await runGitCheckIgnore(root, relativePaths);
+        return new Set(output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+      } catch {
+        // git 이 없거나 저장소가 아니면 아무것도 무시하지 않는다(예전 동작).
+        return new Set();
+      }
+    }
+  };
+}
+
+function runGitCheckIgnore(root: string, relativePaths: readonly string[]): Promise<string> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("git", ["check-ignore", "--stdin"], { cwd: root, windowsHide: true });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.on("error", rejectPromise);
+    child.on("close", (code) => {
+      // 0 = 무시되는 경로가 있음, 1 = 하나도 없음. 둘 다 정상이다.
+      if (code === 0 || code === 1) resolvePromise(stdout);
+      else rejectPromise(new Error(`git-check-ignore-failed:${code}`));
+    });
+    child.stdin.end(relativePaths.join("\n"));
+  });
 }
 
 export function createNodeArtifactFileSystem(): ArtifactFileSystem {
