@@ -47,6 +47,8 @@ export interface MinimalTableBuilder {
 // 그대로 동작한다 — 진짜 PostgrestFilterBuilder 도 동일하게 thenable 이다.
 export interface MinimalFilterBuilder extends PromiseLike<{ data: unknown; error: { message: string } | null }> {
   eq(column: string, value: unknown): MinimalFilterBuilder;
+  // 여러 작업의 산출물을 한 번에 가져올 때 쓴다(.in("task_id", [...])).
+  in(column: string, values: readonly unknown[]): MinimalFilterBuilder;
   order(column: string, options?: { ascending?: boolean }): MinimalFilterBuilder;
   limit(count: number): MinimalFilterBuilder;
   maybeSingle(): MinimalFilterBuilder;
@@ -54,6 +56,7 @@ export interface MinimalFilterBuilder extends PromiseLike<{ data: unknown; error
 
 class FakeFilterBuilder implements MinimalFilterBuilder {
   private readonly filters: Array<[string, unknown]> = [];
+  private readonly inFilters: Array<[string, readonly unknown[]]> = [];
   private orderColumn: string | undefined;
   private orderAscending = true;
   private limitCount: number | undefined;
@@ -63,6 +66,11 @@ class FakeFilterBuilder implements MinimalFilterBuilder {
 
   eq(column: string, value: unknown): MinimalFilterBuilder {
     this.filters.push([column, value]);
+    return this;
+  }
+
+  in(column: string, values: readonly unknown[]): MinimalFilterBuilder {
+    this.inFilters.push([column, values]);
     return this;
   }
 
@@ -85,7 +93,11 @@ class FakeFilterBuilder implements MinimalFilterBuilder {
   // 실제 필터링이 일어나는 지점 — 여기가 이 대역의 핵심이다. 시드된 행 중 모든 .eq() 조건을
   // AND 로 만족하는 것만 남긴다. room_id 필터를 안 걸거나 값을 무시하면 여기서 바로 드러난다.
   private compute(): FakeRow[] {
-    let result = this.rows.filter((row) => this.filters.every(([column, value]) => row[column] === value));
+    let result = this.rows.filter(
+      (row) =>
+        this.filters.every(([column, value]) => row[column] === value) &&
+        this.inFilters.every(([column, values]) => values.includes(row[column]))
+    );
     if (this.orderColumn) {
       const column = this.orderColumn;
       const ascending = this.orderAscending;

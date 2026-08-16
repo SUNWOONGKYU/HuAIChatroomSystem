@@ -102,6 +102,10 @@ function fakeAuthDeps(): Pick<TasksHandlerDeps, "authenticate" | "checkRoomAcces
   };
 }
 
+function noArtifacts(): Pick<TasksHandlerDeps, "fetchArtifactsForTasks"> {
+  return { fetchArtifactsForTasks: async () => ({ data: [] }) };
+}
+
 function req(url: string): Request {
   return new Request(url, { method: "GET", headers: { authorization: "tma fake" } });
 }
@@ -147,4 +151,89 @@ test("roomId 에 주제가 붙어 와도 방과 주제를 갈라 읽는다", asy
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.deepEqual(body.tasks.map((task: { taskId: string }) => task.taskId), ["task-egg"]);
+});
+
+// 방장 제기 — "만들어 줬으면 그걸 연결을 시켜줘야 되는데 연결을 안 시켜주지".
+// 현황판이 작업 제목·상태만 보여주면, 결과물을 보려고 방 대화를 거슬러 올라가야 한다.
+test("현황판 작업에 산출물 목록이 실린다", async () => {
+  const client = new FakeSupabaseClient({
+    huai_tasks: [taskRow({ task_id: "task-a", room_id: "room-A", title: "달걀 게임" })],
+    huai_artifacts: [
+      {
+        artifact_id: "art-1",
+        task_id: "task-a",
+        uri: "https://huai-board.vercel.app/egg-crack-sound-game.html",
+        created_at: "2026-08-16T10:00:00Z"
+      },
+      {
+        artifact_id: "art-2",
+        task_id: "task-a",
+        uri: "file:///C:/Dev/HuAIChatroomSystem/supabase/miniapp-web/egg-crack-sound-game.html",
+        created_at: "2026-08-16T09:00:00Z"
+      }
+    ]
+  });
+
+  const response = await handleMiniappTasksRequest(
+    req("https://example.test/miniapp-tasks?roomId=room-A"),
+    { ...fakeAuthDeps(), ...buildDepsFromClient(client) }
+  );
+  const body = await response.json();
+  const artifacts = body.tasks[0].artifacts;
+
+  assert.equal(artifacts.length, 2);
+  assert.equal(artifacts[0].name, "egg-crack-sound-game.html", "폰에서는 경로가 아니라 이름이 보여야 한다");
+  assert.equal(artifacts[0].url, "https://huai-board.vercel.app/egg-crack-sound-game.html");
+  // 이 PC 안에서만 뜻이 있는 경로다. 눌러도 안 열리는 링크를 주면 고장으로 읽힌다.
+  assert.equal(artifacts[1].url, null, "file:// 은 폰에서 열 수 없다");
+  assert.equal(artifacts[1].name, "egg-crack-sound-game.html", "열 수 없어도 무엇이 나왔는지는 알아야 한다");
+});
+
+test("다른 작업의 산출물이 섞이지 않는다", async () => {
+  const client = new FakeSupabaseClient({
+    huai_tasks: [
+      taskRow({ task_id: "task-a", room_id: "room-A" }),
+      taskRow({ task_id: "task-b", room_id: "room-A" })
+    ],
+    huai_artifacts: [
+      { artifact_id: "art-a", task_id: "task-a", uri: "https://x/a.html", created_at: "2026-08-16T10:00:00Z" },
+      { artifact_id: "art-b", task_id: "task-b", uri: "https://x/b.html", created_at: "2026-08-16T10:00:00Z" }
+    ]
+  });
+
+  const response = await handleMiniappTasksRequest(
+    req("https://example.test/miniapp-tasks?roomId=room-A"),
+    { ...fakeAuthDeps(), ...buildDepsFromClient(client) }
+  );
+  const body = await response.json();
+  const byTask = new Map(body.tasks.map((task: any) => [task.taskId, task.artifacts.map((a: any) => a.artifactId)]));
+
+  assert.deepEqual(byTask.get("task-a"), ["art-a"]);
+  assert.deepEqual(byTask.get("task-b"), ["art-b"]);
+});
+
+// Phase 2 — 게이트웨이가 웹 산출물을 올리면 그 주소로 열린다. uri 는 이 PC 경로 그대로 남는다
+// (감사·추적이 "어느 폴더의 무엇이었나"를 그 값으로 본다).
+test("올려둔 공개 주소가 있으면 그걸로 연다", async () => {
+  const client = new FakeSupabaseClient({
+    huai_tasks: [taskRow({ task_id: "task-a", room_id: "room-A" })],
+    huai_artifacts: [
+      {
+        artifact_id: "art-1",
+        task_id: "task-a",
+        uri: "file:///C:/Dev/HuAIChatroomSystem/supabase/miniapp-web/egg-crack-sound-game.html",
+        public_url: "https://huai-artifacts-abc.vercel.app/egg-crack-sound-game.html",
+        created_at: "2026-08-17T00:00:00Z"
+      }
+    ]
+  });
+
+  const response = await handleMiniappTasksRequest(
+    req("https://example.test/miniapp-tasks?roomId=room-A"),
+    { ...fakeAuthDeps(), ...buildDepsFromClient(client) }
+  );
+  const body = await response.json();
+
+  assert.equal(body.tasks[0].artifacts[0].url, "https://huai-artifacts-abc.vercel.app/egg-crack-sound-game.html");
+  assert.equal(body.tasks[0].artifacts[0].name, "egg-crack-sound-game.html");
 });

@@ -432,6 +432,8 @@ export type ArtifactManifest = {
   checksum: string;
   version: string;
   uri?: string;
+  // 웹으로 열 수 있게 올려둔 주소. uri 는 이 PC 안의 경로라 폰에서는 열리지 않는다.
+  publicUrl?: string;
 };
 
 export type GitSnapshot = {
@@ -448,6 +450,9 @@ export type OutboxTarget =
 export type OutboundBotMessage = {
   botRole: TelegramBotRole;
   telegramChatId: string;
+  // 이 PC 의 파일을 방에 올린다. 문서 산출물(hwp·xlsx·pdf 등)은 웹으로 열 수 없어
+  // 링크가 아니라 파일 자체를 전달해야 방장이 받아볼 수 있다.
+  documentPath?: string;
   // 포럼 주제 번호. 들어온 주제로 되돌려 보내기 위해 대화 전 구간을 따라다닌다.
   messageThreadId?: string;
   text: string;

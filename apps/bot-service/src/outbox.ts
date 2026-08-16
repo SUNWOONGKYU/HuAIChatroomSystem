@@ -3,6 +3,8 @@ import {
   sanitizeTelegramVisibleText
 } from "../../../packages/telegram-ui/src/sanitize.js";
 import { Api, GrammyError } from "grammy";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 3900;
 const DEFAULT_TELEGRAM_FETCH_TIMEOUT_MS = 10_000;
@@ -41,6 +43,14 @@ export type TelegramMessageSender = {
   sendChatAction?(request: { botRole: TelegramBotRole; telegramChatId: string; action: "typing" }): Promise<void>;
   // 포럼 그룹은 주제마다 고정 바가 따로다. 현황판은 주제 안에서 고정돼야 그 주제에서 보인다.
   pinMessage?(request: { botRole: TelegramBotRole; telegramChatId: string; telegramMessageId: string }): Promise<void>;
+  // 문서 산출물을 방에 올린다. 웹으로 열 수 없는 결과물은 파일로 전달하는 수밖에 없다.
+  sendDocument?(request: {
+    botRole: TelegramBotRole;
+    telegramChatId: string;
+    messageThreadId?: string;
+    documentPath: string;
+    caption?: string;
+  }): Promise<TelegramSendResult>;
 };
 
 export type TelegramBotTokenResolver = {
@@ -203,6 +213,34 @@ export function createTelegramFetchSender(input: {
         disable_notification: true
       }, timeoutMs);
     },
+    // 파일 자체를 올린다. multipart 라 다른 호출들과 달리 JSON 이 아니다.
+    //
+    // 파일은 이 PC 에 있다 — 게이트웨이와 bot-service 가 같은 기계에서 도는 지금 구조의
+    // 전제다. 둘을 떼어 놓게 되면 이 경로는 파일을 못 찾는다(그때는 게이트웨이가 직접
+    // 올리거나 파일을 먼저 옮겨야 한다).
+    async sendDocument(request) {
+      const token = await input.tokenResolver.resolveBotToken(request.botRole);
+      const bytes = await readFile(request.documentPath);
+      const form = new FormData();
+      form.set("chat_id", request.telegramChatId);
+      if (request.messageThreadId) form.set("message_thread_id", request.messageThreadId);
+      if (request.caption) form.set("caption", request.caption.slice(0, 1024));
+      form.set("document", new Blob([new Uint8Array(bytes)]), basename(request.documentPath));
+
+      const response = await fetchImpl(`https://api.telegram.org/bot${token}/sendDocument`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      const payload = await readTelegramApiResponse(response);
+      if (!response.ok || payload.ok !== true) {
+        throw new TelegramApiError(
+          `telegram-api-error:${response.status}:${maskSensitiveText(payload.description ?? "unknown")}`,
+          retryAfterMs(payload)
+        );
+      }
+      return { telegramMessageId: String(payload.result?.message_id ?? ""), raw: payload };
+    },
     async answerCallbackQuery(request) {
       return callTelegramApi(fetchImpl, input.tokenResolver, request.botRole, "answerCallbackQuery", {
         callback_query_id: request.callbackQueryId,
@@ -245,6 +283,19 @@ async function sendTelegramOutbox(row: OutboxRecord, sender: TelegramMessageSend
       botRole: row.target.botRole,
       callbackQueryId,
       text
+    });
+  }
+
+  // 문서 전달은 본문 대신 파일이 주인공이다. text 는 설명(캡션)으로만 쓴다.
+  const documentPath = optionalString(row.payload.documentPath);
+  if (documentPath) {
+    if (!sender.sendDocument) throw new Error("unsupported-document-send");
+    return sender.sendDocument({
+      botRole: row.target.botRole,
+      telegramChatId: row.target.telegramChatId,
+      messageThreadId: optionalString(row.payload.messageThreadId),
+      documentPath,
+      caption: text
     });
   }
 

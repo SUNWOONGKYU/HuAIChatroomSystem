@@ -21,6 +21,8 @@ export type LocalGatewayLoopDependencies = {
   runner: ProcessRunner;
   sink: GatewayEventSink;
   artifacts?: ArtifactCollector;
+  // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다(기능 스위치).
+  artifactVercelProject?: string;
   setTimeout: (callback: () => void, ms: number) => unknown;
   shouldContinue: () => boolean;
   now: () => Date;
@@ -42,6 +44,7 @@ export async function runLocalGatewayLoop(
         runner: deps.runner,
         sink: deps.sink,
         artifacts: deps.artifacts,
+        artifactVercelProject: deps.artifactVercelProject,
         limit: config.limit,
         concurrency: config.concurrency,
         leaseUntil: new Date(now.getTime() + config.leaseMs).toISOString(),
@@ -70,7 +73,9 @@ export function buildLocalGatewayRuntimeFromEnv(env: NodeJS.ProcessEnv = process
     store: buildLocalGatewaySupabaseOutboxStoreFromEnv(env),
     runner: createNodeProcessRunner(),
     sink: createConsoleGatewayEventSink(),
-    artifacts: createArtifactCollector()
+    artifacts: createArtifactCollector(),
+    // 실행이 만든 .html 을 여기 올려 폰에서 열 수 있게 한다. 안 두면 예전처럼 로컬 경로만 남는다.
+    artifactVercelProject: env.LOCAL_GATEWAY_ARTIFACT_VERCEL_PROJECT || undefined
   };
 }
 

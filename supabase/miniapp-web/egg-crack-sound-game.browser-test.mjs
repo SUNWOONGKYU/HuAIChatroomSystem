@@ -1,0 +1,105 @@
+import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+
+const port = process.env.CHROME_DEBUG_PORT || "9333";
+const gameUrl = process.env.EGG_GAME_URL;
+assert.ok(gameUrl, "EGG_GAME_URL is required");
+const targets = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
+const page = targets.find((t) => t.type === "page");
+assert.ok(page?.webSocketDebuggerUrl, "Chrome page target not found");
+
+const socket = new WebSocket(page.webSocketDebuggerUrl);
+await new Promise((resolve, reject) => {
+  socket.addEventListener("open", resolve, { once: true });
+  socket.addEventListener("error", reject, { once: true });
+});
+
+let nextId = 0;
+const pending = new Map();
+socket.addEventListener("message", (event) => {
+  const message = JSON.parse(event.data);
+  if (!message.id || !pending.has(message.id)) return;
+  const { resolve, reject } = pending.get(message.id);
+  pending.delete(message.id);
+  message.error ? reject(new Error(message.error.message)) : resolve(message.result);
+});
+
+function send(method, params = {}) {
+  const id = ++nextId;
+  socket.send(JSON.stringify({ id, method, params }));
+  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+}
+
+async function evaluate(expression) {
+  const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  return result.result.value;
+}
+
+await send("Page.enable");
+await send("Runtime.enable");
+await send("Page.addScriptToEvaluateOnNewDocument", {
+  source: `(() => {
+    const NativeAudioContext = window.AudioContext || window.webkitAudioContext;
+    window.__eggAudioStarts = 0;
+    if (!NativeAudioContext) return;
+    class TrackedAudioContext extends NativeAudioContext {
+      createBufferSource() {
+        const src = super.createBufferSource();
+        const start = src.start.bind(src);
+        src.start = (...args) => { window.__eggAudioStarts += 1; return start(...args); };
+        return src;
+      }
+    }
+    window.AudioContext = TrackedAudioContext;
+    window.webkitAudioContext = TrackedAudioContext;
+  })()`
+});
+await send("Page.navigate", { url: gameUrl });
+await new Promise((resolve) => setTimeout(resolve, 500));
+
+assert.equal(await evaluate(`location.href`), gameUrl, "game page did not open from the given URL");
+
+const initial = await evaluate(`({
+  eggText: document.querySelector('#egg').textContent,
+  resetVisible: getComputedStyle(document.querySelector('#reset')).display !== 'none',
+  audioSupported: Boolean(window.AudioContext || window.webkitAudioContext)
+})`);
+assert.equal(initial.eggText, "🥚");
+assert.equal(initial.resetVisible, false);
+assert.equal(initial.audioSupported, true, "Web Audio is unavailable");
+
+async function click(selector) {
+  const center = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x+r.width/2, y:r.y+r.height/2 }; })()`);
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: center.x, y: center.y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: center.x, y: center.y, button: "left", clickCount: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+}
+
+await click("#egg");
+const afterFirst = await evaluate(`({ cls: document.querySelector('#egg').className, audioStarts: window.__eggAudioStarts })`);
+assert.equal(afterFirst.cls, "crack1", "first click did not show crack1 state");
+assert.equal(afterFirst.audioStarts, 1, "first click did not start a sound");
+
+await click("#egg");
+const afterSecond = await evaluate(`({
+  cls: document.querySelector('#egg').className,
+  eggText: document.querySelector('#egg').textContent,
+  resetVisible: getComputedStyle(document.querySelector('#reset')).display !== 'none',
+  audioStarts: window.__eggAudioStarts
+})`);
+assert.equal(afterSecond.cls, "broken", "second click did not show broken state");
+assert.equal(afterSecond.eggText, "🐣");
+assert.equal(afterSecond.resetVisible, true, "reset button did not appear after breaking");
+assert.equal(afterSecond.audioStarts, 2, "second click did not start a sound");
+
+const shot = await send("Page.captureScreenshot", { format: "png" });
+await writeFile(new URL("./egg-crack-sound-game-broken.png", import.meta.url), Buffer.from(shot.data, "base64"));
+
+await click("#reset");
+const afterReset = await evaluate(`({ cls: document.querySelector('#egg').className, eggText: document.querySelector('#egg').textContent })`);
+assert.equal(afterReset.cls, "");
+assert.equal(afterReset.eggText, "🥚");
+
+console.log(JSON.stringify({ result: "pass", stages: ["initial", "crack1", "broken", "reset"], audioStarts: afterSecond.audioStarts, screenshot: "egg-crack-sound-game-broken.png" }));
+socket.close();

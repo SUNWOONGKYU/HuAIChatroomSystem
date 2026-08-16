@@ -306,6 +306,13 @@
   #proposals-section.collapsed #proposals-toggle .chevron { transform: rotate(-90deg); }
   #proposals-section.collapsed #proposals-list { display: none; }
   #proposals-list { padding: 4px 0 10px; }
+  .artifact-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .artifact-list li { font-size: 13px; line-height: 1.4; word-break: break-all; }
+  .artifact-list a { color: var(--accent); text-decoration: none; }
+  .artifact-list a:active { opacity: 0.6; }
+  /* 열 수 없는 산출물(이 PC 안의 경로)은 눌리지 않는다는 게 보여야 한다. */
+  .artifact-list .not-openable { color: var(--hint); }
+
   .proposal-card {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
@@ -412,6 +419,11 @@
       <div class="field" id="detail-assignee-field" hidden>
         <label>담당</label>
         <p id="detail-assignee"></p>
+      </div>
+      <!-- 결과물. 이게 없으면 방장은 "완료"만 보고 무엇이 나왔는지는 방 대화를 거슬러 찾아야 한다. -->
+      <div class="field" id="detail-artifacts-field" hidden>
+        <label>결과물</label>
+        <ul id="detail-artifacts" class="artifact-list"></ul>
       </div>
       <p id="detail-hint" class="hint" hidden></p>
       <div class="action-row" id="action-row" hidden></div>
@@ -830,6 +842,32 @@
     return card;
   }
 
+  // 결과물 목록. 주소가 있는 것만 링크로 만든다 — 눌러도 안 열리는 링크는 고장으로 읽힌다.
+  function renderArtifacts(artifacts) {
+    detailArtifacts.textContent = "";
+    if (!artifacts.length) {
+      detailArtifactsField.hidden = true;
+      return;
+    }
+    detailArtifactsField.hidden = false;
+    for (var i = 0; i < artifacts.length; i += 1) {
+      var artifact = artifacts[i];
+      var li = document.createElement("li");
+      if (artifact.url) {
+        var link = document.createElement("a");
+        link.href = artifact.url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = artifact.name;
+        li.appendChild(link);
+      } else {
+        li.className = "not-openable";
+        li.textContent = artifact.name + " (이 PC에만 있음)";
+      }
+      detailArtifacts.appendChild(li);
+    }
+  }
+
   function pill(text, extraClass) {
     var span = document.createElement("span");
     span.className = "pill" + (extraClass ? " " + extraClass : "");
@@ -848,6 +886,8 @@
   var actionRow = document.getElementById("action-row");
   var decisionNote = document.getElementById("decision-note");
   var detailHint = document.getElementById("detail-hint");
+  var detailArtifactsField = document.getElementById("detail-artifacts-field");
+  var detailArtifacts = document.getElementById("detail-artifacts");
 
   function openDetail(task) {
     detailTitle.textContent = task.title || "(제목 없음)";
@@ -861,6 +901,7 @@
     } else {
       detailAssigneeField.hidden = true;
     }
+    renderArtifacts(task.artifacts || []);
     decisionNote.className = "";
     decisionNote.textContent = "";
     renderActions(task);

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>달걀깨기 게임</title>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    display: grid;
+    place-items: center;
+    background: #fdf1c7;
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    user-select: none;
+  }
+  main {
+    text-align: center;
+  }
+  h1 { color: #6b4a1f; font-size: 22px; margin-bottom: 6px; }
+  p { color: #8a6a35; font-size: 14px; margin-top: 0; }
+  #egg {
+    font-size: 140px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-block;
+    transition: transform 80ms ease;
+  }
+  #egg.crack1 { transform: rotate(-6deg); }
+  #egg.crack2 { transform: rotate(6deg) scale(1.05); }
+  #egg.broken { transform: scale(1.15); }
+  #reset {
+    display: none;
+    margin-top: 16px;
+    padding: 10px 22px;
+    font-size: 15px;
+    border: none;
+    border-radius: 999px;
+    background: #e8a33d;
+    color: #fff;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>달걀을 클릭하면 깨져요</h1>
+  <p id="msg">달걀을 클릭(탭)해보세요</p>
+  <div id="egg">🥚</div>
+  <button id="reset">다시 하기</button>
+</main>
+<script>
+(function () {
+  var egg = document.getElementById("egg");
+  var msg = document.getElementById("msg");
+  var reset = document.getElementById("reset");
+  var stage = 0;
+  var audioCtx = null;
+
+  function playCrackSound() {
+    var AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    if (!audioCtx) audioCtx = new AudioContext();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+
+    var duration = 0.15;
+    var sampleRate = audioCtx.sampleRate;
+    var frameCount = Math.floor(sampleRate * duration);
+    var buffer = audioCtx.createBuffer(1, frameCount, sampleRate);
+    var data = buffer.getChannelData(0);
+    for (var i = 0; i < frameCount; i++) {
+      var decay = Math.pow(1 - i / frameCount, 3);
+      data[i] = (Math.random() * 2 - 1) * decay;
+    }
+    var noise = audioCtx.createBufferSource();
+    noise.buffer = buffer;
+
+    var filter = audioCtx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 1200;
+
+    var gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.6, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+    noise.start();
+  }
+
+  egg.addEventListener("click", function () {
+    if (stage >= 2) return;
+    stage += 1;
+    playCrackSound();
+    if (stage === 1) {
+      egg.textContent = "🥚";
+      egg.className = "crack1";
+      msg.textContent = "금이 갔어요! 한 번 더 클릭!";
+    } else {
+      egg.textContent = "🐣";
+      egg.className = "broken";
+      msg.textContent = "짜잔! 달걀이 깨졌어요";
+      reset.style.display = "inline-block";
+    }
+  });
+
+  reset.addEventListener("click", function () {
+    stage = 0;
+    egg.textContent = "🥚";
+    egg.className = "";
+    msg.textContent = "달걀을 클릭(탭)해보세요";
+    reset.style.display = "none";
+  });
+}());
+</script>
+</body>
+</html>

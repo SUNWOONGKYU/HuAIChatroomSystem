@@ -72,7 +72,7 @@
     "verify:approval-ledger": "npm run build && node --test dist/apps/bot-service/test/approval-ledger.test.js",
     "verify:gate31": "npm run verify:approval-ledger && npm run verify:supabase-store && npm run verify:task-state-transition",
     "verify:artifact-pipeline": "npm run build && node --test dist/apps/local-gateway/test/artifact-collector.test.js dist/packages/supabase-runtime/test/artifact-persistence.test.js",
-    "verify:gate30": "npm run verify:artifact-pipeline && npm run verify:gateway-result-ingestion && npm run verify:local-gateway-consumer",
+    "verify:gate30": "npm run verify:artifact-pipeline && npm run verify:gateway-result-ingestion && npm run verify:local-gateway-consumer && npm run verify:artifact-publisher",
     "verify:spec-coverage": "node scripts/verify-spec-coverage.mjs && node --test scripts/verify-spec-coverage.test.mjs",
     "dry-run:spec": "npm run build && node scripts/dry-run-spec.mjs",
     "verify:gateway-report-rendering": "npm run build && node --test dist/packages/supabase-runtime/test/gateway-report-rendering.test.js",
@@ -109,7 +109,8 @@
     "verify:live-kpi-measure": "node --test scripts/measure-live-kpi.test.mjs",
     "verify:gate45": "npm run verify:live-kpi-measure",
     "verify:execution-heartbeat": "npm run build && node --test dist/apps/bot-service/test/execution-heartbeat.test.js",
-    "verify:gate46": "npm run verify:execution-heartbeat"
+    "verify:gate46": "npm run verify:execution-heartbeat",
+    "verify:artifact-publisher": "npm run build && node --test dist/apps/local-gateway/test/artifact-publisher.test.js"
   },
   "workspaces": [
     "apps/*",

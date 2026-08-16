@@ -10,6 +10,7 @@ import {
   type GatewayPolicy
 } from "./index.js";
 import { type ArtifactCollector } from "./artifact-collector.js";
+import { publishWebArtifacts } from "./artifact-publisher.js";
 
 export type ProcessRunResult = {
   exitCode: number;
@@ -31,12 +32,24 @@ export type ExecutionResult = {
   events: GatewayEvent[];
 };
 
+// 올린 주소가 있으면 산출물에 실어 보낸다. 없으면 원래 모양 그대로 — 문서 산출물이나
+// 배포가 꺼진 환경에서는 아무것도 달라지지 않는다.
+function publishedUrlOrPlain(
+  artifact: ArtifactManifest,
+  publishedUrlByPath: Map<string, string>
+): ArtifactManifest {
+  const publicUrl = publishedUrlByPath.get(artifact.path);
+  return publicUrl ? { ...artifact, publicUrl } : artifact;
+}
+
 export async function executeGatewayRequest(input: {
   request: ExecutionRequest;
   policy: GatewayPolicy;
   runner: ProcessRunner;
   sink: GatewayEventSink;
   artifacts?: ArtifactCollector;
+  // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다(기능 스위치).
+  artifactVercelProject?: string;
   now?: () => string;
 }): Promise<ExecutionResult> {
   const now = input.now ?? (() => new Date().toISOString());
@@ -88,12 +101,22 @@ export async function executeGatewayRequest(input: {
     const agentFailure = classifyAgentFailure(result, input.request.adapterType);
     if (result.exitCode === 0 && !agentFailure) {
       const collection = await collectArtifacts(input.artifacts, input.request, startedAtMs);
+      // 웹 산출물은 올려서 주소를 붙인다. 실패해도 작업은 성공이다 — 결과물은 이미 만들어졌다.
+      const published = await publishWebArtifacts(collection.artifacts, { vercelProject: input.artifactVercelProject });
+      if (published.failureReason) {
+        events.push({
+          type: "artifact_collection_failed",
+          taskId: input.request.taskId,
+          attemptId: input.request.attemptId,
+          reason: published.failureReason
+        });
+      }
       for (const artifact of collection.artifacts) {
         events.push({
           type: "artifact_collected",
           taskId: input.request.taskId,
           attemptId: input.request.attemptId,
-          artifact
+          artifact: publishedUrlOrPlain(artifact, published.publishedUrlByPath)
         });
       }
       if (collection.failureReason) {

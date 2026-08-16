@@ -492,6 +492,8 @@ export class SupabaseOutboxStore {
         body: {
           task_id: request.taskId,
           uri,
+          // 폰에서 열 수 있는 주소. 게이트웨이가 웹 산출물을 올렸을 때만 붙는다.
+          public_url: artifact.publicUrl ?? null,
           version: artifact.version,
           checksum: artifact.checksum,
           author_actor_id: isUuid(request.actorId) ? request.actorId : null,
@@ -506,7 +508,7 @@ export class SupabaseOutboxStore {
 
     if (saved.length === 0) return;
 
-    await this.insertEventIdempotently({
+    const savedEvent = await this.insertEventIdempotently({
       room_id: request.roomId,
       task_id: request.taskId,
       event_type: "artifact_saved",
@@ -519,6 +521,47 @@ export class SupabaseOutboxStore {
         artifacts: saved
       }
     });
+
+    await this.enqueueDocumentDeliveries(request, collected, savedEvent.event_id);
+  }
+
+  // 문서 산출물을 방에 파일로 올린다.
+  //
+  // 웹 산출물(.html)은 게이트웨이가 공개 주소로 올려 링크로 열 수 있다. 문서(hwp·xlsx·pdf)는
+  // 브라우저에서 열리지 않으므로 링크를 줘봐야 소용이 없다 — 파일 자체를 방에 올려야
+  // 방장이 폰에서 받아볼 수 있다.
+  private async enqueueDocumentDeliveries(
+    request: ExecutionRequest,
+    artifacts: readonly ArtifactManifest[],
+    sourceEventId: string
+  ): Promise<void> {
+    const telegramChatId = await this.fetchRoomTelegramChatId(request.roomId);
+    if (!telegramChatId) return;
+
+    for (const artifact of artifacts) {
+      const localPath = localArtifactPath(artifact, request);
+      if (!localPath || !isDeliverableDocument(localPath)) continue;
+      // 크기 한계를 넘는 파일은 텔레그램이 받지 않는다. 시도해서 실패로 남기느니 안 보낸다.
+      if (artifact.sizeBytes > TELEGRAM_DOCUMENT_MAX_BYTES) continue;
+
+      const idempotencyKey = "telegram-artifact:" + request.attemptId + ":" + artifact.checksum;
+      await this.insertOutboxIdempotently({
+        event_id: sourceEventId,
+        idempotency_key: idempotencyKey,
+        target_kind: "telegram_bot",
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        payload: {
+          botRole: "platoon_leader",
+          telegramChatId,
+          messageThreadId: request.telegramMessageThreadId,
+          documentPath: localPath,
+          text: "결과물: " + artifact.path,
+          binding: { kind: "task", taskId: request.taskId },
+          idempotencyKey
+        },
+        room_id: request.roomId
+      });
+    }
   }
 
   // 판정 없이 끝난 감사를 방에 알린다. 조용히 넘기면 방장은 검증이 된 줄 안다.
@@ -955,6 +998,31 @@ export function collectedArtifactsFromEvents(events: readonly GatewayEvent[]): A
     byKey.set(`${artifact.uri ?? artifact.path}::${artifact.version}`, artifact);
   }
   return [...byKey.values()];
+}
+
+// 텔레그램 봇이 올릴 수 있는 최대 크기. 넘으면 API 가 거절한다.
+export const TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024;
+
+// 방에 파일로 전달할 산출물인가.
+//
+// 웹 산출물은 배포해서 링크로 연다(게이트웨이가 이미 올린다). 소스 코드·설정은 결과물이
+// 아니라 작업 그 자체라 방에 뿌리면 잡음이 된다 — 방장이 받아볼 문서만 고른다.
+const DELIVERABLE_DOCUMENT_PATTERN = /\.(hwpx?|docx?|xlsx?|pptx?|pdf|csv|zip|png|jpe?g|mp4)$/i;
+
+export function isDeliverableDocument(filePath: string): boolean {
+  return DELIVERABLE_DOCUMENT_PATTERN.test(filePath.split(/[?#]/)[0] ?? filePath);
+}
+
+// 이 PC 안의 실제 경로. file:// URI 로 기록된 것을 되돌린다.
+export function localArtifactPath(artifact: ArtifactManifest, request: ExecutionRequest): string | undefined {
+  const uri = artifact.uri;
+  if (!uri) return `${request.projectPath}/${artifact.path}`;
+  if (!uri.startsWith("file:///")) return undefined;
+  try {
+    return decodeURIComponent(uri.replace(/^file:\/\/\//, ""));
+  } catch {
+    return undefined;
+  }
 }
 
 export function artifactUri(artifact: ArtifactManifest, request: ExecutionRequest): string {

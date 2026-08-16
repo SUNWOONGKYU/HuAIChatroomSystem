@@ -36,6 +36,8 @@ export async function runLocalGatewayConsumerOnce(input: {
   runner: ProcessRunner;
   sink: GatewayEventSink;
   artifacts?: ArtifactCollector;
+  // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다.
+  artifactVercelProject?: string;
   limit: number;
   leaseUntil: string;
   maxAttempts: number;
@@ -72,6 +74,8 @@ async function processOutboxRow(
     runner: ProcessRunner;
     sink: GatewayEventSink;
     artifacts?: ArtifactCollector;
+  // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다.
+  artifactVercelProject?: string;
     maxAttempts: number;
     now?: () => string;
   },
@@ -92,6 +96,7 @@ async function processOutboxRow(
     runner: input.runner,
     sink: input.sink,
     artifacts: input.artifacts,
+    artifactVercelProject: input.artifactVercelProject,
     now: input.now
   });
 

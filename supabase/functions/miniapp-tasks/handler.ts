@@ -43,7 +43,37 @@ export type TasksHandlerDeps = {
   // messageThreadId 를 주면 그 포럼 주제에서 시작된 작업만 돌려준다. 없으면 방 전체다 —
   // 주제 없이 열린 현황판(일반 그룹, 포럼의 General)은 지금까지처럼 방을 통으로 본다.
   fetchTasksForRoom(roomId: string, messageThreadId?: string): Promise<{ error?: string; data?: TaskRow[] }>;
+  // 작업이 실제로 무엇을 만들어냈는지. 이게 없으면 현황판은 "완료"라고만 말하고,
+  // 방장은 결과물을 보려고 방 대화를 거슬러 올라가야 한다.
+  fetchArtifactsForTasks(taskIds: readonly string[]): Promise<{ error?: string; data?: ArtifactRow[] }>;
 };
+
+export type ArtifactRow = {
+  artifact_id: string;
+  task_id: string;
+  uri: string;
+  // 게이트웨이가 웹 산출물을 올렸으면 여기에 공개 주소가 있다.
+  public_url?: string | null;
+  created_at: string;
+};
+
+// 방장에게 보여줄 이름. 로컬 경로를 그대로 보여주면 폰에서는 아무 뜻도 없다.
+export function artifactDisplayName(uri: string): string {
+  const withoutQuery = uri.split(/[?#]/)[0] ?? uri;
+  // 게이트웨이가 Windows 경로를 그대로 실어 보낸다 — 역슬래시도 구분자로 본다.
+  const last = withoutQuery.split(/[\\/]/).filter(Boolean).pop() ?? withoutQuery;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+// 눌러서 열 수 있는 주소인가. file:// 은 이 PC 안에서만 뜻이 있어 폰에서는 못 연다.
+export function artifactOpenUrl(artifact: { uri: string; public_url?: string | null }): string | null {
+  if (artifact.public_url && /^https?:\/\//i.test(artifact.public_url)) return artifact.public_url;
+  return /^https?:\/\//i.test(artifact.uri) ? artifact.uri : null;
+}
 
 export async function handleMiniappTasksRequest(req: Request, deps: TasksHandlerDeps): Promise<Response> {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -72,6 +102,19 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
     return jsonResponse(500, { error: "lookup-failed" });
   }
 
+  const taskIds = (tasksResult.data ?? []).map((task) => task.task_id);
+  const artifactsResult = taskIds.length > 0 ? await deps.fetchArtifactsForTasks(taskIds) : { data: [] };
+  if (artifactsResult.error) {
+    // 산출물 조회가 실패해도 작업 목록은 보여준다. 목록까지 못 보는 것이 더 나쁘다.
+    console.error(`miniapp-tasks: artifacts query failed: ${artifactsResult.error}`);
+  }
+  const artifactsByTask = new Map<string, ArtifactRow[]>();
+  for (const artifact of artifactsResult.data ?? []) {
+    const bucket = artifactsByTask.get(artifact.task_id);
+    if (bucket) bucket.push(artifact);
+    else artifactsByTask.set(artifact.task_id, [artifact]);
+  }
+
   const board = (tasksResult.data ?? []).map((task) => {
     const meta = taskStatusMeta(task.status);
     return {
@@ -89,6 +132,13 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
       scope: task.scope,
       completionCriteria: task.completion_criteria,
       assignee: task.assignee ?? null,
+      artifacts: (artifactsByTask.get(task.task_id) ?? []).map((artifact) => ({
+        artifactId: artifact.artifact_id,
+        name: artifactDisplayName(artifact.uri),
+        // 열 수 없는 산출물도 이름은 보여준다 — 무엇이 만들어졌는지는 알아야 한다.
+        url: artifactOpenUrl(artifact),
+        createdAt: artifact.created_at
+      })),
       createdAt: task.created_at,
       updatedAt: task.updated_at
     };
@@ -106,10 +156,20 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
 // index.ts 의 buildDeps() 는 이 결과에 authenticate/checkRoomAccess 를 얹어 TasksHandlerDeps
 // 전체를 완성한다(그쪽은 _shared/miniapp-auth.ts, _shared/membership.ts 를 그대로 쓴다 — 둘 다
 // Deno.* 를 참조하므로 이 파일에서는 안 건드린다).
-export type TasksQueryDeps = Pick<TasksHandlerDeps, "fetchTasksForRoom">;
+export type TasksQueryDeps = Pick<TasksHandlerDeps, "fetchTasksForRoom" | "fetchArtifactsForTasks">;
 
 export function buildDepsFromClient(supabase: MinimalSupabaseClient): TasksQueryDeps {
   return {
+    async fetchArtifactsForTasks(taskIds: readonly string[]) {
+      const { data, error } = await supabase
+        .from("huai_artifacts")
+        .select("artifact_id, task_id, uri, public_url, created_at")
+        .in("task_id", [...taskIds])
+        .order("created_at", { ascending: false })
+        .limit(500);
+      if (error) return { error: error.message };
+      return { data: (data ?? []) as ArtifactRow[] };
+    },
     async fetchTasksForRoom(roomId: string, messageThreadId?: string) {
       const scoped = supabase
         .from("huai_tasks")

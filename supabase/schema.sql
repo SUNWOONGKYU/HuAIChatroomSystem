@@ -258,6 +258,8 @@ create table if not exists huai_artifacts (
   artifact_id uuid primary key default gen_random_uuid(),
   task_id uuid not null references huai_tasks(task_id) on delete cascade,
   uri text not null,
+  -- 폰에서 열 수 있는 주소. uri 는 이 PC 안의 경로라 링크로 쓸 수 없다.
+  public_url text,
   version text not null,
   checksum text,
   author_actor_id uuid references huai_ai_actors(actor_id),

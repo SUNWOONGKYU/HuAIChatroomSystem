@@ -23,6 +23,7 @@ function makeDeps(tasks: TaskRow[]): TasksHandlerDeps {
   return {
     authenticate: async () => ({ ok: true, telegramUserId: "111" }),
     checkRoomAccess: async (roomId) => ({ ok: true, room: { roomId, purpose: "테스트 방" }, viewerRole: "human_member" }),
+    fetchArtifactsForTasks: async () => ({ data: [] }),
     fetchTasksForRoom: async () => ({ data: tasks })
   };
 }
