@@ -3,6 +3,7 @@ import test from "node:test";
 import { FakeBotServiceStore } from "../../bot-service/src/fake-store.js";
 import {
   createArtifactCollector,
+  gitignoreMatcher,
   globToRegExp,
   matchesAnyGlob,
   normalizeArtifactPolicy,
@@ -294,3 +295,50 @@ function fakeIgnoreLookup(ignored: readonly string[]) {
     }
   };
 }
+
+// .gitignore 판정 회귀.
+//
+// 처음에는 `git check-ignore` 를 자식 프로세스로 불렀는데, 이 환경에서 절대경로로도
+// ENOENT 로 죽었고 catch 가 그 실패를 삼켜 필터가 통째로 무력화됐다. 겉으로는 아무
+// 일도 없어 보이는데 세션 기록이 산출물로 잡히고 조회 작업에 자동 감사가 붙었다.
+// 외부 프로세스 없이 .gitignore 를 직접 읽어 판정한다.
+test("디렉터리 규칙은 그 아래 전부를 덮는다", () => {
+  const ignored = gitignoreMatcher(["sessions/", "dist/"]);
+
+  assert.equal(ignored("sessions/summary/2026_08_16_요약.md"), true);
+  assert.equal(ignored("sessions/wiki/INDEX.md"), true);
+  assert.equal(ignored("dist/apps/bot-service/src/cli.js"), true);
+});
+
+test("이름에 규칙이 들어간 소스는 무시하지 않는다", () => {
+  // sessions/ 를 부분 문자열로 잡으면 session-store.ts 같은 진짜 소스가 사라진다.
+  const ignored = gitignoreMatcher(["sessions/"]);
+
+  assert.equal(ignored("apps/bot-service/src/session-store.ts"), false);
+  assert.equal(ignored("packages/sessions-view/src/index.ts"), false);
+});
+
+test("글로브 디렉터리 규칙도 그 아래를 덮는다", () => {
+  const ignored = gitignoreMatcher([".codex-browser-profile-*/"]);
+
+  assert.equal(ignored(".codex-browser-profile-egg/GrShaderCache/data_1"), true);
+  assert.equal(ignored(".codex-browser-profile-other/Default/GPUCache/x"), true);
+  assert.equal(ignored("packages/orchestrator/src/index.ts"), false);
+});
+
+test("확장자 글로브는 어느 위치에서든 잡는다", () => {
+  const ignored = gitignoreMatcher(["*.log", "*.pid"]);
+
+  assert.equal(ignored("some.log"), true);
+  assert.equal(ignored("sessions/deep/trace.log"), true);
+  assert.equal(ignored("huai.pid"), true);
+  assert.equal(ignored("notes.md"), false);
+});
+
+test("주석과 부정 규칙은 판정에 쓰지 않는다", () => {
+  // 부정(!)을 규칙으로 잘못 읽으면 오히려 남겨야 할 것을 지운다.
+  const ignored = gitignoreMatcher(["# 주석", "", "!keep.log", "*.log"]);
+
+  assert.equal(ignored("x.log"), true);
+  assert.equal(ignored("주석"), false);
+});

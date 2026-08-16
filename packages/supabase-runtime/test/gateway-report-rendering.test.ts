@@ -243,9 +243,18 @@ test("gateway report removes low-value implementation details from Telegram text
 
   assert.match(text, /77\/100점/);
   assert.match(text, /필요 조치/);
-  assert.equal(text.includes("| 분야 |"), false);
-  assert.equal(text.includes("OPERATION_STATUS.md"), false);
-  assert.equal(text.includes("검증 제한도"), false);
+
+  // 표·파일 경로·자기 한계 서술은 이제 남긴다.
+  //
+  // 이 셋을 지우던 규칙이 라이브에서 답을 지웠다. 비교 결과는 표로 오고, 원인 위치는
+  // 📁/📄 표기로 오며, 둘 다 그 줄 자체가 답이다.
+  //
+  // "검증 제한" 류를 지우던 것이 특히 나빴다. 오늘 ClaudeBot 이 "실행 승인이 안 걸려
+  // 못 돌렸다"고 자기 한계를 적어놨고, 그 한 줄이 권한 결함을 찾은 단서였다. 작업자가
+  // 무엇을 못 했는지 말하는 문장은 방장이 가장 알아야 할 것에 속한다.
+  assert.match(text, /\| 분야 \|/, "표가 사라졌다");
+  assert.match(text, /OPERATION_STATUS\.md/, "원인 위치 표기가 사라졌다");
+  assert.match(text, /검증 제한도/, "작업자가 밝힌 한계가 사라졌다");
 });
 test("multi AI audit is queued only after claude and codex results exist", async () => {
   const calls = makeFetchSequence(undefined, {
@@ -629,3 +638,82 @@ test("줄 전체가 경로뿐이면 여전히 버린다", () => {
 // "검증해 드릴까요" 메시지 자체가 없어졌다(파일을 바꾼 작업은 묻지 않고 바로 감사가
 // 돈다). 그 문구를 검사하던 테스트도 함께 제거했다 — 감사 실행 여부는 아래
 // automatic-audit.test.ts 가 지킨다.
+
+// 독립 검증(Codex)이 짚은 잔여 필터 회귀.
+// 단어표·확장자 목록을 걷어낸 뒤에도 표·제목·경로 표기를 지우는 규칙이 남아 있었다.
+test("표로 온 답을 지우지 않는다", () => {
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [{
+      type: "stdout", taskId: "task-1", attemptId: "attempt-1",
+      text: [
+        "비교 결과:",
+        "| 항목 | 전 | 후 |",
+        "| --- | --- | --- |",
+        "| 응답시간 | 4.3분 | 20초 |"
+      ].join("\n")
+    }]
+  });
+
+  assert.match(text, /응답시간/, "표가 통째로 사라졌다 — 비교 결과는 표로 오는 경우가 많다");
+  assert.match(text, /20초/);
+});
+
+test("제목 줄을 지우지 않는다", () => {
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "## 결론\n입력 검증이 누락돼 있었습니다." }]
+  });
+
+  assert.match(text, /결론/);
+  assert.match(text, /입력 검증이 누락/);
+});
+
+test("파일 경로 표기(📁 📄)를 지우지 않는다", () => {
+  // 이 프로젝트가 파일 위치를 이렇게 쓰라고 정해둔 표기다. 그 줄이 곧 답인 경우가 많다.
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "원인 위치:\n📁 packages/orchestrator/src/\n📄 index.ts" }]
+  });
+
+  assert.match(text, /packages\/orchestrator/);
+  assert.match(text, /index\.ts/);
+});
+
+test("대문자 접두어가 붙은 정상 문장을 지우지 않는다", () => {
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "API: 응답 스키마가 바뀌었습니다.\nSQL: 인덱스가 없습니다." }]
+  });
+
+  assert.match(text, /응답 스키마가 바뀌었습니다/);
+  assert.match(text, /인덱스가 없습니다/);
+});
+
+test("구조적 잡음은 여전히 걸러낸다", () => {
+  // 필터를 줄였다고 JSON·로그·스택프레임까지 새면 안 된다.
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [{
+      type: "stdout", taskId: "task-1", attemptId: "attempt-1",
+      text: [
+        '{"type":"tool_result","secret":"INTERNAL"}',
+        "2026-08-16T10:00:00Z DEBUG worker payload",
+        "at runWorker (C:\Dev\worker.ts:10:2)",
+        "dist/apps/bot-service/src/cli.js",
+        "결론: 점검을 마쳤습니다."
+      ].join("\n")
+    }]
+  });
+
+  assert.match(text, /점검을 마쳤습니다/);
+  assert.equal(text.includes("INTERNAL"), false);
+  assert.equal(text.includes("DEBUG"), false);
+  assert.equal(text.includes("worker.ts"), false);
+  assert.equal(text.includes("dist/apps"), false);
+});

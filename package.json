@@ -105,7 +105,9 @@
     "verify:migrated-chat-ids": "node --test scripts/repair-migrated-chat-ids.test.mjs",
     "verify:gate43": "npm run verify:room-board-pin && npm run verify:migrated-chat-ids",
     "verify:automatic-audit": "npm run build && node --test dist/packages/supabase-runtime/test/automatic-audit.test.js",
-    "verify:gate44": "npm run verify:automatic-audit"
+    "verify:gate44": "npm run verify:automatic-audit",
+    "verify:live-kpi-measure": "node --test scripts/measure-live-kpi.test.mjs",
+    "verify:gate45": "npm run verify:live-kpi-measure"
   },
   "workspaces": [
     "apps/*",

@@ -1,0 +1,54 @@
+{
+  "measuredAt": "2026-08-16T07:58:52.549Z",
+  "rooms": {
+    "activeInDb": 21,
+    "reachableOnTelegram": 4,
+    "reachable": [
+      {
+        "roomId": "9a477b32-15ed-46e3-b575-9488ff09efb6",
+        "title": "HuAI Collab Chatroom",
+        "chatId": "-1004334034373"
+      },
+      {
+        "roomId": "8d6c738b-5786-42d8-ac7e-e003ba0d40db",
+        "title": "개인회생 신청",
+        "chatId": "-1004428017336"
+      },
+      {
+        "roomId": "61aa6200-1619-49cc-ae88-fc9f993b3aed",
+        "title": "상증세법 주식가치평가",
+        "chatId": "-1004315119076"
+      },
+      {
+        "roomId": "847d1638-d23b-43a8-a445-54ecb29560f7",
+        "title": "DCF기업가치평가",
+        "chatId": "-1004321704366"
+      }
+    ]
+  },
+  "submission": {
+    "submittedAt": "2026-08-16T07:58:52.987Z",
+    "rooms": [
+      {
+        "attemptId": "kpi-1786867132550-0",
+        "roomId": "9a477b32-15ed-46e3-b575-9488ff09efb6",
+        "title": "HuAI Collab Chatroom"
+      },
+      {
+        "attemptId": "kpi-1786867132550-1",
+        "roomId": "8d6c738b-5786-42d8-ac7e-e003ba0d40db",
+        "title": "개인회생 신청"
+      },
+      {
+        "attemptId": "kpi-1786867132550-2",
+        "roomId": "61aa6200-1619-49cc-ae88-fc9f993b3aed",
+        "title": "상증세법 주식가치평가"
+      },
+      {
+        "attemptId": "kpi-1786867132550-3",
+        "roomId": "847d1638-d23b-43a8-a445-54ecb29560f7",
+        "title": "DCF기업가치평가"
+      }
+    ]
+  }
+}
