@@ -65,7 +65,7 @@ export async function buildMiniAppWeb({ sourceDir, outDir, env = {} }) {
     }
   }
 
-  // 정적 호스팅에서 헤더를 우리가 소유한다. no-store 는 작업판이 낡은 목록을
+  // 정적 호스팅에서 헤더를 우리가 소유한다. no-store 는 작업 현황판이 낡은 목록을
   // 보여주지 않게 하려는 것이고, noindex 는 방 링크가 검색에 뜨지 않게 하려는 것이다.
   await writeFile(
     path.join(outDir, "vercel.json"),

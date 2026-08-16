@@ -63,7 +63,7 @@ test("buildSupabaseBotServiceRuntimeFromDatabase 로 만든 실제 런타임이 
   assert.ok(tasksRow, "/tasks 응답 outbox 행이 있어야 한다");
   const keyboard = (tasksRow!.payload as Record<string, unknown>).keyboard as { inline_keyboard: Array<Array<{ text: string; url: string }>> } | undefined;
   assert.ok(keyboard, "실제 런타임 경로로 만든 store 는 keyboard 를 붙여야 한다");
-  assert.equal(keyboard!.inline_keyboard[0][0].text, "작업판 열기");
+  assert.equal(keyboard!.inline_keyboard[0][0].text, "작업 현황판 열기");
   assert.match(keyboard!.inline_keyboard[0][0].url, new RegExp("^https://t\\.me/leader_chatroom_bot/board\\?startapp=" + ROOM_A + "$"));
 });
 

@@ -245,11 +245,11 @@ test("표시된 것이 방의 전부일 때는 여전히 '총 N건'으로 정확
   assert.equal(text.includes("더 있음"), false);
 });
 
-// "작업판 열기" 버튼(Direct Link Mini App). web_app 타입이 아니라 url 타입 — Telegram 공식
+// "작업 현황판 열기" 버튼(Direct Link Mini App). web_app 타입이 아니라 url 타입 — Telegram 공식
 // 문서(InlineKeyboardButton.web_app: "Available only in private chats")상 web_app 버튼은
 // 그룹에서 안 눌린다. BOT_SERVICE_MINIAPP_DIRECT_LINK 로 베이스 링크를 받아 ?startapp=<roomId>
 // 를 붙인다.
-test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '작업판 열기' url 버튼이 붙는다", async () => {
+test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '작업 현황판 열기' url 버튼이 붙는다", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponseWithRange(200, [
@@ -265,7 +265,7 @@ test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '작업�
   const keyboard = calls.requests[3]?.body[0].payload.keyboard;
   assert.ok(keyboard, "keyboard 필드가 있어야 한다");
   const button = keyboard.inline_keyboard[0][0];
-  assert.equal(button.text, "작업판 열기");
+  assert.equal(button.text, "작업 현황판 열기");
   assert.equal(button.url, `https://t.me/leader_chatroom_bot/board?startapp=${ROOM_ID}`);
   assert.equal("callback_data" in button, false);
   assert.equal("web_app" in button, false);

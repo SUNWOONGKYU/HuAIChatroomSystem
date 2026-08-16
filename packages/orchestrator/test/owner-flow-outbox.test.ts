@@ -42,7 +42,9 @@ test("final approve callback routes platoon leader completion message", () => {
   assert.equal(result.accepted, true);
   assert.equal(result.events[0]?.eventType, "owner_final_approved");
   assert.equal(result.outbox[0]?.target.kind === "telegram_bot" ? result.outbox[0].target.botRole : undefined, "platoon_leader");
-  assert.match(String(result.outbox[0]?.payload.text), /최종 승인 완료: task-1/);
+  // "최종"을 뗐다. 제안 단계 버튼이 "실행"으로 바뀌어 승인이 한 곳뿐이라, 무엇에 대한
+  // 최종인지 읽는 사람이 알 수 없는 수식어만 남아 있었다.
+  assert.match(String(result.outbox[0]?.payload.text), /승인 완료: task-1/);
 });
 
 test("소대장 멘션은 즉시 제안이 아니라 판단 실행을 요청한다", () => {

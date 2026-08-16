@@ -1,4 +1,4 @@
-// "작업판 열기" 버튼(Direct Link Mini App) 빌더 단위 테스트.
+// "작업 현황판 열기" 버튼(Direct Link Mini App) 빌더 단위 테스트.
 // web_app 타입 인라인 버튼은 core.telegram.org/bots/api 문서상 "Available only in
 // private chats between a user and the bot" 라 그룹에서 안 눌린다 — 그래서 평범한 url
 // 버튼으로 t.me 딥링크(core.telegram.org/bots/webapps, "Direct Link Mini App")를 연다.
@@ -22,7 +22,7 @@ test("buildMiniAppOpenKeyboard 는 url 버튼 하나짜리 인라인 키보드�
   assert.equal(keyboard.inline_keyboard.length, 1);
   assert.equal(keyboard.inline_keyboard[0]?.length, 1);
   const button = keyboard.inline_keyboard[0]?.[0];
-  assert.equal(button?.text, "작업판 열기");
+  assert.equal(button?.text, "작업 현황판 열기");
   assert.equal(button?.url, "https://t.me/leader_chatroom_bot/board?startapp=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   // Telegram 제약: 인라인 버튼 하나에 callback_data 와 url(web_app 포함)을 같이 못 넣는다.
   // 타입 자체가 url 만 갖고 있어서 만들 수가 없지만, 직렬화 결과에도 안 섞이는지 구조적으로 확인한다.

@@ -463,11 +463,11 @@ test("auditor completion persists verification and asks leader for completion re
   assert.equal(completionOutbox?.body.target_kind, "telegram_bot");
   assert.match(completionOutbox?.body.payload.text, /검증이 통과/);
 
-  // 완료·보완 결정은 작업판이 맡는다. 방에 버튼을 붙이면 결정 창구가 둘로 갈라지고
+  // 완료·보완 결정은 작업 현황판이 맡는다. 방에 버튼을 붙이면 결정 창구가 둘로 갈라지고
   // 대화 공간도 버튼 줄로 잠식된다. 대신 어디서 결정하는지는 본문이 알려줘야 한다 —
   // 안내 없이 버튼만 사라지면 방장은 완료시킬 방법을 못 찾는다.
   assert.equal(completionOutbox?.body.payload.keyboard, undefined, "방에 완료 버튼이 다시 붙었다");
-  assert.match(completionOutbox?.body.payload.text, /작업판/);
+  assert.match(completionOutbox?.body.payload.text, /작업 현황판/);
 });
 
 // 라이브 결함 회귀 — 작업 결과가 방에 안 뜬 사건.

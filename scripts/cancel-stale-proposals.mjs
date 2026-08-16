@@ -2,14 +2,14 @@
 //
 // 왜 필요한가: 방장이 말할 때마다 제안이 하나씩 생기는데 승인은 그만큼 눌리지 않는다.
 // 라이브에서 한 방의 제안 150건 중 결정된 것이 9건뿐이었고, 나머지가 5일치 재고로
-// 쌓여 작업판 첫 화면을 122건으로 채웠다. Telegram 은 메시지가 흘러가서 이게 안
-// 보였다 — 작업판이 목록으로 쌓아 보여주면서 처음 드러났다.
+// 쌓여 작업 현황판 첫 화면을 122건으로 채웠다. Telegram 은 메시지가 흘러가서 이게 안
+// 보였다 — 작업 현황판이 목록으로 쌓아 보여주면서 처음 드러났다.
 //
 // 왜 삭제가 아니라 취소 기록인가: huai_events 는 append-only 다(huai_events_append_only).
 // 제안이 있었다는 사실 자체는 지우면 안 되고, "결정됐다"를 승인 원장에 남기는 것이
 // 이 시스템이 이미 쓰는 방식이다.
 //
-// stage 를 'cancellation' 이 아니라 'task_approval' 로 넣는 이유: 작업판이 미결을
+// stage 를 'cancellation' 이 아니라 'task_approval' 로 넣는 이유: 작업 현황판이 미결을
 // 가리는 기준이 supabase/functions/miniapp-proposals/deps.ts:35-42 의
 // `stage = 'task_approval'` 단일 조건이다. 'cancellation' 으로 넣으면 원장에는
 // 남는데 화면에서는 안 사라진다. decision 값은 그 조회가 보지 않으므로 'cancelled'
@@ -30,7 +30,7 @@ export function selectStaleProposals(events, decidedEntityRefs) {
     if (!payload || typeof payload !== "object") continue;
 
     // proposalId 가 없는 이벤트는 소대장 기획 요청이다(payload.stage =
-    // 'leader_planning_requested'). 작업판이 애초에 안 보여주므로 재고가 아니다.
+    // 'leader_planning_requested'). 작업 현황판이 애초에 안 보여주므로 재고가 아니다.
     const proposalId = typeof payload.proposalId === "string" ? payload.proposalId : undefined;
     if (!proposalId) continue;
 

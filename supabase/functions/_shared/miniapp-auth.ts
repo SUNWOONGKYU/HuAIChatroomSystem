@@ -6,8 +6,8 @@
 //
 // 어느 봇 토큰으로 검증하는가: 소대장(platoon_leader) 봇 하나로 고정한다.
 //   - packages/contracts/src/index.ts 의 isCommandForThisBot 은 봇 이름이 없는 명령을
-//     기본적으로 platoon_leader 가 받도록 되어 있고, /tasks·/approve 같은 작업판 성격의
-//     명령이 전부 이 기본 창구를 통한다. 작업판(Mini App)도 같은 성격의 창구이므로
+//     기본적으로 platoon_leader 가 받도록 되어 있고, /tasks·/approve 같은 작업 현황판 성격의
+//     명령이 전부 이 기본 창구를 통한다. 작업 현황판(Mini App)도 같은 성격의 창구이므로
 //     소대장 봇 하나로 여는 것이 대화 채널과의 일관성이 가장 높다.
 //   - 봇 4개 토큰을 순차로 시도하는 방식은 (a) 매 요청 최대 4배의 HMAC 연산 + 타이밍 표면을
 //     늘리고 (b) "어느 봇이 열었는지"가 모호해져 감사 로그 해석이 어려워진다.

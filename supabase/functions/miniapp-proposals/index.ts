@@ -1,4 +1,4 @@
-// Mini App 작업판 — 방의 미결 제안 목록 조회 (GET). 실제 로직은 handler.ts(순수, Deno 미참조)에
+// Mini App 작업 현황판 — 방의 미결 제안 목록 조회 (GET). 실제 로직은 handler.ts(순수, Deno 미참조)에
 // 있다 — 이 파일은 Deno.serve 배선과 실제 Supabase 호출 주입만 담당한다. 배경·설계 근거는
 // handler.ts 와 ../_shared/proposal-payload.ts 주석 참고.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";

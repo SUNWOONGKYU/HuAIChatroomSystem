@@ -387,11 +387,11 @@ test("다른 방의 task_id 로 승인 이벤트가 와도 그 task 상태는 �
   assert.equal(task?.status, "verification_pending");
 });
 
-// "작업판 열기" 버튼의 startapp 값은 이 요청이 해석된 room_id 여야 한다 — 다른 방의
-// roomId 가 실리면 방장이 눌렀을 때 남의 방 작업판이 열린다(그 자체가 방 경계를 넘는
+// "작업 현황판 열기" 버튼의 startapp 값은 이 요청이 해석된 room_id 여야 한다 — 다른 방의
+// roomId 가 실리면 방장이 눌렀을 때 남의 방 작업 현황판이 열린다(그 자체가 방 경계를 넘는
 // 유출이다). 두 방에서 각각 /tasks 를 호출해 버튼의 startapp 값이 서로 다르고 각자의
 // room_id 와 정확히 일치하는지 확인한다.
-test("'작업판 열기' 버튼의 startapp 값은 각 요청이 해석된 자기 방 room_id 다 (방 격리)", async () => {
+test("'작업 현황판 열기' 버튼의 startapp 값은 각 요청이 해석된 자기 방 room_id 다 (방 격리)", async () => {
   const fake = new MiniSupabaseFake();
   seedTwoRooms(fake);
   const store = makeStore(fake, "https://t.me/leader_chatroom_bot/board");

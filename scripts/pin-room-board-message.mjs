@@ -1,14 +1,14 @@
-// 방마다 "작업판 열기" 메시지를 하나 보내 고정한다.
+// 방마다 "작업 현황판 열기" 메시지를 하나 보내 고정한다.
 //
-// 왜 필요한가: 작업판 버튼은 /tasks 응답에 붙는데, 그 메시지는 대화가 쌓이면 위로
-// 밀려 올라가 찾을 수 없다. 방장이 작업판을 열 때마다 /tasks 를 다시 쳐야 한다.
+// 왜 필요한가: 작업 현황판 버튼은 /tasks 응답에 붙는데, 그 메시지는 대화가 쌓이면 위로
+// 밀려 올라가 찾을 수 없다. 방장이 작업 현황판을 열 때마다 /tasks 를 다시 쳐야 한다.
 // Telegram 의 메뉴 버튼은 그룹에서 안 된다(getChatMenuButton 이 그룹 chat_id 를
 // 400 invalid chat_id 로 거부한다 — 라이브 확인). 그룹에서 항상 같은 자리에 두는
 // 수단은 고정 메시지뿐이다.
 //
 // 왜 /tasks 응답을 고정하지 않는가: 그 메시지는 만들어진 시점의 작업 목록을 본문에
 // 담고 있어서 고정해두면 낡은 목록이 방 맨 위에 박제된다. 그래서 목록이 없는
-// 작업판 전용 메시지를 따로 만든다 — 본문은 안 낡고, 최신 상태는 버튼을 눌러서 본다.
+// 작업 현황판 전용 메시지를 따로 만든다 — 본문은 안 낡고, 최신 상태는 버튼을 눌러서 본다.
 // 링크 형식(?startapp=<roomId>)을 여기 베껴 쓰지 않는다. 봇이 /tasks 에 붙이는 버튼과
 // 고정 메시지의 버튼이 조금이라도 달라지면 고정된 쪽만 조용히 엉뚱한 방을 연다.
 // 그래서 봇이 실제로 쓰는 그 함수를 빌드 산출물에서 그대로 가져온다(pnpm run build 필요).
@@ -16,15 +16,29 @@ import { buildMiniAppDirectLink } from "../dist/packages/telegram-ui/src/index.j
 
 const APPLY = process.argv.includes("--apply");
 
-export const BOARD_MESSAGE_TEXT = "📋 작업판 — 이 방의 작업과 승인 대기를 한 화면에서 봅니다.";
+export const BOARD_MESSAGE_TEXT = "📋 작업 현황판 — 이 방의 작업과 승인 대기를 한 화면에서 봅니다.";
+
+// 우리 봇이 올린 현황판 메시지는 앞머리 기호로 알아본다.
+export const BOARD_MESSAGE_MARKER = "📋";
 
 // 이미 우리가 고정해 둔 메시지인지 판정한다. 방장이 직접 고정한 다른 메시지를
 // 덮어쓰면 안 되고, 실행할 때마다 새 메시지를 만들어 방을 어지럽혀도 안 된다.
+//
+// 본문 앞부분을 그대로 비교하지 않는다. 문구를 한 번 다듬으면(예: "작업 현황판" →
+// "작업 현황판") 이미 고정해 둔 우리 메시지를 남의 것으로 오인해서, 갱신도 못 하고
+// 새로 올리지도 못한 채 옛 문구가 방 맨 위에 계속 남는다.
 export function needsBoardPin(pinnedMessage, botId) {
   if (!pinnedMessage) return true;
   const fromBot = Number(pinnedMessage.from?.id) === Number(botId);
-  const isBoardMessage = String(pinnedMessage.text ?? "").startsWith(BOARD_MESSAGE_TEXT.slice(0, 12));
+  const isBoardMessage = String(pinnedMessage.text ?? "").trimStart().startsWith(BOARD_MESSAGE_MARKER);
   return !(fromBot && isBoardMessage);
+}
+
+// 고정된 것이 우리 현황판인데 문구가 낡았으면 본문만 고친다. 새로 올려 고정하면
+// 방에 같은 메시지가 하나씩 쌓인다.
+export function boardPinNeedsRewording(pinnedMessage, botId) {
+  if (needsBoardPin(pinnedMessage, botId)) return false;
+  return String(pinnedMessage.text ?? "").trim() !== BOARD_MESSAGE_TEXT;
 }
 
 export function buildBoardMessagePayload(chatId, roomId, directLinkBaseUrl) {
@@ -34,7 +48,7 @@ export function buildBoardMessagePayload(chatId, roomId, directLinkBaseUrl) {
     // 고정 메시지에 링크 미리보기가 붙으면 고정 바가 불필요하게 커진다.
     disable_web_page_preview: true,
     reply_markup: {
-      inline_keyboard: [[{ text: "작업판 열기", url: buildMiniAppDirectLink(directLinkBaseUrl, roomId) }]]
+      inline_keyboard: [[{ text: "작업 현황판 열기", url: buildMiniAppDirectLink(directLinkBaseUrl, roomId) }]]
     }
   };
 }
@@ -69,8 +83,30 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
     }
 
     if (!needsBoardPin(chat.pinned_message, botId)) {
-      console.log(`  유지    ${label} — 이미 작업판이 고정돼 있다`);
-      skipped += 1;
+      if (!boardPinNeedsRewording(chat.pinned_message, botId)) {
+        console.log(`  유지    ${label} — 이미 현황판이 고정돼 있다`);
+        skipped += 1;
+        continue;
+      }
+      if (!APPLY) {
+        console.log(`  문구갱신예정 ${label}`);
+        pinned += 1;
+        continue;
+      }
+      try {
+        await telegram(token, "editMessageText", {
+          chat_id: chatId,
+          message_id: chat.pinned_message.message_id,
+          text: BOARD_MESSAGE_TEXT,
+          disable_web_page_preview: true,
+          reply_markup: buildBoardMessagePayload(chatId, room.room_id, directLinkBaseUrl).reply_markup
+        });
+        console.log(`  문구갱신 ${label}`);
+        pinned += 1;
+      } catch (error) {
+        console.log(`  실패    ${label} — ${String(error.message).slice(0, 120)}`);
+        failed += 1;
+      }
       continue;
     }
 

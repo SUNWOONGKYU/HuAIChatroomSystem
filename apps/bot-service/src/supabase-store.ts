@@ -27,7 +27,7 @@ export type SupabaseStoreConfig = {
   // /tasks 의 경과시간 표시(Phase 3)를 테스트에서 고정 시각으로 검증할 수 있도록 주입 가능하게 뺐다.
   // 운영에서는 기본값(실제 시각)을 그대로 쓴다.
   now?: () => Date;
-  // "작업판 열기" 버튼(Direct Link Mini App, BOT_SERVICE_MINIAPP_DIRECT_LINK)의 베이스 링크.
+  // "작업 현황판 열기" 버튼(Direct Link Mini App, BOT_SERVICE_MINIAPP_DIRECT_LINK)의 베이스 링크.
   // 예: https://t.me/leader_chatroom_bot/board — 미설정이면 /tasks 에 버튼을 안 붙인다
   // (기존 동작 그대로). 값이 있는데 https://t.me/ 로 시작하지 않으면 생성자에서 던진다 —
   // web_app 이 아니라 t.me 딥링크여야만 그룹에서 Mini App 으로 열린다(core.telegram.org/
@@ -597,7 +597,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
           : query.kind === "trace"
             ? await this.renderTaskTraceQuery(query.taskId, roomId)
             : await this.renderTaskDetailQuery(query.taskId, roomId);
-      // "작업판 열기" 버튼은 /tasks 에만 붙인다(/search·/task·/trace 는 이번 범위가 아니다).
+      // "작업 현황판 열기" 버튼은 /tasks 에만 붙인다(/search·/task·/trace 는 이번 범위가 아니다).
       // BOT_SERVICE_MINIAPP_DIRECT_LINK 미설정 시 keyboard 필드 자체를 안 만든다 —
       // 기존 payload 에 keyboard 가 없던 것과 완전히 동일하게 유지한다.
       const keyboard = query.kind === "tasks" && this.miniAppDirectLinkBaseUrl
@@ -1098,7 +1098,7 @@ const TASK_STATUS_META: Readonly<Record<TaskStatus, { group: TaskStatusGroupKey;
   revision_in_progress: { group: "in_progress", label: "보완 작업 중" },
   reverification_pending: { group: "waiting", label: "재검증 대기" },
   commander_completion_pending: { group: "approval_pending", label: "소대장 완료 확인 대기" },
-  completion_approval_pending: { group: "approval_pending", label: "최종 승인 대기" },
+  completion_approval_pending: { group: "approval_pending", label: "승인 대기" },
   owner_supplement_requested: { group: "action_needed", label: "보완 요청함" },
   completed: { group: "completed", label: "완료" },
   cancel_requested: { group: "action_needed", label: "취소 처리 중" },

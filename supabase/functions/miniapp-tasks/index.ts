@@ -1,4 +1,4 @@
-// Mini App 작업판 — 방의 작업 목록 조회 (GET). 실제 로직은 handler.ts(순수, Deno 미참조)에
+// Mini App 작업 현황판 — 방의 작업 목록 조회 (GET). 실제 로직은 handler.ts(순수, Deno 미참조)에
 // 있다 — 이 파일은 Deno.serve 배선과 실제 Supabase 호출 주입만 담당한다(miniapp-proposals 와
 // 동일한 분리 패턴, handler.ts 상단 주석 참고).
 //

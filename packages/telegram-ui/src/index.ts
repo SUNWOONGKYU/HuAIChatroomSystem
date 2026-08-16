@@ -18,7 +18,7 @@ export function buildCommandHelp(): string {
     "/approve <id> 승인",
     "/reject <id> 반려",
     "/verify <id> 검증 요청",
-    "/done <id> 최종 승인 요청/처리",
+    "/done <id> 승인 요청/처리",
     "/cancel <id> 취소 요청",
     "/help 사용법"
   ].join("\n");
@@ -60,7 +60,7 @@ export function buildCompletionKeyboard(taskId: string): InlineKeyboardMarkup {
   };
 }
 
-// "작업판 열기" 버튼. InlineKeyboardButton(위)은 callback_data 만 갖는 타입이라 재사용하지
+// "작업 현황판 열기" 버튼. InlineKeyboardButton(위)은 callback_data 만 갖는 타입이라 재사용하지
 // 않는다 — url 버튼은 별개 필드(url)라 섞을 수 없고(Telegram 제약: 인라인 버튼 하나에
 // callback_data 와 url 을 같이 못 넣는다), 기존 InlineKeyboardButton 을 유니온으로 넓히면
 // callback-data-length.test.ts 등 기존 소비처가 `button.callback_data` 를 좁히기(narrow)
@@ -95,7 +95,7 @@ export function buildMiniAppDirectLink(directLinkBaseUrl: string, roomId: string
 export function buildMiniAppOpenKeyboard(input: { directLinkBaseUrl: string; roomId: string }): MiniAppOpenKeyboard {
   return {
     inline_keyboard: [
-      [{ text: "작업판 열기", url: buildMiniAppDirectLink(input.directLinkBaseUrl, input.roomId) }]
+      [{ text: "작업 현황판 열기", url: buildMiniAppDirectLink(input.directLinkBaseUrl, input.roomId) }]
     ]
   };
 }

@@ -1,0 +1,115 @@
+import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+
+const port = process.env.CHROME_DEBUG_PORT || "9333";
+const gameUrl = process.env.EGG_GAME_URL;
+assert.ok(gameUrl, "EGG_GAME_URL is required (example: http://127.0.0.1:8000/egg-game.html)");
+const targets = await fetch(`http://127.0.0.1:${port}/json/list`).then((response) => response.json());
+const page = targets.find((target) => target.type === "page");
+assert.ok(page?.webSocketDebuggerUrl, "Chrome page target not found");
+
+const socket = new WebSocket(page.webSocketDebuggerUrl);
+await new Promise((resolve, reject) => {
+  socket.addEventListener("open", resolve, { once: true });
+  socket.addEventListener("error", reject, { once: true });
+});
+
+let nextId = 0;
+const pending = new Map();
+socket.addEventListener("message", (event) => {
+  const message = JSON.parse(event.data);
+  if (!message.id || !pending.has(message.id)) return;
+  const { resolve, reject } = pending.get(message.id);
+  pending.delete(message.id);
+  message.error ? reject(new Error(message.error.message)) : resolve(message.result);
+});
+
+function send(method, params = {}) {
+  const id = ++nextId;
+  socket.send(JSON.stringify({ id, method, params }));
+  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+}
+
+async function evaluate(expression) {
+  const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  return result.result.value;
+}
+
+await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+await send("Page.enable");
+await send("Runtime.enable");
+await send("Page.addScriptToEvaluateOnNewDocument", {
+  source: `(() => {
+    const NativeAudioContext = window.AudioContext || window.webkitAudioContext;
+    window.__eggAudioStarts = 0;
+    if (!NativeAudioContext) return;
+    class TrackedAudioContext extends NativeAudioContext {
+      createOscillator() {
+        const oscillator = super.createOscillator();
+        const start = oscillator.start.bind(oscillator);
+        oscillator.start = (...args) => {
+          window.__eggAudioStarts += 1;
+          return start(...args);
+        };
+        return oscillator;
+      }
+    }
+    window.AudioContext = TrackedAudioContext;
+    window.webkitAudioContext = TrackedAudioContext;
+  })()`
+});
+await send("Page.navigate", { url: gameUrl });
+await new Promise((resolve) => setTimeout(resolve, 500));
+
+assert.equal(await evaluate(`location.href`), gameUrl, "game page did not open from the execution URL");
+
+const initial = await evaluate(`({
+  stage: document.querySelector('#egg').dataset.stage,
+  width: document.documentElement.scrollWidth,
+  viewport: document.documentElement.clientWidth,
+  touchAction: getComputedStyle(document.querySelector('#egg')).touchAction,
+  targetWidth: document.querySelector('#egg').getBoundingClientRect().width
+  ,audioSupported: Boolean(window.AudioContext || window.webkitAudioContext)
+})`);
+assert.equal(initial.stage, "0");
+assert.equal(initial.width, initial.viewport, "mobile horizontal overflow detected");
+assert.equal(initial.touchAction, "manipulation");
+assert.ok(initial.targetWidth >= 44);
+assert.equal(initial.audioSupported, true, "Web Audio is unavailable in this browser");
+
+async function centerOf(selector) {
+  return evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x+r.width/2, y:r.y+r.height/2 }; })()`);
+}
+
+async function tap(selector) {
+  const center = await centerOf(selector);
+  await send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: center.x, y: center.y }] });
+  await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+}
+
+await tap("#egg");
+assert.equal(await evaluate(`document.querySelector('#egg').dataset.stage`), "1");
+assert.equal(await evaluate(`window.__eggAudioStarts`), 1, "first tap did not start its sound");
+await tap("#egg");
+const broken = await evaluate(`({
+  stage: document.querySelector('#egg').dataset.stage,
+  resetVisible: !document.querySelector('#reset').hidden,
+  latency: Number((document.querySelector('#latency').textContent.match(/\\d+/)||[])[0]),
+  audioStarts: window.__eggAudioStarts
+})`);
+assert.equal(broken.stage, "2");
+assert.equal(broken.resetVisible, true);
+assert.ok(Number.isFinite(broken.latency) && broken.latency < 100, `visual response was ${broken.latency}ms`);
+assert.equal(broken.audioStarts, 2, "each egg tap must start one sound");
+
+const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+await writeFile(new URL("./egg-game-broken.png", import.meta.url), Buffer.from(shot.data, "base64"));
+
+await tap("#reset");
+assert.equal(await evaluate(`document.querySelector('#egg').dataset.stage`), "0");
+assert.equal(await evaluate(`window.__eggAudioStarts`), 3, "reset tap did not start its sound");
+
+console.log(JSON.stringify({ result: "pass", viewport: "390x844", stages: [0, 1, 2, 0], latencyMs: broken.latency, screenshot: "egg-game-broken.png" }));
+socket.close();

@@ -97,7 +97,7 @@ test("builds only the publishable assets and writes hosting headers", async () =
 });
 
 test("the shipped board page hardcodes no per-room artifact links", async () => {
-  // 작업판 한 벌을 21개 방이 공유한다. 마크업에 특정 방의 산출물 링크를 박으면 그
+  // 작업 현황판 한 벌을 21개 방이 공유한다. 마크업에 특정 방의 산출물 링크를 박으면 그
   // 산출물과 무관한 모든 방의 화면에 뜬다 — 달걀깨기 미니게임 링크가 실제로 그렇게
   // 새어나가서 라이브에서 잡혔다. 방이 보는 것은 roomId 로 조회해 서버가 멤버십을
   // 검증한 데이터뿐이어야 한다.
@@ -108,7 +108,7 @@ test("the shipped board page hardcodes no per-room artifact links", async () => 
   assert.deepEqual(
     siblingPageLinks,
     [],
-    `작업판 마크업에 하드코딩된 페이지 링크가 있다: ${siblingPageLinks.join(", ")}`
+    `작업 현황판 마크업에 하드코딩된 페이지 링크가 있다: ${siblingPageLinks.join(", ")}`
   );
 });
 

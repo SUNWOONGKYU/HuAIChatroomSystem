@@ -19,7 +19,7 @@
 //
 // 인증 없음(의도) — 이 함수는 정적 HTML만 준다. 실제 데이터 접근은 페이지가 miniapp-tasks
 // 등을 호출할 때 initData 로 검증된다(그 함수들은 그대로 인증을 요구한다). 여기 인증을
-// 걸면 Telegram 클라이언트가 문서 자체를 못 열어 작업판이 통째로 안 열린다.
+// 걸면 Telegram 클라이언트가 문서 자체를 못 열어 작업 현황판이 통째로 안 열린다.
 //
 // 쿼리 파라미터 처리 — 이 핸들러는 요청 URL의 쿼리스트링을 읽지도, 업스트림에 전달하지도
 // 않는다. 그럴 필요가 없다: Telegram 이 `?tgWebAppStartParam=...` 을 붙여 이 문서를
@@ -68,7 +68,7 @@ export async function handleBoardRequest(req: Request, deps: BoardHandlerDeps): 
     // 방장에게 원인을 노출하지 않되(Storage 경로·버킷 구조 등), 완전한 침묵보다는 나은
     // 최소한의 안내를 준다. Content-Type 을 text/html 로 유지해 WebView 가 빈 화면 대신
     // 이 문구를 실제로 렌더링하게 한다.
-    return new Response("<!doctype html><meta charset=utf-8><p>작업판을 잠시 불러올 수 없습니다. 잠시 후 다시 열어주세요.</p>", {
+    return new Response("<!doctype html><meta charset=utf-8><p>작업 현황판을 잠시 불러올 수 없습니다. 잠시 후 다시 열어주세요.</p>", {
       status: 502,
       headers: boardResponseHeaders()
     });

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <meta name="robots" content="noindex, nofollow" />
-<title>HuAI 작업판</title>
+<title>HuAI 작업 현황판</title>
 <!--
   이 파일은 의도적으로 완전히 자기완결형이다 (외부 CSS/JS 파일, 번들러, 프레임워크 없음) —
   호스팅 방식이 아직 정해지지 않았고(작업 4), 파일 하나로 여는 게 가장 유연하기 때문이다.
@@ -253,7 +253,7 @@
   }
   #decision-note.show { display: block; }
 
-  /* 제안 섹션 — huai_tasks 기반 작업판과 성격이 달라(아직 실행 시작 전) 탭/칸반과
+  /* 제안 섹션 — huai_tasks 기반 작업 현황판과 성격이 달라(아직 실행 시작 전) 탭/칸반과
      분리된 별도 섹션으로 둔다. 접었다 펼 수 있게 해서 제안이 없을 때 화면을 안 잡아먹는다. */
   #proposals-section {
     padding: 10px 16px 4px;
@@ -334,7 +334,7 @@
 </head>
 <body>
   <header>
-    <h1 id="room-title">HuAI 작업판</h1>
+    <h1 id="room-title">HuAI 작업 현황판</h1>
     <p id="room-subtitle">불러오는 중…</p>
     <div class="refresh-row">
       <button type="button" class="btn btn-ghost" id="refresh-btn">새로고침</button>
@@ -342,7 +342,7 @@
     </div>
     <!-- 여기에 특정 방의 산출물 링크를 박으면 안 된다. 이 페이지는 21개 방이 공유하는
          한 벌이라, 헤더에 박힌 링크는 그 산출물을 만든 방과 무관하게 모든 방에 뜬다
-         (달걀깨기 링크가 실제로 그렇게 새어나갔다). 작업판이 보여주는 것은 roomId 로
+         (달걀깨기 링크가 실제로 그렇게 새어나갔다). 작업 현황판이 보여주는 것은 roomId 로
          조회해 서버가 멤버십을 검증한 데이터뿐이어야 한다. 방별 산출물을 띄우려면
          방-산출물 목록을 서버에서 받아 렌더해야 하고, 그건 아직 없는 기능이다. -->
   </header>
@@ -514,20 +514,20 @@
 
   function friendlyErrorMessage(err) {
     if (err && err.message === "functions-base-url-not-configured") {
-      return "이 작업판은 아직 배포 설정이 끝나지 않았습니다. (functionsBaseUrl 미설정)";
+      return "이 작업 현황판은 아직 배포 설정이 끝나지 않았습니다. (functionsBaseUrl 미설정)";
     }
     if (err && err.message === "no-telegram-init-data") {
       return "Telegram 앱에서 열어야 합니다. 일반 브라우저에서는 사용할 수 없습니다.";
     }
     if (err && err.status === 401) return "인증에 실패했습니다. Telegram 앱을 다시 열어 시도해주세요.";
-    if (err && err.status === 403) return "이 방의 작업판을 볼 권한이 없습니다.";
+    if (err && err.status === 403) return "이 방의 작업 현황판을 볼 권한이 없습니다.";
     if (err && err.status === 404) return "방을 찾을 수 없습니다.";
     return "작업 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
   }
 
   function loadTasks(isBackground) {
     if (!roomId) {
-      showState("작업판을 열 방이 지정되지 않았습니다. 방의 대화에서 제공된 버튼으로 다시 열어주세요.");
+      showState("작업 현황판을 열 방이 지정되지 않았습니다. 방의 대화에서 제공된 버튼으로 다시 열어주세요.");
       return;
     }
     if (!isBackground) showState("불러오는 중…");
@@ -536,7 +536,7 @@
         stateEl.style.display = "none";
         tabsEl.hidden = false;
         boardEl.hidden = false;
-        titleEl.textContent = (data.room && data.room.purpose) || "HuAI 작업판";
+        titleEl.textContent = (data.room && data.room.purpose) || "HuAI 작업 현황판";
         subtitleEl.textContent = "작업 " + (data.tasks ? data.tasks.length : 0) + "건";
         updatedAtEl.textContent = data.generatedAt ? "갱신 " + formatTime(data.generatedAt) : "";
         lastTasks = data.tasks || [];
@@ -579,7 +579,7 @@
         renderProposals(proposals);
       })
       .catch(function () {
-        // 제안 조회 실패는 작업판 자체를 못 쓰게 만들 이유가 아니다 — 섹션을 그냥 숨긴다.
+        // 제안 조회 실패는 작업 현황판 자체를 못 쓰게 만들 이유가 아니다 — 섹션을 그냥 숨긴다.
         if (!isBackground) proposalsSection.hidden = true;
       });
   }
@@ -611,9 +611,12 @@
         var pNote = document.createElement("div");
         pNote.className = "proposal-note";
         [
-          { action: "approve", label: "승인", cls: "btn-accent" },
-          { action: "request_revision", label: "보완 요청", cls: "" },
-          { action: "reject", label: "거부", cls: "btn-danger" }
+          // 방의 제안 버튼과 같은 말을 쓴다(telegram-ui buildProposalKeyboard: 실행·수정·반려).
+          // 같은 결정을 방에서는 "실행", 현황판에서는 "승인"이라 부르고 있었다.
+          // 게다가 완료 단계에도 "승인"이 있어서, 한 화면에 같은 말이 다른 뜻으로 두 번 나왔다.
+          { action: "approve", label: "실행", cls: "btn-accent" },
+          { action: "request_revision", label: "수정", cls: "" },
+          { action: "reject", label: "반려", cls: "btn-danger" }
         ].forEach(function (a) {
           var pBtn = document.createElement("button");
           pBtn.type = "button";
@@ -803,7 +806,9 @@
   // 둘 다 같은 결정(stage='final_approval')이라 버튼 구성도 같다 — Telegram 완료 게이트
   // (rv/rr/fa)에 맞춰 최종승인/보완요청만 두고 거부는 없다(팀장님 확정 사항).
   var FINAL_APPROVAL_ACTIONS = [
-    { action: "final_approve", label: "최종 승인", cls: "btn-accent" },
+    // 제안 단계가 "실행"으로 바뀌어 이 화면에서 "승인"은 여기 하나뿐이다.
+    // "최종"을 붙일 이유가 없어졌다 — 뭐에 대한 최종인지 읽는 사람이 알 수 없었다.
+    { action: "final_approve", label: "승인", cls: "btn-accent" },
     { action: "request_revision", label: "보완 요청", cls: "" }
   ];
 

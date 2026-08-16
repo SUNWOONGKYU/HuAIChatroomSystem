@@ -137,7 +137,23 @@ export async function runMiniAppDecisionPollOnce(options: MiniAppDecisionPollerO
     else skipped += 1;
   }
 
-  const newCursor = earliestUnresolvedCreatedAt ?? rows[rows.length - 1]?.created_at;
+  // 커서는 (created_at, approval_id) 두 축이다.
+  //
+  // created_at 하나만 쓰면, 같은 시각을 가진 행이 한 페이지보다 많을 때 폴러가 그
+  // 자리에서 맴돈다 — 매 주기 같은 앞 20건을 읽고, 커서를 그 페이지 마지막 행의
+  // 시각으로 올려봐야 이미 커서와 같은 값이라 한 칸도 못 나간다. 라이브에서 제안
+  // 122건을 한 번에 취소 기록하면서 전부 같은 마이크로초로 들어갔고, 그 뒤에 눌린
+  // 결정들이 폴러에 영영 도달하지 못했다.
+  //
+  // 실패한 행이 있으면 그 지점 이전으로 묶어 다음 주기에 다시 잡히게 한다(아래
+  // earliestUnresolved). 그때는 approval_id 를 비워 그 시각 전체를 다시 훑는다 —
+  // 실패 행을 건너뛰는 것보다 같은 시각의 몇 건을 다시 보는 편이 안전하다.
+  const lastRow = rows[rows.length - 1];
+  const newCursor: DecisionCursor | undefined = earliestUnresolvedCreatedAt
+    ? { createdAt: earliestUnresolvedCreatedAt, approvalId: undefined }
+    : lastRow
+      ? { createdAt: lastRow.created_at, approvalId: lastRow.approval_id }
+      : undefined;
   if (newCursor) await client.advanceCursor(newCursor);
 
   return { fetched: rows.length, replayed, skipped, failed };
@@ -330,6 +346,24 @@ function maskMiniAppError(error: unknown): string {
     .replace(/(apikey|authorization|service_role)(["':\s]+)([A-Za-z0-9._-]+)/gi, "$1$2<redacted>");
 }
 
+export type DecisionCursor = {
+  createdAt: string;
+  approvalId?: string;
+};
+
+// (created_at, approval_id) 키셋 조건을 PostgREST 문법으로 만든다.
+//
+// approval_id 가 없으면(첫 실행, 또는 실패 행 때문에 시각으로만 되돌린 경우)
+// created_at >= 커서 로 그 시각 전체를 다시 훑는다 — 예전과 같은 동작이다.
+// 있으면 "그 시각보다 뒤" 이거나 "같은 시각인데 id 가 뒤" 인 것만 가져온다.
+// 그래야 같은 시각을 가진 행이 페이지 크기보다 많아도 끝까지 넘어간다.
+export function approvalKeysetFilter(cursor: DecisionCursor): string {
+  const createdAt = encodeURIComponent(cursor.createdAt);
+  if (!cursor.approvalId) return "created_at=gte." + createdAt;
+  return "or=(created_at.gt." + createdAt +
+    ",and(created_at.eq." + createdAt + ",approval_id.gt." + encodeURIComponent(cursor.approvalId) + "))";
+}
+
 type ApprovalRow = {
   approval_id: string;
   task_id: string | null;
@@ -359,16 +393,19 @@ class MiniAppRestClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async fetchCursor(): Promise<string> {
-    const rows = await this.get<Array<{ last_seen_created_at: string }>>(
-      "/huai_miniapp_decision_cursor?id=eq.1&select=last_seen_created_at&limit=1"
+  async fetchCursor(): Promise<DecisionCursor> {
+    const rows = await this.get<Array<{ last_seen_created_at: string; last_seen_approval_id: string | null }>>(
+      "/huai_miniapp_decision_cursor?id=eq.1&select=last_seen_created_at,last_seen_approval_id&limit=1"
     );
-    return rows[0]?.last_seen_created_at ?? new Date(0).toISOString();
+    return {
+      createdAt: rows[0]?.last_seen_created_at ?? new Date(0).toISOString(),
+      approvalId: rows[0]?.last_seen_approval_id ?? undefined
+    };
   }
 
-  async fetchApprovalsSince(cursor: string, limit: number): Promise<ApprovalRow[]> {
+  async fetchApprovalsSince(cursor: DecisionCursor, limit: number): Promise<ApprovalRow[]> {
     return this.get<ApprovalRow[]>(
-      "/huai_approvals?created_at=gte." + encodeURIComponent(cursor) +
+      "/huai_approvals?" + approvalKeysetFilter(cursor) +
         "&order=created_at.asc,approval_id.asc&limit=" + limit +
         "&select=approval_id,task_id,room_id,stage,decider_telegram_user_id,decision,reason,created_at,idempotency_key,entity_ref"
     );
@@ -413,9 +450,14 @@ class MiniAppRestClient {
     await expectOk(response);
   }
 
-  async advanceCursor(lastSeenCreatedAt: string): Promise<void> {
+  async advanceCursor(cursor: DecisionCursor): Promise<void> {
     const response = await this.request("POST", "/huai_miniapp_decision_cursor?on_conflict=id", {
-      body: { id: 1, last_seen_created_at: lastSeenCreatedAt, updated_at: new Date().toISOString() },
+      body: {
+        id: 1,
+        last_seen_created_at: cursor.createdAt,
+        last_seen_approval_id: cursor.approvalId ?? null,
+        updated_at: new Date().toISOString()
+      },
       prefer: "resolution=merge-duplicates,return=minimal"
     });
     await expectOk(response);

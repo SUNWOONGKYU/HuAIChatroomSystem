@@ -3,8 +3,7 @@ import test from "node:test";
 import {
   runMiniAppDecisionPollOnce,
   type MiniAppDecisionOutcomeEvent,
-  type MiniAppDecisionPollerOptions
-} from "../src/miniapp-decision-poller.js";
+  type MiniAppDecisionPollerOptions, approvalKeysetFilter } from "../src/miniapp-decision-poller.js";
 import { type OrchestratorPersistencePort, type PersistedEvent, type PersistedOutboxItem } from "../src/persistence.js";
 import { type TelegramInboundQueueMessage, TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
 import { type TelegramInputHandlingResult } from "../../../packages/orchestrator/src/index.js";
@@ -744,3 +743,38 @@ function parseInFilter(href: string, field: string): string[] {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
+
+// 라이브 결함 회귀 — 같은 시각을 가진 결정이 페이지보다 많을 때 폴러가 맴돌던 문제.
+//
+// 쌓인 제안 122건을 한 번에 취소 기록하면서 전부 같은 마이크로초로 들어갔다. 커서가
+// created_at 하나뿐이고 조회가 created_at >= 커서 라, 매 주기 같은 앞 20건만 읽고
+// 커서를 그 시각으로 다시 올리며 제자리걸음을 했다. 그 뒤에 방장이 작업 현황판에서
+// 누른 최종 승인은 폴러에 영영 도달하지 못했다 — 원장에는 남는데 작업은 안 움직였다.
+test("같은 시각 결정이 페이지보다 많아도 커서가 전진한다", () => {
+  const sameInstant = "2026-08-15T23:04:12.937488+00:00";
+  const filter = approvalKeysetFilter({ createdAt: sameInstant, approvalId: "aaaaaaaa-0000-4000-8000-000000000020" });
+
+  // 같은 시각이면 approval_id 가 뒤인 것만 가져와야 한다. 안 그러면 읽은 20건을
+  // 다음 주기에 또 읽는다.
+  assert.match(filter, /created_at\.gt\./);
+  assert.match(filter, /created_at\.eq\./);
+  assert.match(filter, /approval_id\.gt\./);
+  assert.equal(filter.includes("created_at=gte."), false, "gte 로 남으면 같은 시각을 영원히 다시 읽는다");
+});
+
+test("approval_id 가 없으면 예전처럼 그 시각 전체를 훑는다", () => {
+  // 첫 실행, 그리고 실패 행 때문에 시각으로만 되돌린 경우다. 실패 행을 건너뛰는 것보다
+  // 같은 시각 몇 건을 다시 보는 편이 안전하다.
+  const filter = approvalKeysetFilter({ createdAt: "2026-08-16T00:00:00.000000+00:00" });
+
+  assert.match(filter, /^created_at=gte\./);
+  assert.equal(filter.includes("approval_id"), false);
+});
+
+test("커서 값은 URL 에 그대로 실리지 않는다", () => {
+  // created_at 의 '+' 가 인코딩 안 되면 PostgREST 가 공백으로 읽어 조회가 어긋난다.
+  const filter = approvalKeysetFilter({ createdAt: "2026-08-15T23:04:12.937488+00:00", approvalId: "aaaaaaaa-0000-4000-8000-000000000001" });
+
+  assert.equal(filter.includes("+00:00"), false);
+  assert.match(filter, /%2B00%3A00/);
+});

@@ -332,6 +332,9 @@ create index if not exists huai_outbox_target_room_created_idx
 create table if not exists huai_miniapp_decision_cursor (
   id smallint primary key default 1,
   last_seen_created_at timestamptz not null default '-infinity',
+  -- 같은 시각을 가진 행이 페이지 크기보다 많으면 시각만으로는 커서가 전진하지 못한다.
+  -- 정렬이 (created_at, approval_id) 두 축이므로 커서도 두 축이어야 한다.
+  last_seen_approval_id uuid,
   updated_at timestamptz not null default now(),
   constraint huai_miniapp_decision_cursor_singleton_check check (id = 1)
 );
