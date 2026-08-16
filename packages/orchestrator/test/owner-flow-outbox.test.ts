@@ -308,11 +308,20 @@ test("owner approval immediately posts execution-started message before gateway 
 
   assert.equal(result.accepted, true);
   assert.equal(result.events[0]?.eventType, "owner_task_approved");
-  assert.equal(result.outbox.length, 2);
-  assert.equal(result.outbox[0]?.target.kind === "telegram_bot" ? result.outbox[0].target.botRole : undefined, "platoon_leader");
-  assert.match(String(result.outbox[0]?.payload.text), /작업 실행을 시작했습니다/);
-  assert.match(String(result.outbox[0]?.payload.text), /AI 작업자를 배정/);
-  assert.equal(result.outbox[1]?.target.kind, "local_gateway");
+
+  // 순서가 요점이다 — 방장이 보는 것들이 게이트웨이 실행보다 먼저 나가야 한다.
+  // (누른 메시지 편집 → 실행 시작 안내 → 실행 요청). 자리번호로 박아두면 앞에
+  // 항목이 하나 늘 때마다 깨지므로 성질로 찾는다.
+  const startedIndex = result.outbox.findIndex((item) => /작업 실행을 시작했습니다/.test(String(item.payload.text)));
+  const gatewayIndex = result.outbox.findIndex((item) => item.target.kind === "local_gateway");
+
+  assert.notEqual(startedIndex, -1, "실행 시작 안내가 없다");
+  assert.notEqual(gatewayIndex, -1, "게이트웨이 실행 요청이 없다");
+  assert.equal(startedIndex < gatewayIndex, true, "실행 요청이 방장 안내보다 먼저 나간다");
+
+  const started = result.outbox[startedIndex];
+  assert.equal(started?.target.kind === "telegram_bot" ? started.target.botRole : undefined, "platoon_leader");
+  assert.match(String(started?.payload.text), /AI 작업자를 배정/);
 });
 
 test("개선 요청도 소대장이 읽고 배분을 판단한다", () => {
@@ -693,4 +702,57 @@ test("판단 경로가 없으면 기존 정형 답변으로 떨어진다", () =>
   const text = String(result.outbox[0]?.payload.text);
   assert.match(text, /가능합니다/);
   assert.equal(result.outbox[0]?.payload.keyboard, undefined);
+});
+
+// 라이브 결함 회귀 — 실행 버튼을 눌러도 눈에 보이는 변화가 없던 문제.
+//
+// 접수 안내는 answerCallbackQuery 토스트로만 나가서 놓치기 쉽고, 뒤이어 오는
+// 새 메시지는 화면 아래에 조용히 쌓인다. 방장이 "눌렀는데 먹통인지 도는지 모르겠다"고
+// 반복 제기했다. 누른 그 메시지를 바꿔서 변화가 눈앞에 보이게 한다.
+test("실행 버튼을 누르면 그 메시지가 실행 중으로 바뀌고 버튼이 사라진다", () => {
+  const result = handleTelegramInput(
+    { kind: "callback", envelope: envelope(undefined, "task:task-1:approve"), callback: { entity: "task", entityId: "task-1", action: "approve" } },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const edit = result.accepted
+    ? result.outbox.find((item) => item.payload.editMessageId !== undefined)
+    : undefined;
+  assert.ok(edit, "누른 메시지를 고치는 항목이 없다 — 화면에 아무 변화가 없다");
+  assert.match(String(edit.payload.text), /실행 중/);
+
+  // 빈 키보드를 명시해야 기존 버튼이 확실히 걷힌다. 생략하면 reply_markup 키가
+  // 요청에서 빠져 버튼이 남을 수 있고, 그러면 두 번 눌리는 길이 열린다.
+  assert.deepEqual(edit.payload.keyboard, { inline_keyboard: [] });
+});
+
+test("실행 안내 메시지는 그대로 나간다 — 편집이 대체하지 않는다", () => {
+  const result = handleTelegramInput(
+    { kind: "callback", envelope: envelope(undefined, "task:task-1:approve"), callback: { entity: "task", entityId: "task-1", action: "approve" } },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const started = result.accepted
+    ? result.outbox.find((item) => /작업 실행을 시작했습니다/.test(String(item.payload.text)))
+    : undefined;
+  assert.ok(started, "실행 시작 안내가 사라졌다");
+  assert.equal(started.payload.editMessageId, undefined);
+});
+
+test("명령으로 승인하면 고칠 메시지가 없으므로 편집을 만들지 않는다", () => {
+  // /approve 는 버튼이 아니라 사용자가 친 메시지다. 그 메시지를 봇이 고칠 수 없고,
+  // 고치려 들면 엉뚱한 메시지를 건드린다.
+  const result = handleTelegramInput(
+    { kind: "command", envelope: envelope("/approve task-1"), command: { name: "/approve", args: ["task-1"] } },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const edits = result.accepted ? result.outbox.filter((item) => item.payload.editMessageId !== undefined) : [];
+  assert.deepEqual(edits, []);
 });

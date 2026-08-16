@@ -444,6 +444,13 @@ export function buildOwnerActionOutbox(
       return [buildExecutionNotConfiguredOutbox({ botRole: "platoon_leader", entityId: taskOrProposalId, input })];
     }
     return [
+      ...makeCallbackAcknowledgedEdit({
+        botRole: "platoon_leader",
+        text: "▶ 실행 중입니다.\n작업을 접수해 작업자를 배정하고 있습니다. 결과가 나오면 이 방에 보고합니다.",
+        entityId: taskOrProposalId,
+        envelope: input.envelope,
+        kind: "execution-started"
+      }),
       makeRoleMessageOutbox({
         botRole: "platoon_leader",
         telegramChatId: input.envelope.telegramChatId,
@@ -570,6 +577,7 @@ function makeRoleMessageOutbox(input: {
   bindingId: string;
   callbackQueryId?: string;
   keyboard?: unknown;
+  editMessageId?: string;
 }): OrchestratorOutboxItem {
   return {
     target: makeOutboxTargetForRole(input.botRole, input.telegramChatId),
@@ -578,9 +586,45 @@ function makeRoleMessageOutbox(input: {
       text: input.text,
       keyboard: input.keyboard,
       callbackQueryId: input.callbackQueryId,
+      editMessageId: input.editMessageId,
       binding: { kind: "event", eventId: input.bindingId }
     }
   };
+}
+
+// 버튼을 누른 그 메시지를 "실행 중"으로 바꾸고 버튼을 걷는다.
+//
+// 왜 필요한가: 누른 직후 방장에게 보이는 변화가 없었다. 접수 안내는
+// answerCallbackQuery 토스트로 나가는데 안드로이드에서 잠깐 떴다 사라져 놓치기 쉽고,
+// 뒤이어 오는 "작업 실행을 시작했습니다"는 새 메시지라 화면 아래에 조용히 쌓인다.
+// 그래서 방장은 눌렀는데 먹통인지 도는지 알 수 없었다(라이브에서 반복 제기됨).
+//
+// 방금 만진 메시지가 눈앞에서 바뀌는 건 놓칠 수 없다. 버튼이 같이 사라지므로
+// 두 번 누르는 것도 자연스럽게 막힌다.
+//
+// keyboard 를 생략하지 않고 빈 키보드를 명시한다 — 생략하면 편집 요청에서
+// reply_markup 키 자체가 빠져 기존 버튼이 남을 수 있다.
+function makeCallbackAcknowledgedEdit(input: {
+  botRole: TelegramBotRole;
+  text: string;
+  entityId: string;
+  envelope: NormalizedTelegramInput["envelope"];
+  kind: string;
+}): OrchestratorOutboxItem[] {
+  const editMessageId = input.envelope.telegramMessageId;
+  // 콜백이 아닌 경로(/approve 같은 명령)로 들어오면 고칠 메시지가 없다.
+  if (!editMessageId || !input.envelope.callbackData) return [];
+  return [
+    makeRoleMessageOutbox({
+      botRole: input.botRole,
+      telegramChatId: input.envelope.telegramChatId,
+      idempotencyKey: `telegram:${input.kind}-ack:${input.entityId}:${input.envelope.updateId}`,
+      text: input.text,
+      editMessageId,
+      keyboard: { inline_keyboard: [] },
+      bindingId: `${input.kind}-ack:${input.entityId}:${input.envelope.updateId}`
+    })
+  ];
 }
 
 export function renderTelegramQuery(
