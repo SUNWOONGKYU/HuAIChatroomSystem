@@ -1,5 +1,7 @@
 import { maskTelegramSensitiveText as maskSensitiveText, safeTelegramTraceUri } from "../../telegram-ui/src/sanitize.js";
 import {
+  AI_ADAPTER_TYPES,
+  type AiAdapterType,
   type ArtifactManifest,
   type ExecutionRequest,
   type GatewayEvent,
@@ -224,7 +226,7 @@ export class SupabaseOutboxStore {
     const gatewayId = await this.fetchActiveGatewayId(request.roomId);
     if (!gatewayId) return;
 
-    const fallbackAdapter: ExecutionRequest["adapterType"] = request.adapterType === "codex" ? "claude_code" : "codex";
+    const fallbackAdapter = nextEngineAfter(request.adapterType, request.workerAdapterType);
     const attemptId = request.attemptId + FALLBACK_ATTEMPT_SUFFIX;
     const isAudit = request.reportBotRole === "auditor";
 
@@ -240,8 +242,8 @@ export class SupabaseOutboxStore {
       room_id: request.roomId
     });
 
-    const blockedActor = request.adapterType === "codex" ? "CodexBot" : "ClaudeBot";
-    const takingOver = fallbackAdapter === "codex" ? "CodexBot" : "ClaudeBot";
+    const blockedActor = engineActorName(request.adapterType);
+    const takingOver = engineActorName(fallbackAdapter);
     await this.insertOutboxIdempotently({
       event_id: sourceEventId,
       idempotency_key: "telegram-engine-fallback:" + attemptId,
@@ -253,7 +255,11 @@ export class SupabaseOutboxStore {
         text: isAudit
           // 감사가 넘어간 것은 반드시 밝힌다. 작업자와 같은 엔진이 감사하면 독립성이
           // 떨어지는데, 그걸 모르고 승인하면 검증받았다고 착각하게 된다.
-          ? `${blockedActor} 사용 한도 초과로 ${takingOver}가 대신 검증합니다.\n작업자와 같은 엔진이라 독립성이 평소보다 낮습니다. 승인 시 참고해 주세요.`
+          // 엔진이 셋이면 대개 작업자와 다른 엔진이 남으므로, 그 경고는 정말 겹칠 때만 붙인다.
+          ? `${blockedActor} 사용 한도 초과로 ${takingOver}가 대신 검증합니다.` +
+            (fallbackAdapter === request.workerAdapterType
+              ? "\n작업자와 같은 엔진이라 독립성이 평소보다 낮습니다. 승인 시 참고해 주세요."
+              : "")
           : `${blockedActor} 사용 한도 초과로 ${takingOver}가 이어서 작업합니다.`,
         binding: { kind: "event", eventId: sourceEventId },
         idempotencyKey: "telegram-engine-fallback:" + attemptId
@@ -271,12 +277,14 @@ export class SupabaseOutboxStore {
     const gatewayId = await this.fetchActiveGatewayId(input.request.roomId);
     if (!gatewayId) return;
 
-    const actor = input.request.adapterType === "codex" ? "CodexBot" : "ClaudeBot";
+    const actor = engineActorName(input.request.adapterType);
     const auditRequest: ExecutionRequest = {
       ...input.request,
       attemptId: input.request.attemptId + "-audit",
       // 작업자와 다른 엔진에 맡긴다. 같은 엔진이 자기 결과를 보면 독립 감사가 아니다.
-      adapterType: input.request.adapterType === "codex" ? "claude_code" : "codex",
+      adapterType: nextEngineAfter(input.request.adapterType),
+      // 감사가 한도에 걸려 또 넘어갈 때 작업자 엔진으로 되돌아가지 않게 남겨 둔다.
+      workerAdapterType: input.request.adapterType,
       prompt: buildSingleWorkerAuditPrompt(input.request.taskId, actor, resultSummary, realArtifactPaths(input.events)),
       idempotencyKey: "single-worker-audit:" + input.request.attemptId,
       reportBotRole: "auditor"
@@ -1059,6 +1067,30 @@ const BOOKKEEPING_ARTIFACT_PATTERN = /(^|[\\/])sessions([\\/]|$)/i;
 // 폴백은 한 번만 한다. 붙였던 실행이 또 한도에 걸리면 그대로 실패로 보고한다 —
 // 두 엔진이 다 막힌 상태에서 계속 넘기면 방만 시끄럽고 아무것도 안 된다.
 export const FALLBACK_ATTEMPT_SUFFIX = "-fallback";
+
+// 막힌 엔진 다음으로 넘길 엔진을 고른다.
+//
+// 엔진이 셋(claude_code · codex · antigravity)이므로, 감사가 막혔을 때도 작업자와 다른
+// 엔진이 하나 더 남는다. 둘뿐이던 때는 Codex 가 막히면 Claude 가 자기 일을 검사할 수밖에
+// 없었다 — 그건 독립 검증이 아니다.
+//
+// workerAdapterType 은 그 작업을 실제로 한 엔진이다(감사일 때만 의미가 있다).
+// 그 엔진은 뒤로 미뤄, 남는 게 그것뿐일 때만 쓴다.
+export function nextEngineAfter(
+  blocked: AiAdapterType,
+  workerAdapterType?: AiAdapterType
+): AiAdapterType {
+  const candidates = AI_ADAPTER_TYPES.filter((engine) => engine !== blocked);
+  const independent = candidates.filter((engine) => engine !== workerAdapterType);
+  return independent[0] ?? candidates[0] ?? blocked;
+}
+
+// 방에 올리는 이름. 사람은 adapterType 을 읽지 않는다.
+export function engineActorName(adapterType: AiAdapterType): string {
+  if (adapterType === "codex") return "CodexBot";
+  if (adapterType === "antigravity") return "AntigravityBot";
+  return "ClaudeBot";
+}
 
 export function shouldFallbackToOtherEngine(
   request: ExecutionRequest,

@@ -38,7 +38,7 @@ create table if not exists huai_ai_actors (
   cli_session_id text,
   cli_session_updated_at timestamptz,
   constraint huai_ai_actors_role_check check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor')),
-  constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'auditor')),
+  constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'antigravity', 'auditor')),
   constraint huai_ai_actors_status_check check (status in ('active', 'inactive', 'disabled')),
   unique (room_id, role)
 );
@@ -496,7 +496,7 @@ create table if not exists huai_gateway_instances (
   machine_label text not null,
   status text not null default 'offline',
   allowed_project_roots jsonb not null default '[]'::jsonb,
-  allowed_adapters jsonb not null default '["claude_code","codex"]'::jsonb,
+  allowed_adapters jsonb not null default '["claude_code","codex","antigravity"]'::jsonb,
   last_heartbeat_at timestamptz,
   created_at timestamptz not null default now(),
   constraint huai_gateway_instances_status_check check (status in ('online', 'offline', 'draining', 'disabled'))
@@ -516,7 +516,7 @@ create table if not exists huai_execution_attempts (
   telemetry jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   unique (task_id, adapter_type, attempt_no),
-  constraint huai_execution_attempts_adapter_type_check check (adapter_type in ('claude_code', 'codex')),
+  constraint huai_execution_attempts_adapter_type_check check (adapter_type in ('claude_code', 'codex', 'antigravity')),
   constraint huai_execution_attempts_status_check check (status in ('queued', 'leased', 'running', 'cancelled', 'failed', 'retry_scheduled', 'completed'))
 );
 

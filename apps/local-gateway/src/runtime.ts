@@ -1,4 +1,4 @@
-import { type AiAdapterType, type GatewayEvent } from "../../../packages/contracts/src/index.js";
+import { isAiAdapterType, type AiAdapterType, type GatewayEvent } from "../../../packages/contracts/src/index.js";
 import { runLocalGatewayConsumerOnce, type LocalGatewayConsumerResult, type LocalGatewayOutboxStore } from "./consumer.js";
 import { type GatewayEventSink, type ProcessRunner } from "./executor.js";
 import { type GatewayPolicy } from "./index.js";
@@ -146,7 +146,7 @@ function parseList(value: string): string[] {
 
 function parseAllowedAdapters(value: string): AiAdapterType[] {
   return parseList(value).map((item) => {
-    if (item !== "codex" && item !== "claude_code") {
+    if (!isAiAdapterType(item)) {
       throw new Error(`invalid-env:LOCAL_GATEWAY_ALLOWED_ADAPTERS:${item}`);
     }
     return item;

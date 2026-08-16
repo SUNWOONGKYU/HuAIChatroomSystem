@@ -6,7 +6,15 @@ export type ActorRole =
   | "human_owner"
   | "human_member";
 
-export type AiAdapterType = "claude_code" | "codex";
+// 세 번째 엔진 antigravity(agy CLI). 한 엔진이 사용 한도에 걸려도 나머지 둘이 남아,
+// 감사를 작업자와 다른 엔진에 맡긴다는 원칙을 지킬 여지가 생긴다.
+export type AiAdapterType = "claude_code" | "codex" | "antigravity";
+
+export const AI_ADAPTER_TYPES: readonly AiAdapterType[] = ["claude_code", "codex", "antigravity"];
+
+export function isAiAdapterType(value: unknown): value is AiAdapterType {
+  return typeof value === "string" && (AI_ADAPTER_TYPES as readonly string[]).includes(value);
+}
 
 export type TelegramBotRole = Extract<ActorRole, "platoon_leader" | "claude_leader" | "codex_leader" | "auditor">;
 
@@ -334,6 +342,11 @@ export type ExecutionRequest = {
   resumeSessionId?: string;
   // 역할별 모델 지정. 소대장 판단은 실행보다 상위 모델이 필요할 수 있다.
   model?: string;
+  // 이 요청이 감사할 작업을 실제로 한 엔진. 감사 요청에만 채운다.
+  //
+  // 감사가 사용 한도에 걸려 다른 엔진으로 넘길 때, 하필 작업자 엔진으로 넘기면
+  // 자기 일을 자기가 검사하게 된다. 그 엔진을 뒤로 미루려면 누가 일했는지 알아야 한다.
+  workerAdapterType?: AiAdapterType;
 };
 
 export function assertExecutionRequestPayload(value: unknown): ExecutionRequest {
@@ -344,7 +357,7 @@ export function assertExecutionRequestPayload(value: unknown): ExecutionRequest 
     typeof request.attemptId !== "string" ||
     typeof request.actorId !== "string" ||
     typeof request.requestedBy !== "string" ||
-    (request.adapterType !== "claude_code" && request.adapterType !== "codex") ||
+    !isAiAdapterType(request.adapterType) ||
     typeof request.projectPath !== "string" ||
     typeof request.prompt !== "string" ||
     typeof request.timeoutMs !== "number" ||
@@ -352,7 +365,8 @@ export function assertExecutionRequestPayload(value: unknown): ExecutionRequest 
     typeof request.idempotencyKey !== "string" ||
     typeof request.createdAt !== "string" ||
     Number.isNaN(Date.parse(request.createdAt)) ||
-    (request.reportBotRole !== undefined && !["platoon_leader", "claude_leader", "codex_leader", "auditor"].includes(request.reportBotRole))
+    (request.reportBotRole !== undefined && !["platoon_leader", "claude_leader", "codex_leader", "auditor"].includes(request.reportBotRole)) ||
+    (request.workerAdapterType !== undefined && !isAiAdapterType(request.workerAdapterType))
   ) {
     throw new Error("invalid-execution-request-payload");
   }

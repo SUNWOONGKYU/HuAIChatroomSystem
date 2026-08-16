@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, buildSingleWorkerAuditPrompt, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
-import { type GatewayEvent } from "../../contracts/src/index.js";
+import { SupabaseOutboxStore, buildSingleWorkerAuditPrompt, engineActorName, nextEngineAfter, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
+import { AI_ADAPTER_TYPES, type GatewayEvent } from "../../contracts/src/index.js";
 
 // 자동 검증 기준: 이 실행이 실제로 무언가를 만들거나 고쳤는가.
 //
@@ -203,6 +203,45 @@ test("폴백은 한 번만 한다", () => {
   const already = { ...auditRequest(), attemptId: "attempt-1-fallback" };
 
   assert.equal(shouldFallbackToOtherEngine(already, "agent-usage-limit", ""), false);
+});
+
+// 엔진이 둘뿐이던 때의 결함 — 감사하던 Codex 가 한도에 걸리면 남는 건 작업자 Claude 뿐이라,
+// 자기 일을 자기가 검사하게 됐다. 세 번째 엔진은 그 자리를 메우려고 붙였다.
+test("감사가 막히면 작업자 엔진을 피해 세 번째 엔진에 넘긴다", () => {
+  assert.equal(nextEngineAfter("codex", "claude_code"), "antigravity");
+  assert.equal(nextEngineAfter("antigravity", "claude_code"), "codex");
+  assert.equal(nextEngineAfter("claude_code", "codex"), "antigravity");
+});
+
+test("작업자를 모르면 남은 엔진 중 앞엣것으로 넘긴다", () => {
+  // 감사가 아닌 보통 실행이다. 피해야 할 엔진이 없다.
+  assert.equal(nextEngineAfter("codex"), "claude_code");
+  assert.equal(nextEngineAfter("claude_code"), "codex");
+});
+
+test("엔진이 셋인 동안은 어떤 조합에서도 작업자에게 되돌아가지 않는다", () => {
+  // 하나가 막히고 하나가 작업자면 항상 하나가 남는다. 이게 세 번째 엔진을 붙인 이유다.
+  // 엔진을 다시 둘로 줄이면 이 성질이 깨지므로 여기서 잡는다.
+  for (const blocked of AI_ADAPTER_TYPES) {
+    for (const worker of AI_ADAPTER_TYPES) {
+      const picked = nextEngineAfter(blocked, worker);
+      assert.notEqual(picked, blocked, `${blocked} 가 막혔는데 다시 골랐다`);
+      if (blocked !== worker) assert.notEqual(picked, worker, `${worker} 가 자기 일을 검사하게 됐다`);
+    }
+  }
+});
+
+test("감사 요청은 누가 작업했는지를 달고 나간다", () => {
+  // 이 값이 없으면 감사가 한 번 더 넘어갈 때 작업자 엔진으로 되돌아갈 수 있다.
+  const request = { ...auditRequest(), adapterType: "claude_code" as const, workerAdapterType: "claude_code" as const };
+
+  assert.equal(nextEngineAfter("codex", request.workerAdapterType), "antigravity");
+});
+
+test("방에 올리는 이름은 엔진마다 다르다", () => {
+  assert.equal(engineActorName("claude_code"), "ClaudeBot");
+  assert.equal(engineActorName("codex"), "CodexBot");
+  assert.equal(engineActorName("antigravity"), "AntigravityBot");
 });
 
 test("소대장 판단은 엔진을 바꾸지 않는다", () => {

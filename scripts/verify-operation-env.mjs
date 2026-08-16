@@ -80,7 +80,9 @@ function validateLocalGatewayEnv(env, errors) {
   requireKey(env, "LOCAL_GATEWAY_ALLOWED_ADAPTERS", errors);
   const adapters = splitList(env.LOCAL_GATEWAY_ALLOWED_ADAPTERS);
   for (const adapter of adapters) {
-    if (!["codex", "claude_code"].includes(adapter)) errors.push(`invalid-env:LOCAL_GATEWAY_ALLOWED_ADAPTERS:${adapter}`);
+    // 엔진 목록은 packages/contracts 의 AiAdapterType 이 정본이다. 여기는 .mjs 라 타입을
+    // 가져오지 못하므로 값을 옮겨 적는다 — 엔진을 늘리면 이 줄도 같이 고쳐야 한다.
+    if (!["codex", "claude_code", "antigravity"].includes(adapter)) errors.push(`invalid-env:LOCAL_GATEWAY_ALLOWED_ADAPTERS:${adapter}`);
   }
   if (adapters.length === 0) errors.push("missing-env:LOCAL_GATEWAY_ALLOWED_ADAPTERS");
   if (splitList(env.LOCAL_GATEWAY_ALLOWED_ROOTS).length === 0) errors.push("missing-env:LOCAL_GATEWAY_ALLOWED_ROOTS");

@@ -1,4 +1,5 @@
 import {
+  isAiAdapterType,
   type AiAdapterType,
   type TelegramBotRole
 } from "../../../packages/contracts/src/index.js";
@@ -213,9 +214,7 @@ function toLoadedGateway(row: GatewayInstanceRow): LoadedGatewayInstance {
     gatewayId: row.gateway_id,
     status: assertGatewayStatus(row.status),
     allowedProjectRoots: parseStringArray(row.allowed_project_roots),
-    allowedAdapters: parseStringArray(row.allowed_adapters).filter((adapter): adapter is AiAdapterType =>
-      adapter === "codex" || adapter === "claude_code"
-    )
+    allowedAdapters: parseStringArray(row.allowed_adapters).filter(isAiAdapterType)
   };
 }
 

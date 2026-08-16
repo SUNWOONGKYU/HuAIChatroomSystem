@@ -64,6 +64,30 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
     );
   }
 
+  // Antigravity 터미널판(agy). IDE 실행기(antigravity)와 다른 별도 CLI이고, 이쪽에만
+  // --print 비대화형 모드가 있다.
+  //
+  // 세 번째 엔진이 있으면 한 엔진이 사용 한도에 걸려도 감사를 작업자와 다른 엔진에
+  // 맡길 수 있다 — 둘뿐일 때는 Codex 가 막히면 Claude 가 자기 일을 검사하게 된다.
+  if (request.adapterType === "antigravity") {
+    return platformPlan(
+      "agy",
+      [
+        "--print",
+        "--output-format",
+        "text",
+        // 읽기 전용은 plan 모드. 감사·소대장 판단이 파일을 고치면 AC-07/FR-008 이 뚫린다
+        // (위 readOnly 주석 참고) — Claude 의 dontAsk, Codex 의 --sandbox read-only 와 같은 자리다.
+        ...(readOnly ? ["--mode", "plan"] : ["--dangerously-skip-permissions"]),
+        `--add-dir=${request.projectPath}`,
+        ...(request.model ? ["--model", request.model] : []),
+        request.prompt
+      ],
+      request.projectPath,
+      request.timeoutMs
+    );
+  }
+
   return platformPlan(
     "codex",
     [
