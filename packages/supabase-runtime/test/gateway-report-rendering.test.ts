@@ -717,3 +717,51 @@ test("구조적 잡음은 여전히 걸러낸다", () => {
   assert.equal(text.includes("worker.ts"), false);
   assert.equal(text.includes("dist/apps"), false);
 });
+
+// 라이브 결함 회귀 — Codex 한도 초과가 "실행 중 오류"로 뭉개지던 문제.
+//
+// 감사는 작업자와 다른 엔진에 맡긴다. ClaudeBot 이 일한 작업의 감사를 Codex 가 받았는데
+// Codex 계정이 한도에 걸렸다. 한도 초과는 exit code 1 로 끝나서 방에는 "실행 중 오류가
+// 발생했습니다" 로만 나왔고, 우리 코드가 잘못된 것처럼 보였다.
+// 한도는 기다리면 풀리고 오류는 고쳐야 한다 — 조치가 다르면 문장도 달라야 한다.
+test("Codex 사용 한도 초과를 원인 그대로 알린다", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "codex" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{
+      type: "stdout",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+      text: '{"type":"error","message":"You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings to upgrade."}'
+    }]
+  });
+
+  assert.match(text, /CodexBot 현재 상태: 사용 한도 초과/);
+  assert.match(text, /ClaudeBot으로 작업/, "다음에 무엇을 할 수 있는지 알려줘야 한다");
+  assert.equal(text.includes("실행 중 오류가 발생했습니다"), false, "원인이 뭉개졌다");
+  assert.equal(text.includes("chatgpt.com"), false, "내부 URL 을 방에 그대로 흘리지 않는다");
+});
+
+test("Codex 한도를 ClaudeBot 한도로 잘못 부르지 않는다", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "codex" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: '{"type":"error","message":"You have hit your usage limit."}' }]
+  });
+
+  assert.equal(text.includes("ClaudeBot 현재 상태"), false);
+});
+
+test("한도가 아닌 Codex 실패는 그대로 오류로 알린다", () => {
+  // 한도 문구를 넓게 잡아 진짜 오류까지 "한도 초과"로 덮으면, 고쳐야 할 것을 기다리게 된다.
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "codex" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "설정 파일을 읽지 못했습니다." }]
+  });
+
+  assert.equal(text.includes("사용 한도 초과"), false);
+});

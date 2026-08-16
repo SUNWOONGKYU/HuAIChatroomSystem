@@ -1249,6 +1249,17 @@ function humanReadableGatewayError(error: string, outputSummary?: string, adapte
   if (adapterType === "claude_code" && /agent-usage-limit|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(combined)) {
     return "ClaudeBot 현재 상태: 사용 한도 초과. Claude Code 한도가 초기화된 뒤 다시 시도하거나 CodexBot으로 작업해야 합니다.";
   }
+  // Codex 한도도 사람 말로 옮긴다.
+  //
+  // 한도 초과는 exit code 1 로 끝나므로 아래 exit-code 분기에 걸려 "실행 중 오류가
+  // 발생했습니다" 로만 나갔다. 라이브에서 감사가 그렇게 실패했고, 방에서는 우리 코드가
+  // 잘못된 것처럼 보였다. 한도는 기다리면 풀리고 오류는 고쳐야 하므로 조치가 완전히
+  // 다르다 — 그 둘을 같은 문장으로 덮으면 안 된다.
+  //
+  // ClaudeBot 쪽은 이미 이렇게 옮기고 있었다. Codex 쪽만 빠져 있었다.
+  if (adapterType === "codex" && /chatgpt\.com\/codex\/settings|agent-usage-limit|hit your (?:session |usage |weekly )?limit|usage limit|quota exceeded/i.test(combined)) {
+    return "CodexBot 현재 상태: 사용 한도 초과. 한도가 초기화된 뒤 다시 시도하거나 ClaudeBot으로 작업해야 합니다.";
+  }
   if (/BUTTON_DATA_INVALID/i.test(masked)) return "텔레그램 버튼 데이터가 너무 길어 전송이 실패했습니다.";
   if (/process-timeout/i.test(masked)) return "작업 시간이 초과되었습니다.";
   if (/spawn .*ENOENT/i.test(masked)) return "실행 프로그램을 찾지 못했습니다.";

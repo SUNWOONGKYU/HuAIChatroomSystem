@@ -84,3 +84,5 @@ node scripts/verify-no-secrets.mjs
 ## 상태
 
 Telegram 기반 핵심 운영 경로와 `/tasks`, `/task`, `/search`, `/trace` 조회 흐름은 자동 검증을 통과했습니다. 실제 서비스 운영 시에는 Supabase, Telegram webhook, bot-service, local-gateway, 작업 PC 인증 상태를 함께 기동해야 합니다. GitHub 배포 전에는 `GITHUB_RELEASE_CHECKLIST.md`를 확인합니다.
+
+최신 갱신일: 2026-08-16
