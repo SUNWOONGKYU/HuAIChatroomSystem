@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, renderGatewayReportText } from "../src/index.js";
+import { SupabaseOutboxStore, renderAutomaticAuditRequestText, renderGatewayReportText } from "../src/index.js";
 import { type ExecutionRequest, type GatewayEvent } from "../../contracts/src/index.js";
 
 test("gateway report hides internal json and hook output from Telegram text", () => {
@@ -528,4 +528,89 @@ test("여섯 줄이 넘는 답도 앞부분이 잘려나가지 않는다", () =>
   assert.match(text, /단계 1 /, "맨 앞줄이 사라졌다");
   assert.match(text, /단계 12 /);
   assert.match(text, /4321/);
+});
+
+// 라이브 결함 회귀 2차 — 답이 파일 이름을 말했다는 이유로 버려진 사건.
+test("답이 파일 이름을 언급해도 버리지 않는다", () => {
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [
+      {
+        type: "stdout",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        text: [
+          "조사 결과: `package.json` name 필드 값 = `\"hu-ai-chatroom-system\"`.",
+          "",
+          "근거: `C:\Dev\HuAIChatroomSystem\package.json` 2번째 줄 직접 읽음.",
+          "",
+          "후속 조치: 불필요. 값 확인 끝."
+        ].join("\n")
+      }
+    ]
+  });
+
+  assert.match(text, /hu-ai-chatroom-system/, "답이 사라졌다 — 파일 이름이 들어갔다고 버리면 안 된다");
+  assert.match(text, /package\.json/);
+});
+
+test("확장자가 무엇이든 문장 속 파일 이름은 살린다", () => {
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [
+      {
+        type: "stdout",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        text: [
+          "tsconfig.json 의 strict 설정은 true 입니다.",
+          "index.ts 에는 함수가 42개 있습니다.",
+          "app.js 는 존재하지 않습니다."
+        ].join("\n")
+      }
+    ]
+  });
+
+  assert.match(text, /strict 설정은 true/);
+  assert.match(text, /함수가 42개/);
+  assert.match(text, /존재하지 않습니다/);
+});
+
+test("줄 전체가 경로뿐이면 여전히 버린다", () => {
+  // 파일 목록·산출물 나열은 사람에게 하려던 말이 아니다.
+  const text = renderGatewayReportText({
+    request: makeRequest(),
+    status: "completed",
+    events: [
+      {
+        type: "stdout",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        text: [
+          "변경한 파일:",
+          "C:\Dev\HuAIChatroomSystem\packages\orchestrator\src\index.ts",
+          "dist/apps/bot-service/src/cli.js",
+          "node_modules/.bin/tsc",
+          "결론: 세 파일을 갱신했습니다."
+        ].join("\n")
+      }
+    ]
+  });
+
+  assert.match(text, /세 파일을 갱신했습니다/);
+  assert.equal(text.includes("node_modules"), false);
+  assert.equal(text.includes("dist/apps"), false);
+});
+
+test("검증 요청 본문에 버튼 목록을 글로 또 쓰지 않는다", () => {
+  // 아래에 진짜 버튼(검증/보완/완료)이 붙는다. 본문에 같은 목록을 쓰면 두 번 보이고,
+  // 라이브에서는 이름까지 어긋나 있었다 — 본문 "재검" vs 버튼 "검증".
+  const text = renderAutomaticAuditRequestText({ ...makeRequest(), adapterType: "claude_code" });
+
+  assert.match(text, /검증 요청/);
+  assert.match(text, /작업자: ClaudeBot/);
+  assert.equal(text.includes("버튼:"), false, "버튼 목록이 본문에 또 들어 있다");
+  assert.equal(text.includes("재검"), false, "버튼에 없는 이름이 본문에 남아 있다");
 });

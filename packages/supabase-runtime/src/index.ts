@@ -1000,13 +1000,15 @@ function inferVerificationVerdict(summary: string): "pass" | "conditional_pass" 
   return "conditional_pass";
 }
 
-function renderAutomaticAuditRequestText(request: ExecutionRequest): string {
+export function renderAutomaticAuditRequestText(request: ExecutionRequest): string {
   const actor = request.adapterType === "codex" ? "CodexBot" : "ClaudeBot";
   return [
     "\uAC80\uC99D \uC694\uCCAD: " + request.taskId,
     "\uC791\uC5C5\uC790: " + actor,
-    "\uC2E4\uD589 \uACB0\uACFC\uB97C \uB3C5\uB9BD \uAC80\uC99D\uD574 \uC8FC\uC138\uC694.",
-    "\uBC84\uD2BC: \u21BB \uC7AC\uAC80 / \u270E \uBCF4\uC644 / \u2713 \uC644\uB8CC"
+    "\uC2E4\uD589 \uACB0\uACFC\uB97C \uB3C5\uB9BD \uAC80\uC99D\uD574 \uC8FC\uC138\uC694."
+    // \uBC84\uD2BC \uBAA9\uB85D\uC744 \uBCF8\uBB38\uC5D0 \uAE00\uB85C \uB610 \uC4F0\uC9C0 \uC54A\uB294\uB2E4. \uC544\uB798\uC5D0 \uC9C4\uC9DC \uBC84\uD2BC(buildCompletionKeyboard)\uC774
+    // \uBD99\uC73C\uBBC0\uB85C \uAC19\uC740 \uAC83\uC774 \uB450 \uBC88 \uBCF4\uC774\uACE0, \uAC8C\uB2E4\uAC00 \uC774\uB984\uC774 \uC5B4\uAE0B\uB098 \uC788\uC5C8\uB2E4 \u2014 \uBCF8\uBB38\uC740 "\uC7AC\uAC80"\uC778\uB370
+    // \uBC84\uD2BC\uC740 "\uAC80\uC99D"\uC774\uB77C \uC5B4\uB290 \uCABD\uC744 \uB20C\uB7EC\uC57C \uD558\uB294\uC9C0\uAC00 \uC624\uD788\uB824 \uD5F7\uAC08\uB838\uB2E4.
   ].join("\n");
 }
 
@@ -1098,8 +1100,24 @@ function isLowValueHumanLine(line: string): boolean {
     /^[-*]\s*$/.test(line) ||
     /^[A-Z_]+:/.test(line) ||
     lowValuePrefixes.some((prefix) => line.startsWith(prefix)) ||
-    /node_modules|dist\/|\.json|\.ts|\.js|OPERATION_STATUS\.md/.test(line)
+    isBarePathLine(line)
   );
+}
+
+// 줄 전체가 경로 하나인 것만 잡는다 — 파일 목록, 빌드 산출물 나열 같은 것들이다.
+//
+// 예전에는 /node_modules|dist\/|\.json|\.ts|\.js/ 로 "그 문자열이 어디든 들어 있으면"
+// 버렸다. 그래서 답이 파일 이름을 언급하는 순간 통째로 사라졌다 — 라이브에서
+// ClaudeBot 이 낸
+//   조사 결과: `package.json` name 필드 값 = `"hu-ai-chatroom-system"`.
+//   근거: `C:\Dev\HuAIChatroomSystem\package.json` 2번째 줄 직접 읽음.
+// 두 줄이 `.json` 때문에 버려지고 방에는 "결과:" 만 갔다. 소프트웨어 작업에서
+// 답이 파일 이름을 말하는 건 정상이고, 오히려 그게 답의 핵심인 경우가 많다.
+//
+// 문장 안에 파일 이름이 나오는 것과 줄이 경로 그 자체인 것을 가르는 기준은 공백이다.
+// 스택프레임·JSON·로그 줄은 여기가 아니라 isInternalOutputLine 이 이미 걸러낸다.
+function isBarePathLine(line: string): boolean {
+  return /^[^\s]+$/.test(line) && /[\\/]/.test(line);
 }
 function isInternalOutputLine(line: string): boolean {
   return (
