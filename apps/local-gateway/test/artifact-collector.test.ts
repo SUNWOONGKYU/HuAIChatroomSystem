@@ -3,6 +3,7 @@ import test from "node:test";
 import { FakeBotServiceStore } from "../../bot-service/src/fake-store.js";
 import {
   createArtifactCollector,
+  EXCLUDED_DIRECTORIES,
   gitignoreMatcher,
   globToRegExp,
   matchesAnyGlob,
@@ -341,4 +342,13 @@ test("주석과 부정 규칙은 판정에 쓰지 않는다", () => {
 
   assert.equal(ignored("x.log"), true);
   assert.equal(ignored("주석"), false);
+});
+
+// 라이브 결함 — 현황판 "결과물" 칸이 INDEX.md, .wiki-distill.log, <세션>_요약.md 로 채워졌다.
+// Claude Code 훅이 자기 세션을 남기며 만드는 부산물이라 방장이 받아볼 결과물이 아니다.
+test("세션 기록 폴더는 산출물로 수집하지 않는다", () => {
+  assert.equal(EXCLUDED_DIRECTORIES.has("sessions"), true);
+  // 이미 있던 제외 대상도 그대로여야 한다.
+  assert.equal(EXCLUDED_DIRECTORIES.has("node_modules"), true);
+  assert.equal(EXCLUDED_DIRECTORIES.has(".git"), true);
 });

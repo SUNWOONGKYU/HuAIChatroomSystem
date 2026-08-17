@@ -183,3 +183,22 @@ test("지난 기록은 최근 대화와 구분된 자리에 놓인다", () => {
 
   assert.equal(prompt.indexOf("지난 기록 끝") < prompt.indexOf("새 지시다"), true, "지난 기록이 최근 논의보다 앞에 와야 한다");
 });
+
+// 라이브 결함 — DCF 방에 "점검 파일 만들어줘"만 시켰는데 제안 제목이
+// "README 줄 수 확인 + 점검 파일 생성"으로 나왔다. 지난 기록에 있던 옛 작업이 이번 범위에
+// 딸려 들어갔다. 기록은 참고지 할 일 목록이 아니다.
+test("지난 기록이 이번 작업 범위로 딸려 들어가지 않게 못박는다", () => {
+  const prompt = buildLeaderPlanningPrompt({
+    turns: [{ speaker: "방장", text: "점검 파일 만들어줘", isOwner: true }],
+    triggeringText: "점검 파일 만들어줘",
+    facts: {
+      bots: ["ClaudeBot"],
+      memberCount: 2,
+      openTasks: [],
+      memory: [{ date: "2026-08-16", summary: "README 줄 수 조사 작업을 했다." }]
+    }
+  });
+
+  assert.match(prompt, /지난 기록은 맥락일 뿐이다/);
+  assert.match(prompt, /이번 작업의 범위에는 지금 요청에서 나온 것만 담아라/);
+});

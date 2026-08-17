@@ -368,3 +368,15 @@ test("보완 요청은 실제로 작업한 엔진의 봇이 받는다", () => {
   // Antigravity 가 감사했다고 해서 CodexBot 이 보완 요청을 받을 이유는 없다.
   assert.equal(reportBotRoleForAdapter("antigravity"), "claude_leader");
 });
+
+// 세 번째 엔진도 자기 한도에 걸린다. 안 알아보면 "실행 중 오류"로 끝나고 폴백이 안 걸려,
+// 남은 두 엔진이 멀쩡한데 작업이 거기서 멈춘다.
+test("Antigravity 한도도 다른 엔진으로 넘긴다", () => {
+  const request = { ...auditRequest(), adapterType: "antigravity" as const };
+
+  assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", "Error: resource-exhausted"), true);
+  assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", "429 Too Many Requests"), true);
+  assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", "quota exceeded for this project"), true);
+  // 진짜 오류는 넘기지 않는다 — 같은 실패를 두 번 하고 방만 시끄럽다.
+  assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", "설정 파일을 읽지 못했습니다."), false);
+});

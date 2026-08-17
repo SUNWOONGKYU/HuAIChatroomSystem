@@ -1462,7 +1462,9 @@ export function shouldFallbackToOtherEngine(
   if (isLeaderPlanningAttempt(request.attemptId)) return false;
 
   const combined = `${errorKind ?? ""}\n${resultSummary}`;
-  return /agent-usage-limit|chatgpt\.com\/codex\/settings|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|quota exceeded|limit reached/i.test(combined);
+  // resource-exhausted / too many requests 는 Antigravity 쪽 표현이다. 이게 없으면 그 엔진이
+  // 막혀도 폴백이 안 걸리고 작업이 거기서 끝난다.
+  return /agent-usage-limit|chatgpt\.com\/codex\/settings|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|quota exceeded|limit reached|too many requests|resource[- ]exhausted/i.test(combined);
 }
 
 export function producedRealArtifacts(events: readonly GatewayEvent[]): boolean {
@@ -1777,6 +1779,11 @@ function humanReadableGatewayError(error: string, outputSummary?: string, adapte
   // ClaudeBot 쪽은 이미 이렇게 옮기고 있었다. Codex 쪽만 빠져 있었다.
   if (adapterType === "codex" && /chatgpt\.com\/codex\/settings|agent-usage-limit|hit your (?:session |usage |weekly )?limit|usage limit|quota exceeded/i.test(combined)) {
     return "CodexBot 현재 상태: 사용 한도 초과. 한도가 초기화된 뒤 다시 시도하거나 ClaudeBot으로 작업해야 합니다.";
+  }
+  // 세 번째 엔진도 자기 한도에 걸린다. 안 알아보면 그냥 "실행 중 오류"로 끝나고 폴백도
+  // 안 걸린다 — 남은 두 엔진이 멀쩡한데 작업이 거기서 멈춘다.
+  if (adapterType === "antigravity" && /usage limit|quota|rate limit|too many requests|limit reached|resource[- ]exhausted/i.test(combined)) {
+    return "AntigravityBot 현재 상태: 사용 한도 초과. 다른 엔진으로 작업해야 합니다.";
   }
   if (/BUTTON_DATA_INVALID/i.test(masked)) return "텔레그램 버튼 데이터가 너무 길어 전송이 실패했습니다.";
   if (/process-timeout/i.test(masked)) return "작업 시간이 초과되었습니다.";

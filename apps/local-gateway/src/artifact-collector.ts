@@ -26,7 +26,12 @@ export const defaultArtifactPolicy: ArtifactPolicy = {
 
 export const MAX_COLLECTED_ARTIFACTS = 50;
 
-const EXCLUDED_DIRECTORIES = new Set([
+export const EXCLUDED_DIRECTORIES = new Set([
+  // 세션 기록 폴더. Claude Code 훅이 자기 세션을 남기며 만드는 부산물이라 방장의 결과물이
+  // 아니다 — 라이브에서 현황판 "결과물" 칸이 INDEX.md·.wiki-distill.log·요약.md 로 채워졌다.
+  // 감사 판정에서는 이미 걸러내고 있었는데(BOOKKEEPING_ARTIFACT_PATTERN), 수집 자체는
+  // 그대로여서 표에 쌓이고 화면에 보였다.
+  "sessions",
   "node_modules",
   ".git",
   ".hg",
