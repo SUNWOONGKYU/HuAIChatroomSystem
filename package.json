@@ -100,7 +100,7 @@
     "build:miniapp-web": "node scripts/build-miniapp-web.mjs",
     "verify:stale-proposal-cleanup": "node --test scripts/cancel-stale-proposals.test.mjs",
     "verify:operation-restart": "node --test scripts/restart-operation-services-from-live-env.test.mjs",
-    "verify:gate42": "npm run verify:stale-proposal-cleanup && npm run verify:operation-restart && npm run verify:room-archive",
+    "verify:gate42": "npm run verify:stale-proposal-cleanup && npm run verify:operation-restart && npm run verify:room-archive && npm run verify:archive-prune",
     "verify:room-board-pin": "npm run build && node --test scripts/pin-room-board-message.test.mjs",
     "verify:migrated-chat-ids": "node --test scripts/repair-migrated-chat-ids.test.mjs",
     "verify:gate43": "npm run verify:room-board-pin && npm run verify:migrated-chat-ids",
@@ -112,7 +112,10 @@
     "verify:gate46": "npm run verify:execution-heartbeat",
     "verify:artifact-publisher": "npm run build && node --test dist/apps/local-gateway/test/artifact-publisher.test.js",
     "verify:room-archive": "node --test scripts/archive-room-conversations.test.mjs",
-    "archive:rooms": "node --env-file=.env.operation.local scripts/archive-room-conversations.mjs"
+    "archive:rooms": "node --env-file=.env.operation.local scripts/archive-room-conversations.mjs",
+    "verify:archive-prune": "node --test scripts/prune-archived-rows.test.mjs",
+    "distill:rooms": "node --env-file=.env.operation.local scripts/distill-room-memory.mjs",
+    "prune:archived": "node --env-file=.env.operation.local scripts/prune-archived-rows.mjs"
   },
   "workspaces": [
     "apps/*",
