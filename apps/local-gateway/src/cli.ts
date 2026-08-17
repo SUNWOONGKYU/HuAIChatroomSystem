@@ -24,6 +24,9 @@ await runLocalGatewayLoop(runtime.config, {
   runner: runtime.runner,
   sink: runtime.sink,
   artifacts: runtime.artifacts,
+  // 이 한 줄이 빠져 있어서 웹 산출물 배포가 통째로 꺼져 있었다 — 런타임이 환경변수를
+  // 읽어놓고도 루프까지 전달되지 않아, 게임을 만들어도 공개 주소가 안 붙었다.
+  artifactVercelProject: runtime.artifactVercelProject,
   setTimeout,
   shouldContinue: () => running,
   now: () => new Date(),

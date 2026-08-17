@@ -4,6 +4,7 @@ import { FakeBotServiceStore } from "../../bot-service/src/fake-store.js";
 import { runLocalGatewayConsumerOnce, type LocalGatewayOutboxStore } from "../src/consumer.js";
 import { TelegramUpdateEnvelope, type GatewayEvent, type ExecutionRequest, type OutboxRecord } from "../../../packages/contracts/src/index.js";
 import { resolveAdapterPlan, type CommandPlan } from "../../../packages/ai-adapters/src/index.js";
+import { buildLocalGatewayRuntimeFromEnv } from "../src/runtime.js";
 import { handleTelegramInput } from "../../../packages/orchestrator/src/index.js";
 
 test("executes allowed codex request and marks local gateway outbox sent", async () => {
@@ -598,4 +599,32 @@ test("antigravity 실행은 프롬프트를 --print 값으로 넘기고 권한 �
   // agy 기본 대기는 5분이라, 더 긴 실행은 CLI 가 먼저 끊는다.
   assert.equal(args.includes("--print-timeout"), true);
   assert.equal(args[args.indexOf("--print-timeout") + 1], "900s");
+});
+
+// 라이브 결함 — 벽돌깨기 게임이 만들어졌는데 공개 주소가 안 붙었다. 런타임은
+// LOCAL_GATEWAY_ARTIFACT_VERCEL_PROJECT 를 읽었지만 cli.ts 가 그 값을 루프에 넘기지 않아
+// 배포 단계가 통째로 꺼져 있었다. 설정은 있는데 기능은 없는 상태였고, 로그도 조용했다.
+test("게이트웨이 런타임이 배포 대상 프로젝트를 함께 내놓는다", () => {
+  const runtime = buildLocalGatewayRuntimeFromEnv({
+    SUPABASE_URL: "https://example.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY: "k",
+    LOCAL_GATEWAY_ID: "11111111-1111-4111-8111-111111111111",
+    LOCAL_GATEWAY_ALLOWED_ROOTS: process.cwd(),
+    LOCAL_GATEWAY_ALLOWED_ADAPTERS: "claude_code",
+    LOCAL_GATEWAY_ARTIFACT_VERCEL_PROJECT: "huai-artifacts"
+  } as NodeJS.ProcessEnv);
+
+  assert.equal(runtime.artifactVercelProject, "huai-artifacts");
+});
+
+test("설정이 없으면 배포하지 않는다", () => {
+  const runtime = buildLocalGatewayRuntimeFromEnv({
+    SUPABASE_URL: "https://example.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY: "k",
+    LOCAL_GATEWAY_ID: "11111111-1111-4111-8111-111111111111",
+    LOCAL_GATEWAY_ALLOWED_ROOTS: process.cwd(),
+    LOCAL_GATEWAY_ALLOWED_ADAPTERS: "claude_code"
+  } as NodeJS.ProcessEnv);
+
+  assert.equal(runtime.artifactVercelProject, undefined);
 });

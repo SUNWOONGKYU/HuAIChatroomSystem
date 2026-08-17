@@ -229,9 +229,30 @@ export function classifyAgentFailure(result: ProcessRunResult, adapterType: stri
   return adapterType === "claude_code" ? classifyFailureText(result.stdout, { allowUsageLimit }) : undefined;
 }
 
+// CLI 가 낸 한도 통보인가, 아니면 결과물 안에 그 단어가 들어간 것뿐인가.
+//
+// 라이브 사고: 방장이 "코덱스 한도 초과면 클로드에게 시켜야 하지 않나"라고 물은 것이 작업이
+// 됐고, ClaudeBot 이 한도 처리 코드를 점검한 보고서를 냈다. 그 보고서 본문에 usage limit /
+// limit reached 가 들어 있었고, 우리는 그걸 "Claude 가 한도에 걸렸다"로 읽었다. 성공한 실행이
+// 실패로 뒤집혀 Codex 로 넘어갔고, Codex 는 진짜 한도라 거기서 작업이 끝났다.
+//
+// 진짜 통보는 짧고, 초기화 시각을 함께 말한다. 긴 산출물 한가운데의 같은 단어와는 그 점이
+// 다르다. 판정을 놓치는 쪽(폴백 안 됨)이 성공을 실패로 뒤집는 쪽보다 낫다 — 전자는 방장이
+// 다시 시키면 되고, 후자는 이미 한 일을 버린다.
+export function looksLikeUsageLimitNotice(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const mentionsLimit = /hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|limit reached/i.test(trimmed);
+  if (!mentionsLimit) return false;
+  // 초기화 시각을 말하면 통보로 본다. 길이와 무관하다.
+  if (/resets?\s+(?:at\s+)?|try again (?:at|after)|다시 시도/i.test(trimmed)) return true;
+  // 그 외에는 짧을 때만. 보고서 본문은 이 길이를 넘는다.
+  return trimmed.length <= 400;
+}
+
 function classifyFailureText(text: string, options: { allowUsageLimit: boolean }): string | undefined {
   if (!text) return undefined;
-  if (options.allowUsageLimit && /hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(text)) return "agent-usage-limit";
+  if (options.allowUsageLimit && looksLikeUsageLimitNotice(text)) return "agent-usage-limit";
   if (/read-only sandbox|workspace is read-only|writing is blocked|patch rejected/i.test(text)) return "agent-write-blocked";
   if (/rejected by user approval settings/i.test(text)) return "agent-approval-blocked";
   if (/Unable to write|could not be created|could not be modified/i.test(text)) return "agent-reported-write-failure";
