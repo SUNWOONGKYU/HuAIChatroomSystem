@@ -837,8 +837,27 @@ export class SupabaseOutboxStore {
     await this.advanceTaskStatus(taskId, "verification_failed_or_changes_requested", { isVerifier: true, actorRole: "auditor" });
 
     // 담당팀 봇으로 보완 요청을 보낸다. 검증자 봇이 아니라 작업자 봇이 받아야 한다.
-    const assigneeBotRole = input.request.adapterType === "claude_code" ? "claude_leader" : "codex_leader";
+    //
+    // 어느 엔진이 그 작업을 했는지는 workerAdapterType 에 적혀 있다(감사 요청에 각인된다).
+    // 그게 없을 때만 이 요청의 엔진으로 되돌아간다. 예전에는 "claude_code 가 아니면 코덱스"
+    // 였는데, Antigravity 가 감사한 건을 CodexBot 이 보완 요청하는 화면이 나왔다 —
+    // 방장이 "코덱스가 작업한 걸로 나온다"고 지적한 그 자리다.
+    const assigneeBotRole = reportBotRoleForAdapter(input.request.workerAdapterType ?? input.request.adapterType);
     const idempotencyKey = "telegram-revision-request:" + input.request.attemptId;
+    const revisionBody = renderRevisionRequestText(taskId, requiredFixes, reverifyScope);
+
+    // 보완 요청도 길면 잘라 보낸다. 이 경로가 미리보기를 안 거쳐서, 감사 보고는 301자로
+    // 나가는데 바로 다음 메시지가 1,435자로 나가는 화면이 됐다.
+    //
+    // 전문은 같은 attempt 의 감사 보고 행을 그대로 쓴다(같은 판정에서 나온 글이다).
+    // saveTaskReport 가 중복을 409 로 받아 이미 있는 행을 돌려준다.
+    const revisionReport = await this.saveTaskReport(
+      { ...input.request, reportBotRole: "auditor" },
+      assigneeBotRole,
+      revisionBody
+    );
+    const revisionPreview = buildRoomMessageWithPreview(revisionBody, roomMessagePreviewLimit());
+
     await this.insertOutboxIdempotently({
       event_id: event.event_id,
       idempotency_key: idempotencyKey,
@@ -848,7 +867,10 @@ export class SupabaseOutboxStore {
         botRole: assigneeBotRole,
         messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId,
-        text: renderRevisionRequestText(taskId, requiredFixes, reverifyScope),
+        text: revisionPreview.text,
+        keyboard: revisionPreview.truncated && revisionReport
+          ? buildReportOpenKeyboard(revisionReport.report_id, this.miniAppDirectLinkBaseUrl)
+          : undefined,
         binding: { kind: "task", taskId },
         idempotencyKey
       },

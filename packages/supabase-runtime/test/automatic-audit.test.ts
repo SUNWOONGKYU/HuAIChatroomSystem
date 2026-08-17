@@ -358,3 +358,13 @@ test("반복 지적이 없으면 그 자리를 만들지 않는다", () => {
 
   assert.equal(prompt.includes("되풀이된 지적"), false);
 });
+
+// 라이브 결함 회귀 — Antigravity 가 감사한 건인데 보완 요청이 CodexBot 이름으로 나갔다.
+// 그 자리는 "claude_code 가 아니면 코덱스"로 봇을 골랐고, 세 번째 엔진은 고려에 없었다.
+test("보완 요청은 실제로 작업한 엔진의 봇이 받는다", () => {
+  // 감사 요청에는 작업자 엔진이 각인돼 있다(workerAdapterType).
+  assert.equal(reportBotRoleForAdapter("claude_code"), "claude_leader");
+  assert.equal(reportBotRoleForAdapter("codex"), "codex_leader");
+  // Antigravity 가 감사했다고 해서 CodexBot 이 보완 요청을 받을 이유는 없다.
+  assert.equal(reportBotRoleForAdapter("antigravity"), "claude_leader");
+});
