@@ -277,6 +277,10 @@ export class SupabaseOutboxStore {
 
     const blockedActor = engineActorName(request.adapterType);
     const takingOver = engineActorName(fallbackAdapter);
+    // 현황판의 "담당"도 실제로 일한 엔진으로 바꾼다. 방에 나가는 문구만 고치면 방장이
+    // 나중에 현황판을 열었을 때 다시 CodexBot 이 한 것으로 보인다 — 같은 거짓말이 두 자리에
+    // 있었던 셈이다(감사는 AuditorBot 이 맡으므로 담당을 건드리지 않는다).
+    if (!isAudit) await this.reassignTaskToEngine(request, fallbackAdapter);
     await this.insertOutboxIdempotently({
       event_id: sourceEventId,
       idempotency_key: "telegram-engine-fallback:" + attemptId,
@@ -300,6 +304,29 @@ export class SupabaseOutboxStore {
       },
       room_id: request.roomId
     });
+  }
+
+  // 넘겨받은 엔진을 작업의 담당으로 기록한다.
+  private async reassignTaskToEngine(request: ExecutionRequest, adapterType: AiAdapterType): Promise<void> {
+    if (!isUuid(request.taskId)) return;
+    const role = reportBotRoleForAdapter(adapterType);
+    const actors = await this.client
+      .request(
+        "GET",
+        "/huai_ai_actors?room_id=eq." + encodeURIComponent(request.roomId) +
+          "&role=eq." + encodeURIComponent(role) +
+          "&status=eq.active&select=actor_id&limit=1"
+      )
+      .then((response) => response.json<Array<{ actor_id: string }>>());
+    const actorId = actors[0]?.actor_id;
+    if (!actorId) return;
+
+    await this.client
+      .request("PATCH", "/huai_tasks?task_id=eq." + encodeURIComponent(request.taskId), {
+        body: { assignee_actor_id: actorId },
+        prefer: "return=minimal"
+      })
+      .then((response) => response.expectOk());
   }
 
   private async enqueueSingleWorkerAudit(
@@ -1018,8 +1045,16 @@ export const TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024;
 // 아니라 작업 그 자체라 방에 뿌리면 잡음이 된다 — 방장이 받아볼 문서만 고른다.
 const DELIVERABLE_DOCUMENT_PATTERN = /\.(hwpx?|docx?|xlsx?|pptx?|pdf|csv|zip|png|jpe?g|mp4)$/i;
 
+// 작업자가 스스로 테스트하며 남긴 부산물. 방장에게 보낼 결과물이 아니다.
+//
+// 라이브에서 달걀 게임 작업이 끝나자 방에 올라온 파일이 egg-game-broken.png 였다 —
+// 헤드리스 브라우저로 확인하며 찍은 디버그 스크린샷이다. 결과물이라고 내밀 것이 아니다.
+const WORKING_ARTIFACT_PATTERN = /(^|[\/])(\.[^\/]+|node_modules|dist|coverage)([\/]|$)|-(broken|debug|before|after|temp|tmp)\.[a-z0-9]+$|\.(test|spec)\.[a-z0-9]+$/i;
+
 export function isDeliverableDocument(filePath: string): boolean {
-  return DELIVERABLE_DOCUMENT_PATTERN.test(filePath.split(/[?#]/)[0] ?? filePath);
+  const path = filePath.split(/[?#]/)[0] ?? filePath;
+  if (WORKING_ARTIFACT_PATTERN.test(path)) return false;
+  return DELIVERABLE_DOCUMENT_PATTERN.test(path);
 }
 
 // 이 PC 안의 실제 경로. file:// URI 로 기록된 것을 되돌린다.

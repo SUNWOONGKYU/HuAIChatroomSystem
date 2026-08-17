@@ -167,6 +167,9 @@ function makeStoreCalls() {
     const path = url.split("/rest/v1")[1] ?? url;
     if (path.includes("huai_rooms")) return json(200, [{ telegram_chat_id: "1001" }]);
     if (path.includes("huai_tasks") && method === "GET") return json(200, [{ status: "in_progress" }]);
+    // 폴백이 담당을 바꿀 때 찾는 행. 방마다 역할별 actor 가 하나씩 있다.
+    if (path.includes("huai_ai_actors")) return json(200, [{ actor_id: "11111111-1111-4111-8111-111111111111" }]);
+    if (path.includes("huai_gateway_instances")) return json(200, [{ gateway_id: "22222222-2222-4222-8222-222222222222", status: "online" }]);
     if (path.includes("huai_events") && method === "POST") {
       return json(201, [{ event_id: "event-1", room_id: "r", task_id: TASK_ID, event_type: "x", idempotency_key: "k", payload: {}, created_at: "2026-08-16T00:00:00.000Z" }]);
     }
@@ -315,4 +318,23 @@ test("작업이 넘어가면 보고하는 봇도 같이 바뀐다", () => {
   // antigravity 는 자기 봇이 없다. 방에 나가는 문구가 AntigravityBot 이라고 밝히므로
   // 발신 봇만 빌려 쓴다.
   assert.equal(reportBotRoleForAdapter("antigravity"), "claude_leader");
+});
+
+// 라이브 결함 회귀 — 폴백이 실행 엔진만 바꾸고 작업 행의 담당은 그대로 둬서, 현황판에
+// ClaudeBot 이 한 작업이 "담당: codex_leader (codex)" 로 남아 있었다. 방에 나가는 문구만
+// 고치면 나중에 현황판을 열었을 때 같은 거짓말을 다시 본다.
+test("엔진이 넘어가면 작업 담당도 그 엔진으로 바뀐다", async () => {
+  const calls = makeStoreCalls();
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "k", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: { ...readOnlyRequest(), adapterType: "codex" as const, reportBotRole: "codex_leader" as const },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "attempt-readonly", text: '{"type":"error","message":"You\'ve hit your usage limit."}' }],
+    occurredAt: "2026-08-17T00:00:00.000Z"
+  });
+
+  const reassign = calls.requests.find((r) => r.method === "PATCH" && /huai_tasks/.test(r.url) && r.body?.assignee_actor_id !== undefined);
+  assert.ok(reassign, "담당을 바꾸지 않으면 현황판이 계속 옛 엔진을 가리킨다");
 });

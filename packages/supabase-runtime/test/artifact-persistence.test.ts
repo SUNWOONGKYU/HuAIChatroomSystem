@@ -190,3 +190,20 @@ test("file:// 로 기록된 산출물에서 이 PC 경로를 되돌린다", () =
     undefined
   );
 });
+
+// 라이브 결함 — 달걀 게임 작업이 끝나자 방에 올라온 "결과물"이 egg-game-broken.png 였다.
+// 작업자가 헤드리스 브라우저로 확인하며 찍은 디버그 스크린샷이다.
+test("작업 중 부산물은 결과물로 보내지 않는다", () => {
+  assert.equal(isDeliverableDocument("supabase/miniapp-web/egg-game-broken.png"), false);
+  assert.equal(isDeliverableDocument("shot-debug.png"), false);
+  assert.equal(isDeliverableDocument("layout-before.png"), false);
+  assert.equal(isDeliverableDocument("node_modules/pkg/logo.png"), false);
+  assert.equal(isDeliverableDocument("dist/report.pdf"), false);
+  assert.equal(isDeliverableDocument(".cache/thumb.jpg"), false);
+});
+
+test("진짜 결과물은 그대로 보낸다", () => {
+  assert.equal(isDeliverableDocument("개인회생_신청서.hwpx"), true);
+  assert.equal(isDeliverableDocument("supabase/miniapp-web/게임화면.png"), true);
+  assert.equal(isDeliverableDocument("DCF_평가결과.xlsx"), true);
+});

@@ -67,6 +67,17 @@ async function restartOperationServices() {
   rmSync(BOT_PID, { force: true });
   rmSync(GATEWAY_PID, { force: true });
 
+  // 죽인 실행을 큐에 되돌린다.
+  //
+  // 게이트웨이를 멈추면 그 순간 돌던 CLI 도 같이 죽는데, 그 행은 huai_outbox 에
+  // processing + locked_until(약 31분) 로 남는다. 아무도 그걸 건드릴 수 없어서 방은
+  // "작업 중"인 채로 30분을 흘려보낸다 — 라이브에서 방장이 결과를 기다리다 그대로 멈췄다.
+  //
+  // 리스를 푸는 것은 우리가 그 실행을 죽였다는 사실을 아는 이 시점이 가장 정확하다.
+  // 새 게이트웨이가 다음 tick 에 다시 집어간다.
+  const released = await releaseLeasesForOurGateways(mergedEnv);
+  if (released > 0) console.log(`released_leases=${released}`);
+
   // 두 서비스의 출력을 파일로 남긴다.
   //
   // 예전에는 stdio: "ignore" 라 전부 버렸다. 그 대가를 라이브에서 치렀다 — 봇이
@@ -157,6 +168,67 @@ function setOperationRuntimeTimeout(env) {
   const requestedMs = positiveInteger(env.HUAI_OPERATION_RUNTIME_MS) ?? 900000;
   env.BOT_SERVICE_EXECUTION_TIMEOUT_MS = String(requestedMs);
   env.LOCAL_GATEWAY_MAX_RUNTIME_MS = String(requestedMs);
+}
+
+// 이 기계가 맡은 게이트웨이 id 들. 다른 기계의 실행까지 되돌리면 그쪽 작업을 중복 실행시킨다.
+export function gatewayIdsFromEnv(env) {
+  const ids = [];
+  if (env.LOCAL_GATEWAY_ID) ids.push(env.LOCAL_GATEWAY_ID.trim());
+  for (const instance of parseGatewayInstances(env.LOCAL_GATEWAY_EXTRA_INSTANCES)) {
+    ids.push(instance.gatewayId);
+  }
+  return [...new Set(ids.filter(Boolean))];
+}
+
+async function releaseLeasesForOurGateways(env) {
+  const url = env.SUPABASE_URL;
+  const key = env.SUPABASE_SERVICE_ROLE_KEY;
+  const gatewayIds = gatewayIdsFromEnv(env);
+  if (!url || !key || gatewayIds.length === 0) return 0;
+
+  const headers = {
+    apikey: key,
+    authorization: `Bearer ${key}`,
+    "content-type": "application/json",
+    prefer: "return=representation"
+  };
+
+  try {
+    const response = await fetch(
+      `${url.replace(/\/+$/, "")}/rest/v1/huai_outbox?target_kind=eq.local_gateway&status=eq.processing&select=huai_outbox_id,target`,
+      { headers, signal: AbortSignal.timeout(20_000) }
+    );
+    if (!response.ok) return 0;
+    const rows = await response.json();
+    const ours = rows.filter((row) => {
+      try {
+        return gatewayIds.includes(JSON.parse(row.target ?? "{}").gatewayId);
+      } catch {
+        return false;
+      }
+    });
+    if (ours.length === 0) return 0;
+
+    const quoted = ours.map((row) => `"${row.huai_outbox_id}"`).join(",");
+    const patch = await fetch(
+      `${url.replace(/\/+$/, "")}/rest/v1/huai_outbox?huai_outbox_id=in.(${encodeURIComponent(quoted)})`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          status: "pending",
+          locked_at: null,
+          locked_until: null,
+          next_attempt_at: new Date().toISOString()
+        }),
+        signal: AbortSignal.timeout(20_000)
+      }
+    );
+    return patch.ok ? ours.length : 0;
+  } catch {
+    // 리스를 못 풀어도 재기동 자체는 진행한다 — 31분 뒤 만료되면 어차피 다시 걸린다.
+    return 0;
+  }
 }
 
 function positiveInteger(value) {

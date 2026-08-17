@@ -4,7 +4,8 @@ import {
   classifyServiceProcesses,
   mergePidSources,
   parseEnvFile,
-  parseGatewayInstances
+  parseGatewayInstances,
+  gatewayIdsFromEnv
 } from "./restart-operation-services-from-live-env.mjs";
 
 // 라이브 사고 재현: PID 파일에는 41020/32880 이 적혀 있었는데 실제로 도는 건
@@ -144,4 +145,27 @@ test("빠진 항목이 있으면 띄우지 않고 멈춘다", () => {
   assert.throws(() => parseGatewayInstances("개인회생|16e2c574||C:\Users\home\Desktop\pc"), /invalid-env/);
   assert.throws(() => parseGatewayInstances("개인회생|16e2c574|8798|"), /invalid-env/);
   assert.throws(() => parseGatewayInstances("|16e2c574|8798|C:\work"), /invalid-env/);
+});
+
+// 라이브 결함 회귀 — 재기동이 실행 중인 CLI 를 죽이면 그 행이 processing + 31분 리스로
+// 남아, 방은 "작업 중"인 채 30분을 흘려보냈다. 우리가 죽였다는 사실을 아는 이 시점에
+// 리스를 풀어야 한다. 어느 행이 우리 것인지는 게이트웨이 id 로 가른다.
+test("이 기계가 맡은 게이트웨이 id 를 전부 모은다", () => {
+  const ids = gatewayIdsFromEnv({
+    LOCAL_GATEWAY_ID: "4b529428-f44e-4235-a0ba-d6e1525beef6",
+    LOCAL_GATEWAY_EXTRA_INSTANCES: "개인회생|16e2c574-3acb-45c0-a86b-0efd1f492b2d|8798|C:\pc;DCF|f0853c72-bd1f-4176-aff8-9d4dc1afe034|8800|G:\dcf"
+  });
+
+  assert.deepEqual(ids, [
+    "4b529428-f44e-4235-a0ba-d6e1525beef6",
+    "16e2c574-3acb-45c0-a86b-0efd1f492b2d",
+    "f0853c72-bd1f-4176-aff8-9d4dc1afe034"
+  ]);
+});
+
+test("다른 기계의 게이트웨이는 목록에 없다", () => {
+  // 남의 실행까지 되돌리면 그쪽에서 아직 돌고 있는 CLI 와 중복 실행된다.
+  const ids = gatewayIdsFromEnv({ LOCAL_GATEWAY_ID: "only-mine" });
+  assert.deepEqual(ids, ["only-mine"]);
+  assert.deepEqual(gatewayIdsFromEnv({}), []);
 });

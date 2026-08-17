@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
-import { SupabaseBotServiceStore } from "../src/supabase-store.js";
+import { buildApprovedTelegramTaskPromptForTest, SupabaseBotServiceStore } from "../src/supabase-store.js";
 
 const ROOM_ID = "00000000-0000-0000-0000-000000000010";
 
@@ -629,4 +629,17 @@ test("현황판 행이 이미 있어도 그 주제의 다음 메시지가 막히
   const batch = posts[posts.length - 1]?.body;
   assert.equal(Array.isArray(batch) && batch.length, 1, "본 배치에 현황판 행이 섞이면 안 된다");
   assert.equal(Array.isArray(batch) && batch[0].idempotency_key, "telegram:proposal:p_1");
+});
+
+// 라이브 사고 회귀 — 작업자가 브라우저 테스트 중 `taskkill /F /IM chrome.exe` 를 실행해
+// 방장이 열어 둔 Chrome 창 약 50개를 죽였고 저장 안 한 작업물이 날아갔다. 작업 기계는
+// 빌드 서버가 아니라 사람이 쓰는 데스크톱이다.
+test("작업 지시문이 남의 프로세스를 죽이지 말라고 못박는다", () => {
+  const prompt = buildApprovedTelegramTaskPromptForTest("README 한 줄 고쳐줘");
+
+  assert.match(prompt, /taskkill/);
+  assert.match(prompt, /Never terminate processes you did not start/);
+  // 자기가 돌고 있는 서비스를 재기동하면 그 작업 자체가 끊긴다.
+  assert.match(prompt, /Never restart or stop the operation services/);
+  assert.match(prompt, /README 한 줄 고쳐줘/);
 });

@@ -1417,6 +1417,11 @@ function proposalActorRoleFromPayload(payload: Record<string, unknown>): Executi
   return undefined;
 }
 
+// 테스트에서 지시문 내용을 직접 확인한다 — 사고를 막는 문장이 조용히 사라지면 안 된다.
+export function buildApprovedTelegramTaskPromptForTest(requestText: string): string {
+  return buildApprovedTelegramTaskPrompt(requestText);
+}
+
 function buildApprovedTelegramTaskPrompt(requestText: string): string {
   return [
     "You are CodexBot executing an approved Telegram project-room task for the HuAI Collab Chatroom System.",
@@ -1425,6 +1430,16 @@ function buildApprovedTelegramTaskPrompt(requestText: string): string {
     "For project progress or operation-status questions, inspect OPERATION_STATUS.md first if it exists, then verify live scripts or runtime state before reporting.",
     "Do not infer that Telegram/Supabase/webhook/local-gateway operation is incomplete only because older Gate documents describe setup steps.",
     "Report only verified facts. If a check cannot run, say exactly which check failed.",
+    // 라이브 사고 — 작업자가 브라우저 테스트를 하며 `taskkill /F /IM chrome.exe` 를 실행해
+    // 방장이 열어 둔 Chrome 창 약 50개를 통째로 죽였다. 저장 안 한 작업물이 날아갔다.
+    // 작업 폴더 안에서 무엇을 하든 그건 우리 일이지만, 사람이 쓰던 프로그램을 끄는 것은
+    // 작업 범위가 아니다.
+    "Never terminate processes you did not start. Do not run taskkill, Stop-Process, pkill, or",
+    "kill against browsers, editors, or any application the human may be using — the work machine",
+    "is a person's desktop, not a build agent. If a test needs a browser, launch your own instance",
+    "with a separate user-data-dir and close only that instance.",
+    "Never restart or stop the operation services (bot-service, local-gateway) — you are running",
+    "inside them; killing them ends the task that is asking you to work.",
     "",
     "USER_REQUEST:",
     requestText
