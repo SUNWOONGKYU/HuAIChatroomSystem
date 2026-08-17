@@ -307,7 +307,11 @@ export class SupabaseOutboxStore {
     const gatewayId = await this.fetchActiveGatewayId(request.roomId);
     if (!gatewayId) return;
 
-    const fallbackAdapter = nextEngineAfter(request.adapterType, request.workerAdapterType);
+    // 이미 시도한 엔진을 빼고 고른다. 두 번째로 넘길 때 첫 번째로 막힌 엔진을 다시 고르면
+    // 같은 실패를 반복한다.
+    const tried = [...(request.triedAdapterTypes ?? []), request.adapterType];
+    const fallbackAdapter = nextEngineAfterTried(tried, request.workerAdapterType);
+    if (!fallbackAdapter) return;
     const attemptId = request.attemptId + FALLBACK_ATTEMPT_SUFFIX;
     const isAudit = request.reportBotRole === "auditor";
 
@@ -325,6 +329,7 @@ export class SupabaseOutboxStore {
           // 보고한다 — 라이브에서 방장이 "엉터리"라고 지적한 그 화면이다. 감사 보고는
           // 엔진과 무관하게 AuditorBot 이 내므로 그대로 둔다.
           reportBotRole: isAudit ? request.reportBotRole : reportBotRoleForAdapter(fallbackAdapter),
+          triedAdapterTypes: tried,
           idempotencyKey: "engine-fallback:" + attemptId
         },
         telegramChatId
@@ -1420,6 +1425,29 @@ const BOOKKEEPING_ARTIFACT_PATTERN = /(^|[\\/])sessions([\\/]|$)/i;
 // 두 엔진이 다 막힌 상태에서 계속 넘기면 방만 시끄럽고 아무것도 안 된다.
 export const FALLBACK_ATTEMPT_SUFFIX = "-fallback";
 
+// 엔진이 셋이므로 넘기기는 최대 두 번이다. 그래야 세 엔진이 모두 한 번씩 기회를 갖는다.
+//
+// 예전에는 한 번뿐이었다. 오늘 Claude 가 막히고 Codex 도 막히자 Antigravity 가 멀쩡한데도
+// 작업이 거기서 끝났다 — 남은 엔진이 있는데 멈추는 것은 폴백을 붙인 이유를 스스로 지운다.
+// 상한이 있어야 하는 이유는 그대로다: 전부 막힌 상태에서 계속 넘기면 방만 시끄럽고
+// 아무것도 안 된다.
+export const MAX_FALLBACK_HOPS = 2;
+
+export function fallbackHopCount(attemptId: string): number {
+  return attemptId.split(FALLBACK_ATTEMPT_SUFFIX).length - 1;
+}
+
+// 이미 시도한 엔진을 빼고 다음을 고른다. 두 번째 넘길 때 첫 번째로 막힌 엔진을 다시
+// 고르면 같은 실패를 반복한다.
+export function nextEngineAfterTried(
+  tried: readonly AiAdapterType[],
+  workerAdapterType?: AiAdapterType
+): AiAdapterType | undefined {
+  const remaining = AI_ADAPTER_TYPES.filter((engine) => !tried.includes(engine));
+  const independent = remaining.filter((engine) => engine !== workerAdapterType);
+  return independent[0] ?? remaining[0];
+}
+
 // 막힌 엔진 다음으로 넘길 엔진을 고른다.
 //
 // 엔진이 셋(claude_code · codex · antigravity)이므로, 감사가 막혔을 때도 작업자와 다른
@@ -1456,7 +1484,7 @@ export function shouldFallbackToOtherEngine(
   errorKind: string | undefined,
   resultSummary: string
 ): boolean {
-  if (request.attemptId.endsWith(FALLBACK_ATTEMPT_SUFFIX)) return false;
+  if (fallbackHopCount(request.attemptId) >= MAX_FALLBACK_HOPS) return false;
   // 소대장 판단은 방장 지시를 해석하는 단계라 엔진을 바꾸면 결과가 달라진다.
   // 여기서 넘기지 않고 실패를 그대로 보고해, 방장이 다시 말하게 한다.
   if (isLeaderPlanningAttempt(request.attemptId)) return false;

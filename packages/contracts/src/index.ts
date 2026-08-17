@@ -354,6 +354,8 @@ export type ExecutionRequest = {
   // 방장이 말을 건 포럼 주제. 실행 보고·감사 결과가 몇 분 뒤에 나가도 같은 주제로
   // 돌아가야 하므로, 방 정보가 아니라 이 요청을 따라다닌다.
   telegramMessageThreadId?: string;
+  // 이 작업에 이미 써 본 엔진들. 넘길 때마다 쌓여, 같은 엔진을 두 번 고르지 않게 한다.
+  triedAdapterTypes?: AiAdapterType[];
   // 이 요청이 감사할 작업을 실제로 한 엔진. 감사 요청에만 채운다.
   //
   // 감사가 사용 한도에 걸려 다른 엔진으로 넘길 때, 하필 작업자 엔진으로 넘기면
