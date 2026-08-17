@@ -88,6 +88,23 @@ export async function buildMiniAppWeb({ sourceDir, outDir, env = {} }) {
     "utf8"
   );
 
+  // 배포 대상 프로젝트를 산출물 안에 박아 둔다.
+  //
+  // 이 스크립트는 outDir 을 통째로 지우고 다시 만든다. vercel 은 폴더 안의 .vercel/ 로
+  // 대상을 기억하므로 그것까지 지워지면, 다음 배포가 폴더 이름(miniapp)으로 새 프로젝트를
+  // 만든다 — 라이브에서 두 번 그렇게 엉뚱한 곳에 올라갔고 현황판은 옛 내용 그대로였다.
+  // 사람이 매번 --name 을 기억해 붙이는 방식은 언젠가 빠뜨린다.
+  const projectId = String(env.VERCEL_BOARD_PROJECT_ID ?? "").trim();
+  const orgId = String(env.VERCEL_BOARD_ORG_ID ?? "").trim();
+  if (projectId && orgId) {
+    await mkdir(path.join(outDir, ".vercel"), { recursive: true });
+    await writeFile(
+      path.join(outDir, ".vercel", "project.json"),
+      JSON.stringify({ projectId, orgId }, null, 2) + "\n",
+      "utf8"
+    );
+  }
+
   return { functionsBaseUrl, files: (await readdir(outDir)).sort() };
 }
 

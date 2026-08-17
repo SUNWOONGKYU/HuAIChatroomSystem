@@ -254,6 +254,30 @@ create table if not exists huai_revision_requests (
   constraint huai_revision_requests_status_check check (status in ('open', 'submitted', 'verified', 'closed', 'cancelled'))
 );
 
+create table if not exists huai_task_reports (
+  report_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  task_id uuid references huai_tasks(task_id) on delete cascade,
+  attempt_id text not null,
+  -- execution = 작업자가 낸 실행 결과, audit = 검증자가 낸 감사 보고.
+  kind text not null,
+  -- 방에 보낸 것과 같은 문장. 자르지 않은 원문이다.
+  body text not null,
+  -- 방에 실제로 나간 봇. 누가 말했는지가 화면과 어긋나면 안 된다.
+  bot_role text not null,
+  telegram_message_thread_id text,
+  created_at timestamptz not null default now(),
+  constraint huai_task_reports_kind_check check (kind in ('execution', 'audit')),
+  -- 같은 실행이 두 번 기록되지 않게. 리스 만료로 같은 attempt 가 중복 실행될 수 있다.
+  unique (attempt_id, kind)
+);
+
+create index if not exists huai_task_reports_task_idx
+  on huai_task_reports (task_id, created_at desc);
+
+create index if not exists huai_task_reports_room_idx
+  on huai_task_reports (room_id, created_at desc);
+
 create table if not exists huai_artifacts (
   artifact_id uuid primary key default gen_random_uuid(),
   task_id uuid not null references huai_tasks(task_id) on delete cascade,

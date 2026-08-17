@@ -46,6 +46,19 @@ export type TasksHandlerDeps = {
   // 작업이 실제로 무엇을 만들어냈는지. 이게 없으면 현황판은 "완료"라고만 말하고,
   // 방장은 결과물을 보려고 방 대화를 거슬러 올라가야 한다.
   fetchArtifactsForTasks(taskIds: readonly string[]): Promise<{ error?: string; data?: ArtifactRow[] }>;
+  // 방에는 앞부분만 보내고 전문은 여기서 읽는다. 30일 정리 대상이 아니라 계속 남는다.
+  fetchReport(reportId: string): Promise<{ error?: string; data?: ReportRow }>;
+  fetchReportsForTasks(taskIds: readonly string[]): Promise<{ error?: string; data?: ReportRow[] }>;
+};
+
+export type ReportRow = {
+  report_id: string;
+  room_id: string;
+  task_id: string | null;
+  kind: string;
+  body: string;
+  bot_role: string;
+  created_at: string;
 };
 
 export type ArtifactRow = {
@@ -83,6 +96,13 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
   if (!auth.ok) return jsonResponse(auth.status, { error: auth.message });
 
   const url = new URL(req.url);
+
+  // "전문 보기" 버튼은 보고 id 하나만 들고 온다. 방 id 는 그 행에서 되찾아 멤버인지 본다 —
+  // 딥링크에 방 id 까지 실으면 64자 한도를 넘고, 어차피 권한은 서버가 확인해야 한다.
+  // 페이지가 r_ 접두어를 떼고 보내지만, 옛 페이지가 붙인 채로 보낼 수 있어 여기서도 받는다.
+  const reportId = (url.searchParams.get("reportId") ?? "").replace(/^r_/, "");
+  if (reportId) return await handleReportRequest(reportId, auth.telegramUserId, deps);
+
   const rawRoomId = url.searchParams.get("roomId");
   if (!rawRoomId) return jsonResponse(400, { error: "missing-room-id" });
 
@@ -103,6 +123,15 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
   }
 
   const taskIds = (tasksResult.data ?? []).map((task) => task.task_id);
+  const reportsResult = taskIds.length > 0 ? await deps.fetchReportsForTasks(taskIds) : { data: [] };
+  if (reportsResult.error) console.error(`miniapp-tasks: reports query failed: ${reportsResult.error}`);
+  const reportsByTask = new Map<string, ReportRow[]>();
+  for (const report of reportsResult.data ?? []) {
+    if (!report.task_id) continue;
+    const bucket = reportsByTask.get(report.task_id);
+    if (bucket) bucket.push(report);
+    else reportsByTask.set(report.task_id, [report]);
+  }
   const artifactsResult = taskIds.length > 0 ? await deps.fetchArtifactsForTasks(taskIds) : { data: [] };
   if (artifactsResult.error) {
     // 산출물 조회가 실패해도 작업 목록은 보여준다. 목록까지 못 보는 것이 더 나쁘다.
@@ -132,6 +161,12 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
       scope: task.scope,
       completionCriteria: task.completion_criteria,
       assignee: task.assignee ?? null,
+      // 전문은 목록 응답에 싣지 않는다 — 작업 30건이면 그것만 수십 KB 다. 열 때 따로 받는다.
+      reports: (reportsByTask.get(task.task_id) ?? []).map((report) => ({
+        reportId: report.report_id,
+        kind: report.kind,
+        createdAt: report.created_at
+      })),
       artifacts: (artifactsByTask.get(task.task_id) ?? []).map((artifact) => ({
         artifactId: artifact.artifact_id,
         name: artifactDisplayName(artifact.uri),
@@ -152,6 +187,36 @@ export async function handleMiniappTasksRequest(req: Request, deps: TasksHandler
   });
 }
 
+async function handleReportRequest(
+  reportId: string,
+  telegramUserId: string,
+  deps: TasksHandlerDeps
+): Promise<Response> {
+  const result = await deps.fetchReport(reportId);
+  if (result.error) {
+    console.error(`miniapp-tasks: report query failed: ${result.error}`);
+    return jsonResponse(500, { error: "lookup-failed" });
+  }
+  // 없는 보고와 남의 방 보고를 같은 응답으로 돌려준다 — 어느 쪽인지 알려주면 방 존재
+  // 여부를 떠볼 수 있다.
+  if (!result.data) return jsonResponse(404, { error: "not-found" });
+
+  const access = await deps.checkRoomAccess(result.data.room_id, telegramUserId);
+  if (!access.ok) return jsonResponse(access.status, { error: access.message });
+
+  return jsonResponse(200, {
+    report: {
+      reportId: result.data.report_id,
+      taskId: result.data.task_id,
+      kind: result.data.kind,
+      body: result.data.body,
+      botRole: result.data.bot_role,
+      createdAt: result.data.created_at
+    },
+    room: access.room
+  });
+}
+
 // authenticate/checkRoomAccess 를 뺀 나머지 — 실제 Supabase 쿼리 조립 부분만 담은 타입.
 // index.ts 의 buildDeps() 는 이 결과에 authenticate/checkRoomAccess 를 얹어 TasksHandlerDeps
 // 전체를 완성한다(그쪽은 _shared/miniapp-auth.ts, _shared/membership.ts 를 그대로 쓴다 — 둘 다
@@ -160,6 +225,25 @@ export type TasksQueryDeps = Pick<TasksHandlerDeps, "fetchTasksForRoom" | "fetch
 
 export function buildDepsFromClient(supabase: MinimalSupabaseClient): TasksQueryDeps {
   return {
+    async fetchReport(reportId: string) {
+      const { data, error } = await supabase
+        .from("huai_task_reports")
+        .select("report_id, room_id, task_id, kind, body, bot_role, created_at")
+        .eq("report_id", reportId)
+        .limit(1);
+      if (error) return { error: error.message };
+      return { data: ((data ?? []) as ReportRow[])[0] };
+    },
+    async fetchReportsForTasks(taskIds: readonly string[]) {
+      const { data, error } = await supabase
+        .from("huai_task_reports")
+        .select("report_id, room_id, task_id, kind, body, bot_role, created_at")
+        .in("task_id", [...taskIds])
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) return { error: error.message };
+      return { data: (data ?? []) as ReportRow[] };
+    },
     async fetchArtifactsForTasks(taskIds: readonly string[]) {
       const { data, error } = await supabase
         .from("huai_artifacts")

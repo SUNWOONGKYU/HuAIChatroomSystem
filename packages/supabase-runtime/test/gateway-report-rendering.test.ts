@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, renderGatewayReportText } from "../src/index.js";
+import { buildReportOpenKeyboard, buildRoomMessageWithPreview, previewRoomMessage, SupabaseOutboxStore, renderGatewayReportText } from "../src/index.js";
 import { type ExecutionRequest, type GatewayEvent } from "../../contracts/src/index.js";
 
 test("gateway report hides internal json and hook output from Telegram text", () => {
@@ -802,4 +802,53 @@ test("감사 성공도 작업 완료로 읽히지 않는다", () => {
   });
 
   assert.equal(text.startsWith("감사 실행 완료"), true);
+});
+
+// 방장 요청 — 감사 보고 하나가 화면 여러 장을 채워 방의 다른 대화가 밀려났다.
+// 방에는 앞부분만, 나머지는 현황판에서 읽는다.
+test("긴 보고는 앞부분만 방에 나가고 전문 길이를 밝힌다", () => {
+  const body = ["판정: 통과", "근거:", "가".repeat(1200)].join("\n");
+  const result = buildRoomMessageWithPreview(body, 300);
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.text.length < 400, true, `방에 나갈 길이가 너무 길다: ${result.text.length}`);
+  assert.match(result.text, /^판정: 통과/, "앞부분은 그대로여야 한다");
+  assert.match(result.text, /…\(전문 1,2\d\d자\)/, "얼마를 못 보고 있는지 알려야 버튼을 누를 이유가 생긴다");
+});
+
+test("짧은 보고는 그대로 나간다", () => {
+  const body = "작업 실행 완료\n결과: 한 줄 고침";
+  const result = buildRoomMessageWithPreview(body, 300);
+
+  assert.equal(result.truncated, false);
+  assert.equal(result.text, body);
+});
+
+test("자를 수 있는 줄 경계가 있으면 거기서 자른다", () => {
+  // 표나 코드블록 한가운데서 끊기면 방에 깨진 문서가 남는다. 다만 한 줄이 통째로 길면
+  // 경계가 없어 글자 수로 자를 수밖에 없다 — 그건 막을 방법이 없다.
+  const line = "이 줄은 예순 자쯤 되는 평범한 보고 문장입니다. 표나 목록의 한 줄이라고 보면 됩니다.";
+  const body = Array.from({ length: 10 }, () => line).join("\n");
+  const result = previewRoomMessage(body, 300);
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.text.endsWith("."), true, `줄 경계에서 안 잘렸다: ${JSON.stringify(result.text.slice(-20))}`);
+  assert.equal(result.text.includes("\n"), true, "자리가 되는 만큼은 여러 줄을 보낸다");
+});
+
+test("전문 보기 버튼은 보고 id 를 딥링크로 싣는다", () => {
+  const keyboard = buildReportOpenKeyboard("11111111-1111-4111-8111-111111111111", "https://t.me/leader_chatroom_bot") as {
+    inline_keyboard: Array<Array<{ text: string; url: string }>>;
+  };
+  const url = keyboard.inline_keyboard[0]?.[0]?.url ?? "";
+
+  assert.match(url, /startapp=r_11111111-1111-4111-8111-111111111111$/);
+  // 방 id 도 UUID 라 접두어 없이는 구분되지 않는다.
+  assert.match(url, /startapp=r_/);
+  const startParam = url.split("startapp=")[1] ?? "";
+  assert.equal(startParam.length <= 64, true);
+});
+
+test("현황판 링크가 없으면 버튼 없이 앞부분만 보낸다", () => {
+  assert.equal(buildReportOpenKeyboard("11111111-1111-4111-8111-111111111111", undefined), undefined);
 });

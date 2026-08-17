@@ -9,7 +9,9 @@ export function buildLocalGatewaySupabaseOutboxStoreFromEnv(env: NodeJS.ProcessE
     serviceRoleKey: requiredEnv(env, "SUPABASE_SERVICE_ROLE_KEY"),
     // 자기 앞으로 온 일만 집는다. 이게 없으면 방마다 띄운 게이트웨이들이 같은 큐에서
     // 아무 일이나 먼저 집어 남의 방 작업을 실패시킨다.
-    gatewayId: requiredEnv(env, "LOCAL_GATEWAY_ID")
+    gatewayId: requiredEnv(env, "LOCAL_GATEWAY_ID"),
+    // "전문 보기" 버튼이 열 현황판 딥링크. 없으면 버튼 없이 앞부분만 보낸다.
+    miniAppDirectLinkBaseUrl: env.BOT_SERVICE_MINIAPP_DIRECT_LINK || undefined
   });
 }
 

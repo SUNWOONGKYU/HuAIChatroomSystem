@@ -306,6 +306,15 @@
   #proposals-section.collapsed #proposals-toggle .chevron { transform: rotate(-90deg); }
   #proposals-section.collapsed #proposals-list { display: none; }
   #proposals-list { padding: 4px 0 10px; }
+  /* 전문은 줄바꿈·들여쓰기가 뜻을 갖는다(표·코드블록). 접히지 않게 그대로 보여준다. */
+  .report-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 8px 0 0;
+    font-family: inherit;
+  }
   .artifact-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .artifact-list li { font-size: 13px; line-height: 1.4; word-break: break-all; }
   .artifact-list a { color: var(--accent); text-decoration: none; }
@@ -490,7 +499,12 @@
     if (index < 0) return { roomId: value, messageThreadId: "" };
     return { roomId: value.slice(0, index), messageThreadId: value.slice(index + 3) };
   }
-  var startParam = parseStartParam(resolveRoomId(qs, tg));
+  var rawStartParam = resolveRoomId(qs, tg);
+
+  // "전문 보기" 버튼은 r_<reportId> 로 온다. 방 id 와 둘 다 UUID 라 접두어로만 구분된다.
+  var reportRequestId = /^r_/.test(rawStartParam) ? rawStartParam.slice(2) : (qs.get("reportId") || "");
+
+  var startParam = parseStartParam(rawStartParam);
   var roomId = startParam.roomId;
   var messageThreadId = qs.get("threadId") || startParam.messageThreadId;
   var threadQuery = messageThreadId ? "&threadId=" + encodeURIComponent(messageThreadId) : "";
@@ -514,6 +528,38 @@
     if (p.button_color) root.setProperty("--accent", "#" + normalizeHex(p.button_color));
   }
   function normalizeHex(v) { return String(v).replace(/^#/, ""); }
+
+  // 전문 화면. 방에서 잘려 나간 보고를 통째로 보여준다.
+  function renderFullReport(reportId) {
+    stateEl.textContent = "불러오는 중…";
+    apiFetch("/miniapp-tasks?reportId=" + encodeURIComponent(reportId), { method: "GET" })
+      .then(function (res) {
+        var report = res && res.report;
+        if (!report) throw new Error("empty");
+        document.title = "보고 전문";
+        stateEl.textContent = "";
+        boardEl.innerHTML = "";
+
+        var wrap = document.createElement("div");
+        wrap.className = "task-card";
+        var title = document.createElement("p");
+        title.className = "title";
+        title.textContent = report.kind === "audit" ? "감사 보고 전문" : "실행 결과 전문";
+        var meta = document.createElement("div");
+        meta.className = "meta";
+        meta.appendChild(pill(new Date(report.createdAt).toLocaleString("ko-KR")));
+        var body = document.createElement("pre");
+        body.className = "report-body";
+        body.textContent = report.body;
+        wrap.appendChild(title);
+        wrap.appendChild(meta);
+        wrap.appendChild(body);
+        boardEl.appendChild(wrap);
+      })
+      .catch(function () {
+        stateEl.textContent = "전문을 불러오지 못했습니다. 다시 시도해 주세요.";
+      });
+  }
 
   var BUCKET_ORDER = [
     { id: "needs_decision", label: "승인 필요" },
@@ -1004,7 +1050,11 @@
     return "기록에 실패했습니다. 다시 시도해주세요.";
   }
 
-  refreshBtn.addEventListener("click", function () { loadTasks(false); loadProposals(false); });
+  refreshBtn.addEventListener("click", function () {
+    if (reportRequestId) { renderFullReport(reportRequestId); return; }
+    loadTasks(false);
+    loadProposals(false);
+  });
 
   // 실시간 대신 짧은 주기 폴링 — 인증 모델(작업 2)로 Realtime 을 쓰지 않기로 한
   // 데 따른 절충이다. Mini App 세션은 보통 짧으므로 5초 주기면 충분히 "실시간처럼" 느껴진다.
@@ -1017,9 +1067,14 @@
     else { loadTasks(true); loadProposals(true); startPolling(); }
   });
 
-  loadTasks(false);
-  loadProposals(false);
-  startPolling();
+  // 전문 보기로 들어온 경우엔 목록을 부르지 않는다 — 방장이 보러 온 것은 그 보고 하나다.
+  if (reportRequestId) {
+    renderFullReport(reportRequestId);
+  } else {
+    loadTasks(false);
+    loadProposals(false);
+    startPolling();
+  }
 })();
 </script>
 </body>

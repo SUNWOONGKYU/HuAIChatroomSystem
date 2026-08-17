@@ -24,6 +24,8 @@ export type SupabaseRuntimeConfig = {
   url: string;
   serviceRoleKey: string;
   fetchImpl?: typeof fetch;
+  // "전문 보기" 버튼이 열 현황판 딥링크의 베이스. 없으면 버튼 없이 앞부분만 보낸다.
+  miniAppDirectLinkBaseUrl?: string;
   // 이 게이트웨이 앞으로 온 일만 리스한다. 없으면 예전처럼 전부 대상 —
   // 텔레그램 발신 리스(bot-service)는 게이트웨이 개념이 없으므로 그대로 둔다.
   gatewayId?: string;
@@ -32,10 +34,51 @@ export type SupabaseRuntimeConfig = {
 export class SupabaseOutboxStore {
   private readonly client: SupabaseRestClient;
   private readonly gatewayId?: string;
+  private readonly miniAppDirectLinkBaseUrl?: string;
 
   constructor(config: SupabaseRuntimeConfig) {
     this.client = new SupabaseRestClient(config);
     this.gatewayId = config.gatewayId;
+    this.miniAppDirectLinkBaseUrl = config.miniAppDirectLinkBaseUrl;
+  }
+
+  // 보고 전문을 남긴다. 이벤트·아웃박스는 30일 뒤 지우지만 이 행은 남는다 — 안 그러면
+  // "전문 보기" 버튼이 30일 뒤 빈 화면이 된다.
+  private async saveTaskReport(
+    request: ExecutionRequest,
+    botRole: string,
+    body: string
+  ): Promise<{ report_id: string } | undefined> {
+    if (!isUuid(request.roomId)) return undefined;
+    const kind = request.reportBotRole === "auditor" ? "audit" : "execution";
+    const response = await this.client.request("POST", "/huai_task_reports", {
+      body: {
+        room_id: request.roomId,
+        task_id: isUuid(request.taskId) ? request.taskId : null,
+        attempt_id: request.attemptId,
+        kind,
+        body,
+        bot_role: botRole,
+        telegram_message_thread_id: request.telegramMessageThreadId ?? null
+      },
+      prefer: "return=representation"
+    });
+
+    // 409 = 같은 attempt 가 두 번 기록됐다(리스 만료로 중복 실행). 이미 있는 행을 쓴다.
+    if (response.status === 409) {
+      const existing = await this.client
+        .request(
+          "GET",
+          "/huai_task_reports?attempt_id=eq." + encodeURIComponent(request.attemptId) +
+            "&kind=eq." + kind + "&select=report_id&limit=1"
+        )
+        .then((found) => found.json<Array<{ report_id: string }>>());
+      return existing[0];
+    }
+
+    await response.expectOk();
+    const rows = await response.json<Array<{ report_id: string }>>();
+    return rows[0];
   }
 
   async leasePending(limit: number, leaseUntil: string): Promise<OutboxRecord[]> {
@@ -127,8 +170,15 @@ export class SupabaseOutboxStore {
 
     const botRole = input.request.reportBotRole ?? (input.request.adapterType === "codex" ? "codex_leader" : "claude_leader");
     const resultSummary = summarizeGatewayOutput(input.events) ?? "";
-    const text = renderGatewayReportText(input);
+    const fullText = renderGatewayReportText(input);
     const idempotencyKey = "telegram-report:" + input.request.attemptId + ":" + input.status;
+
+    // 긴 보고는 앞부분만 방에 보내고 전문은 현황판에서 읽는다. 전문을 먼저 저장해야
+    // 버튼이 가리킬 곳이 생긴다 — 저장 전에 버튼을 보내면 눌렀을 때 빈 화면이 된다.
+    const report = await this.saveTaskReport(input.request, botRole, fullText);
+    const preview = buildRoomMessageWithPreview(fullText, roomMessagePreviewLimit());
+    const text = preview.text;
+    const reportKeyboard = preview.truncated && report ? buildReportOpenKeyboard(report.report_id, this.miniAppDirectLinkBaseUrl) : undefined;
 
     await this.insertOutboxIdempotently({
       event_id: event.event_id,
@@ -142,6 +192,7 @@ export class SupabaseOutboxStore {
         messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId,
         text,
+        keyboard: reportKeyboard,
         binding: { kind: "event", eventId: event.event_id },
         idempotencyKey
       },
@@ -1038,6 +1089,52 @@ export function collectedArtifactsFromEvents(events: readonly GatewayEvent[]): A
 
 // 텔레그램 봇이 올릴 수 있는 최대 크기. 넘으면 API 가 거절한다.
 export const TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024;
+
+// 방에 그대로 보낼 최대 길이. 이보다 길면 앞부분만 보내고 전문은 현황판에서 읽는다.
+//
+// 텔레그램은 3900자마다 잘라 여러 통으로 보내주지만, 그러면 감사 보고 하나가 화면 여러
+// 장을 채우고 방의 다른 대화가 통째로 밀려난다. 방장이 폰에서 읽는다는 것을 전제로 잡은 값.
+export const DEFAULT_ROOM_MESSAGE_PREVIEW_CHARS = 300;
+
+// "전문 보기" 버튼. 현황판을 그 보고 화면으로 바로 연다.
+//
+// 딥링크 파라미터는 [A-Za-z0-9_-] 1-64자만 허용된다. report_id 는 표준 UUID(36자)라
+// 그대로 실어도 한도 안이고, 방 id 를 같이 실을 필요가 없다 — 현황판이 그 id 로 방을
+// 되찾아 멤버인지 확인한다.
+export function buildReportOpenKeyboard(reportId: string, directLinkBaseUrl?: string): unknown {
+  if (!directLinkBaseUrl) return undefined;
+  const separator = directLinkBaseUrl.includes("?") ? "&" : "?";
+  // r_ 접두어로 방 id 와 구분한다. 둘 다 UUID 라 값만 보고는 어느 쪽인지 알 수 없다.
+  return {
+    inline_keyboard: [[{ text: "전문 보기", url: `${directLinkBaseUrl}${separator}startapp=r_${encodeURIComponent(reportId)}` }]]
+  };
+}
+
+export function roomMessagePreviewLimit(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.HUAI_ROOM_MESSAGE_PREVIEW_CHARS);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : DEFAULT_ROOM_MESSAGE_PREVIEW_CHARS;
+}
+
+// 문장·줄 단위로 자른다. 표나 코드블록 한가운데서 끊기면 방에 깨진 문서가 남는다.
+export function previewRoomMessage(body: string, limit: number): { text: string; truncated: boolean } {
+  const trimmed = body.trim();
+  if (trimmed.length <= limit) return { text: trimmed, truncated: false };
+
+  const slice = trimmed.slice(0, limit);
+  const boundary = Math.max(slice.lastIndexOf("\n"), slice.lastIndexOf(". "), slice.lastIndexOf("다. "));
+  const cut = boundary > limit * 0.5 ? boundary : limit;
+  return { text: trimmed.slice(0, cut).trimEnd(), truncated: true };
+}
+
+// 방에 나갈 문장. 잘렸으면 전문이 얼마나 되는지 밝힌다 — 얼마를 못 보고 있는지 모르면
+// 버튼을 누를 이유도 모른다.
+export function buildRoomMessageWithPreview(body: string, limit: number): { text: string; truncated: boolean } {
+  const preview = previewRoomMessage(body, limit);
+  if (!preview.truncated) return preview;
+  return { text: `${preview.text}
+
+…(전문 ${body.trim().length.toLocaleString("ko-KR")}자)`, truncated: true };
+}
 
 // 방에 파일로 전달할 산출물인가.
 //
