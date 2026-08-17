@@ -13,9 +13,21 @@ GitHub 배포 전 아래 항목을 확인합니다.
 
 - [ ] `README.md`에서 빠른 구축 문서로 이동할 수 있다.
 - [ ] `GITHUB_QUICKSTART.md`가 최신 운영 흐름과 일치한다.
-- [ ] 관계도 SVG와 흐름도 SVG가 현재 버튼/역할/검증 흐름과 일치한다.
+- [ ] `docs/시스템_관계도.md` 와 `docs/작업_흐름도.md` 가 현재 구조·버튼·검증 흐름과 일치한다.
+- [ ] 관계도 SVG와 흐름도 SVG(있다면)가 위 두 문서와 어긋나지 않는다.
 - [ ] Facebook 소개글 또는 외부 소개문이 현재 구조와 일치한다.
 - [ ] `SYSTEM_DOCUMENTATION_SYNC.md`의 동기화 대상에 새 GitHub 문서가 포함되어 있다.
+
+## 운영 자산 (코드 밖)
+
+- [ ] Supabase 마이그레이션이 적용돼 있다(`supabase db push`).
+- [ ] Edge Function 은 `--no-verify-jwt` 로 배포돼 있다. 빼면 텔레그램 인증 헤더가 게이트웨이에
+      막혀 현황판이 통째로 "인증 실패"가 된다.
+- [ ] Edge Function 시크릿에 `TELEGRAM_PLATOON_BOT_TOKEN` 이 있다.
+- [ ] 현황판 페이지가 `huai-board` 프로젝트로 배포됐다(빌드가 `.vercel` 링크를 다시 박는다).
+- [ ] 산출물 프로젝트(`huai-artifacts`)의 배포 보호가 꺼져 있다. 켜져 있으면 방장이 결과물을
+      열 때 Vercel 로그인 화면으로 튕긴다.
+- [ ] 야간 작업(`HuAI-NightlyRoomArchive`)이 등록돼 있고, 마지막 실행 로그가 정상이다.
 
 ## 보안
 

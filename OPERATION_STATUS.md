@@ -1,6 +1,6 @@
 # HuAI Collab Chatroom Operation Status
 
-Last verified: 2026-08-13 KST
+Last verified: 2026-08-17 KST
 
 This file is the current runtime evidence anchor for Telegram operation status reports.
 Do not treat older Gate setup documents as proof that operation is still incomplete.
@@ -20,6 +20,39 @@ Do not treat older Gate setup documents as proof that operation is still incompl
 - Later live ClaudeBot executions failed because the local Claude Code session reported a usage/session limit. CodexBot still completed, and the Telegram report now shows a human-readable Claude limit message instead of a generic failure.
 - Historical dead outbox rows remain from older bugs; treat them as historical unless a new row reproduces the same issue.
 - Codex execution is currently usable. Claude executable discovery is not enough for completion; Claude Code must also have an available authenticated session.
+
+## 2026-08-17 KST — Live verification across all four rooms
+
+- Three engines are in use: Claude Code, Codex, Antigravity (`agy`). A quota-blocked engine hands
+  off to another, up to two hops, so each of the three gets one turn. Engines already tried travel
+  with the request so a second hop cannot land back on the one that just failed.
+- Audits run on an engine other than the worker's. If only the worker's engine remains, the audit
+  runs there and the room is told independence is lower than usual.
+- Forum topics are first-class: a task records the topic it started in, replies return to that
+  topic, and each topic pins its own board scoped to its own tasks.
+- Artifacts are delivered, not just recorded. Web output (.html) is deployed to Vercel and opens
+  from the board; documents (hwp/xlsx/pdf) are uploaded into the room as files. Debug screenshots,
+  test files and session logs are excluded.
+- Reports longer than 300 characters go to the room as a preview with a 전문 보기 button; the full
+  text lives in `huai_task_reports`, which the 60-day cleanup does not touch.
+- Room memory: each day's conversation is archived (Supabase Storage + local jsonl, with a manifest
+  row) and distilled into `sessions/rooms/<room>/<date>_위키.md`. Leader planning reads the last
+  five days; audits read the last week's recurring findings.
+- Nightly job at 00:10 (`HuAI-NightlyRoomArchive`) archives and distills with `--apply` and runs the
+  prune as a dry-run only. No rows have been deleted yet.
+- Verified by execution, not inspection: all four rooms (dev, 개인회생, 상증세법, DCF) wrote files to
+  their own folders; a breakout game was built, deployed and passed a headless browser run covering
+  paddle control, brick collision, score and sound.
+
+Known gaps as of this update:
+
+- Antigravity has no Telegram bot of its own; its messages are sent under ClaudeBot's account while
+  the text names AntigravityBot.
+- Antigravity has no read-only mode, so an audit running there is constrained by prompt only, unlike
+  Claude's dontAsk and Codex's read-only sandbox.
+- bot-service and local-gateway must share a machine: room memory reading and document upload both
+  use the local disk.
+- The 60-day prune has never been run with `--apply`; nothing is old enough yet.
 
 ## Latest Code Verification Update
 
