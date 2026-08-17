@@ -386,12 +386,29 @@ test("rejects duplicate outbox idempotency key with different content", async ()
         created_at: "2026-08-10T00:00:00.000Z"
       }
     ])
+    ,
+    jsonResponse(201, [])
   ]);
   const store = makeStore(calls.fetchImpl);
 
-  await assert.rejects(
-    () => store.commitTelegramInputResult(makeOutboxCommit("telegram:query:dup", target, { text: "ok" })),
-    /outbox-idempotency-conflict/
+  // 계약이 바뀌었다: 같은 키에 다른 내용이 와도 방 메시지는 예외로 끊지 않는다.
+  // 그 행만 건너뛰고 이유를 방에 알린다 — 예전에는 여기서 예외를 던져 같은 처리에 들어 있던
+  // 다른 메시지까지 사라졌고, 방장 눈에는 버튼이 먹통으로 보였다(라이브 결함).
+  // 바뀌지 않은 것: 그 키로 다른 내용을 덮어써 보내지는 않는다.
+  await store.commitTelegramInputResult(makeOutboxCommit("telegram:query:dup", target, { text: "ok" }));
+
+  const posted = calls.requests
+    .filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url))
+    .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
+  assert.equal(
+    posted.some((row: any) => row?.idempotency_key === "telegram:query:dup" && row?.payload?.text === "ok"),
+    true,
+    "시도 자체는 한 번 한다 — 그 결과가 409 다"
+  );
+  assert.equal(
+    posted.some((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:already-decided:")),
+    true,
+    "건너뛴 이유를 방에 남겨야 한다"
   );
 });
 function makeStore(fetchImpl: typeof fetch): SupabaseBotServiceStore {
@@ -643,4 +660,41 @@ test("작업 지시문이 남의 프로세스를 죽이지 말라고 못박는�
   // 자기가 돌고 있는 서비스를 재기동하면 그 작업 자체가 끊긴다.
   assert.match(prompt, /Never restart or stop the operation services/);
   assert.match(prompt, /README 한 줄 고쳐줘/);
+});
+
+// 라이브 결함 회귀 — 이미 승인돼 실행까지 끝난 제안에서 방장이 "수정" 버튼을 눌렀다.
+// 같은 키에 다른 내용이 들어오자 배치 삽입이 통째로 예외로 끊겼고, 그 처리에 포함된 다른
+// 메시지까지 함께 사라져 방에는 아무 반응도 없었다. 버튼이 먹통인 것처럼 보였다.
+test("이미 결정된 건에 다른 결정이 와도 처리 전체가 죽지 않는다", async () => {
+  const conflicting = {
+    huai_outbox_id: "outbox-existing",
+    event_id: null,
+    idempotency_key: "telegram:decision:p_1",
+    target_kind: "telegram_bot",
+    target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }),
+    payload: { text: "승인 완료" },
+    status: "sent",
+    attempts: 1,
+    created_at: "2026-08-17T00:00:00.000Z"
+  };
+  const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
+    jsonResponse(409, { message: "duplicate key" }),
+    jsonResponse(200, [conflicting]),
+    jsonResponse(201, [])
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  await store.commitTelegramInputResult(
+    makeOutboxCommit("telegram:decision:p_1", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
+      botRole: "platoon_leader",
+      telegramChatId: "1001",
+      text: "보완 요청을 접수했습니다"
+    })
+  );
+
+  const posts = calls.requests.filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url));
+  const notice = posts.map((request) => request.body).find((body: any) => String(body?.idempotency_key ?? "").startsWith("telegram:already-decided:"));
+  assert.ok(notice, "조용히 버리면 방장은 버튼이 고장난 줄 안다");
+  assert.match(String(notice.payload.text), /이미 결정이 끝난 건/);
 });

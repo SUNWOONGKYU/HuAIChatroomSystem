@@ -74,8 +74,8 @@
 
   var BALL_RADIUS = 5;
   var PADDLE_WIDTH = 64;
-  var PADDLE_HEIGHT = 9;
-  var PADDLE_Y = HEIGHT - 20;
+  var PADDLE_HEIGHT = 34;
+  var PADDLE_Y = HEIGHT - PADDLE_HEIGHT - 2;
   var PADDLE_SPEED = 6;
 
   var BRICK_ROWS = 4;
@@ -253,12 +253,28 @@
     state.rafId = requestAnimationFrame(tick);
   }
 
-  canvas.addEventListener("mousemove", function (evt) {
+  function movePaddleToClientX(clientX) {
     var rect = canvas.getBoundingClientRect();
-    var mouseX = evt.clientX - rect.left;
-    state.paddleX = mouseX - PADDLE_WIDTH / 2;
+    var x = clientX - rect.left;
+    state.paddleX = x - PADDLE_WIDTH / 2;
     clampPaddle();
+  }
+
+  canvas.addEventListener("mousemove", function (evt) {
+    movePaddleToClientX(evt.clientX);
   });
+
+  canvas.addEventListener("touchstart", function (evt) {
+    if (evt.touches.length === 0) return;
+    movePaddleToClientX(evt.touches[0].clientX);
+    evt.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", function (evt) {
+    if (evt.touches.length === 0) return;
+    movePaddleToClientX(evt.touches[0].clientX);
+    evt.preventDefault();
+  }, { passive: false });
 
   document.addEventListener("keydown", function (evt) {
     if (evt.key === "ArrowLeft") state.keys.left = true;

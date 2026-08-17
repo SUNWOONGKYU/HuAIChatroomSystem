@@ -955,15 +955,73 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     });
     if (response.status !== 409) return response.json<OutboxRow[]>();
 
+    // 배치 안에 이미 있는 행이 하나라도 있으면 INSERT 전체가 409 로 돌아온다. 예전에는
+    // 여기서 통째로 예외를 던졌는데, 그러면 같은 배치의 새 메시지도 함께 사라진다 —
+    // 방장이 버튼을 눌러도 방에 아무 반응이 없는 상태가 그것이었다(이미 결정된 제안에
+    // 다른 결정을 눌렀을 때 처리 전체가 죽었다).
+    //
+    // 그래서 행마다 가른다: 같은 내용이면 있는 것을 쓰고, 없으면 새로 넣고, 같은 키인데
+    // 내용이 다르면 그 행만 버린다. 버릴 때는 왜 버렸는지 방에 알린다 — 조용히 사라지는
+    // 것이 이 시스템에서 가장 나쁜 실패다.
     const existing = await this.fetchOutboxRowsByIdempotencyKeys(rows.map((row) => row.idempotency_key));
     const existingByKey = new Map(existing.map((row) => [row.idempotency_key, row]));
+    const inserted: OutboxRow[] = [];
+    const conflicted: OutboxInsertRow[] = [];
+
     for (const row of rows) {
       const found = existingByKey.get(row.idempotency_key);
-      if (!found || !sameOutboxContent(row, found)) {
-        throw new Error("outbox-idempotency-conflict");
+      if (found && sameOutboxContent(row, found)) {
+        inserted.push(found);
+        continue;
       }
+      if (found) {
+        // 실행 요청은 조용히 버리면 안 된다 — 작업이 큐에 안 들어간 채 끝난다.
+        // 방에 나가는 메시지만 건너뛰고 그 사실을 알린다.
+        if (row.target_kind !== "telegram_bot") throw new Error("outbox-idempotency-conflict");
+        conflicted.push(row);
+        continue;
+      }
+      const single = await this.client.request("POST", "/huai_outbox", {
+        body: { ...row, event_id: row.event_id ?? null },
+        prefer: "return=representation"
+      });
+      // 그사이 다른 처리가 같은 키를 넣었으면 그걸 쓴다.
+      if (single.status === 409) continue;
+      await single.expectOk();
+      inserted.push(...(await single.json<OutboxRow[]>()));
     }
-    return rows.map((row) => existingByKey.get(row.idempotency_key)).filter((row): row is OutboxRow => Boolean(row));
+
+    for (const row of conflicted) {
+      console.error(`outbox-idempotency-conflict-skipped:${row.idempotency_key}`);
+      await this.notifyAlreadyDecided(row);
+    }
+
+    return inserted;
+  }
+
+  // 같은 키로 다른 결정이 들어왔다 = 이미 결정된 건에 다시 결정을 눌렀다는 뜻이다.
+  // 그 사실을 방에 알린다. 버튼이 먹통인 것과 "이미 결정됐다"는 것은 방장에게 전혀 다른 정보다.
+  private async notifyAlreadyDecided(row: OutboxInsertRow): Promise<void> {
+    const telegramChatId = outboxTargetChatId(row.target);
+    if (!telegramChatId) return;
+    const idempotencyKey = "telegram:already-decided:" + row.idempotency_key;
+    const notice = {
+      event_id: row.event_id ?? null,
+      idempotency_key: idempotencyKey,
+      target_kind: "telegram_bot" as const,
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      payload: {
+        botRole: "platoon_leader",
+        telegramChatId,
+        messageThreadId: optionalPayloadString(row.payload.messageThreadId),
+        text: ["이미 결정이 끝난 건이라 다시 처리하지 않았습니다.", "새로 지시해 주시면 새 작업으로 진행합니다."].join("\n"),
+        binding: { kind: "event", eventId: row.event_id ?? idempotencyKey },
+        idempotencyKey
+      },
+      room_id: row.room_id
+    };
+    const response = await this.client.request("POST", "/huai_outbox", { body: notice, prefer: "return=minimal" });
+    if (response.status !== 409) await response.expectOk();
   }
 
   private async fetchOutboxRowsByIdempotencyKeys(keys: string[]): Promise<OutboxRow[]> {
