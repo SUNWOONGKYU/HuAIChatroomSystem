@@ -138,3 +138,48 @@ test("따옴표가 깨진 JSON 은 통과시키지 않는다", () => {
 test("완료 조건 없는 줄 형식은 무효다", () => {
   assert.equal(parseLeaderDecision("DECISION: plan\nTITLE: 제목\nSCOPE: 범위"), undefined);
 });
+
+// 방장·Fable 5 지적 — 소대장은 최근 40턴만 본다. 그 창 밖은 아예 몰라서 "3주 전에 왜
+// 그렇게 정했지"에 답을 못 하고, 이미 끝난 작업을 새로 제안한다(라이브에서 달걀 게임).
+test("지난 기록이 있으면 프롬프트에 실린다", () => {
+  const prompt = buildLeaderPlanningPrompt({
+    turns: [{ speaker: "방장", text: "지금 뭐 하지", isOwner: true }],
+    triggeringText: "지금 뭐 하지",
+    facts: {
+      bots: ["ClaudeBot"],
+      memberCount: 2,
+      openTasks: [],
+      memory: [
+        { date: "2026-08-15", summary: "달걀깨기 게임 사운드 버전 완료. 점수 표시는 이미 붙어 있었다." },
+        { date: "2026-08-16", summary: "3단 폴백 종주 완료." }
+      ]
+    }
+  });
+
+  assert.match(prompt, /지난 기록/);
+  assert.match(prompt, /2026-08-15/);
+  assert.match(prompt, /달걀깨기 게임 사운드 버전 완료/);
+  // 끝난 일을 다시 제안하는 것이 이 기능이 막으려는 실제 실패다.
+  assert.match(prompt, /이미 끝난 일을 새 작업으로 제안하지 마라/);
+});
+
+test("지난 기록이 없으면 그 자리를 비운다", () => {
+  const prompt = buildLeaderPlanningPrompt({
+    turns: [{ speaker: "방장", text: "뭐 해줘", isOwner: true }],
+    triggeringText: "뭐 해줘",
+    facts: { bots: ["ClaudeBot"], memberCount: 2, openTasks: [] }
+  });
+
+  assert.equal(prompt.includes("지난 기록"), false, "빈 칸을 만들면 모델이 채워 넣으려 든다");
+});
+
+test("지난 기록은 최근 대화와 구분된 자리에 놓인다", () => {
+  // 섞이면 오래된 결정을 지금 지시로 착각해 엉뚱한 작업을 만든다.
+  const prompt = buildLeaderPlanningPrompt({
+    turns: [{ speaker: "방장", text: "새 지시다", isOwner: true }],
+    triggeringText: "새 지시다",
+    facts: { bots: [], memberCount: 1, openTasks: [], memory: [{ date: "2026-08-01", summary: "옛 결정" }] }
+  });
+
+  assert.equal(prompt.indexOf("지난 기록 끝") < prompt.indexOf("새 지시다"), true, "지난 기록이 최근 논의보다 앞에 와야 한다");
+});

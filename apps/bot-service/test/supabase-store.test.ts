@@ -508,6 +508,7 @@ test("room facts(소대장 판단 프롬프트)는 작업 상태를 raw 값이 �
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(200, []), // fetchLeaderActor: 없음
+    jsonResponse(200, [{ purpose: "테스트 방" }]), // fetchRoomLabel: 세션 폴더 이름을 정한다
     jsonResponse(200, [{ role: "claude_leader" }]), // fetchRoomFacts: actors
     jsonResponse(200, [{ telegram_user_id: "9001" }]), // fetchRoomFacts: members
     jsonResponse(200, [{ title: "중간 승인 대기 중인 작업", status: "mid_approval_pending" }]), // fetchRoomFacts: tasks

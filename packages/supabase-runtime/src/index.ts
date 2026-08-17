@@ -1,3 +1,5 @@
+import { readdir, readFile } from "node:fs/promises";
+import nodePath from "node:path";
 import { maskTelegramSensitiveText as maskSensitiveText, safeTelegramTraceUri } from "../../telegram-ui/src/sanitize.js";
 import {
   AI_ADAPTER_TYPES,
@@ -26,6 +28,8 @@ export type SupabaseRuntimeConfig = {
   fetchImpl?: typeof fetch;
   // "전문 보기" 버튼이 열 현황판 딥링크의 베이스. 없으면 버튼 없이 앞부분만 보낸다.
   miniAppDirectLinkBaseUrl?: string;
+  // 방 기억(위키)을 읽어올 폴더. 게이트웨이와 같은 PC 에 있다는 전제다.
+  archiveRootDir?: string;
   // 이 게이트웨이 앞으로 온 일만 리스한다. 없으면 예전처럼 전부 대상 —
   // 텔레그램 발신 리스(bot-service)는 게이트웨이 개념이 없으므로 그대로 둔다.
   gatewayId?: string;
@@ -35,11 +39,13 @@ export class SupabaseOutboxStore {
   private readonly client: SupabaseRestClient;
   private readonly gatewayId?: string;
   private readonly miniAppDirectLinkBaseUrl?: string;
+  private readonly archiveRootDir: string;
 
   constructor(config: SupabaseRuntimeConfig) {
     this.client = new SupabaseRestClient(config);
     this.gatewayId = config.gatewayId;
     this.miniAppDirectLinkBaseUrl = config.miniAppDirectLinkBaseUrl;
+    this.archiveRootDir = config.archiveRootDir ?? nodePath.join("sessions", "rooms");
   }
 
   // 보고 전문을 남긴다. 이벤트·아웃박스는 30일 뒤 지우지만 이 행은 남는다 — 안 그러면
@@ -380,6 +386,38 @@ export class SupabaseOutboxStore {
       .then((response) => response.expectOk());
   }
 
+  // 이 방에서 되풀이된 지적을 모은다. 감사자가 같은 실수를 매번 처음처럼 찾지 않게 한다.
+  //
+  // 출처는 세션 폴더의 방 기억 파일이다(DB 아님) — 요약을 DB 에 쌓지 않기로 한 결정에 따른다.
+  // 못 읽으면 빈 배열이다. 감사는 그대로 돌고, 힌트만 없어진다.
+  private async readRecurringFindings(roomId: string): Promise<string[]> {
+    try {
+      const rooms = await this.client
+        .request("GET", "/huai_rooms?room_id=eq." + encodeURIComponent(roomId) + "&select=purpose&limit=1")
+        .then((response) => response.json<Array<{ purpose?: string }>>());
+      const label = (rooms[0]?.purpose || roomId).replace(/[\/:*?"<>|]/g, "_").slice(0, 60);
+      const dir = nodePath.join(this.archiveRootDir, label);
+      const entries = (await readdir(dir).catch(() => [] as string[]))
+        .filter((name) => name.endsWith("_위키.md"))
+        .sort()
+        .slice(-AUDIT_MEMORY_DAYS);
+
+      const findings = new Set<string>();
+      for (const entry of entries) {
+        const text = await readFile(nodePath.join(dir, entry), "utf8").catch(() => "");
+        const section = text.split(/^##\s*반복 지적\s*$/m)[1];
+        if (!section) continue;
+        for (const line of section.split(/\r?\n/)) {
+          const item = line.replace(/^[-*]\s*/, "").trim();
+          if (item && item !== "없음" && !item.startsWith("#")) findings.add(item);
+        }
+      }
+      return [...findings].slice(0, AUDIT_MEMORY_MAX_ITEMS);
+    } catch {
+      return [];
+    }
+  }
+
   private async enqueueSingleWorkerAudit(
     input: { request: ExecutionRequest; events: GatewayEvent[] },
     resultSummary: string,
@@ -397,7 +435,13 @@ export class SupabaseOutboxStore {
       adapterType: nextEngineAfter(input.request.adapterType),
       // 감사가 한도에 걸려 또 넘어갈 때 작업자 엔진으로 되돌아가지 않게 남겨 둔다.
       workerAdapterType: input.request.adapterType,
-      prompt: buildSingleWorkerAuditPrompt(input.request.taskId, actor, resultSummary, realArtifactPaths(input.events)),
+      prompt: buildSingleWorkerAuditPrompt(
+        input.request.taskId,
+        actor,
+        resultSummary,
+        realArtifactPaths(input.events),
+        await this.readRecurringFindings(input.request.roomId)
+      ),
       idempotencyKey: "single-worker-audit:" + input.request.attemptId,
       reportBotRole: "auditor"
     };
@@ -1094,6 +1138,11 @@ export const TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024;
 //
 // 텔레그램은 3900자마다 잘라 여러 통으로 보내주지만, 그러면 감사 보고 하나가 화면 여러
 // 장을 채우고 방의 다른 대화가 통째로 밀려난다. 방장이 폰에서 읽는다는 것을 전제로 잡은 값.
+// 감사 프롬프트에 실을 반복 지적의 범위. 며칠치를 보고, 몇 줄까지 넣나.
+// 많이 넣으면 감사가 그 목록 확인만 하다 끝난다.
+const AUDIT_MEMORY_DAYS = 7;
+const AUDIT_MEMORY_MAX_ITEMS = 8;
+
 export const DEFAULT_ROOM_MESSAGE_PREVIEW_CHARS = 300;
 
 // "전문 보기" 버튼. 현황판을 그 보고 화면으로 바로 연다.
@@ -1424,7 +1473,23 @@ function shouldRunAutomaticAudit(request: ExecutionRequest, events: readonly Gat
   return producedRealArtifacts(events);
 }
 
-export function buildSingleWorkerAuditPrompt(taskId: string, actor: string, resultSummary: string, artifactPaths: readonly string[]): string {
+export function buildSingleWorkerAuditPrompt(
+  taskId: string,
+  actor: string,
+  resultSummary: string,
+  artifactPaths: readonly string[],
+  // 이 방에서 되풀이된 지적. 같은 실수를 매번 처음처럼 발견하지 않게 미리 알려준다.
+  // 방 기억(sessions/rooms/<방>/<날짜>_위키.md)의 "반복 지적" 절에서 온다.
+  recurringFindings: readonly string[] = []
+): string {
+  const recurringLines = recurringFindings.length > 0
+    ? [
+        "",
+        "이 방에서 되풀이된 지적 — 이번 결과에도 해당하는지 먼저 확인하라:",
+        ...recurringFindings.map((finding) => "- " + finding)
+      ]
+    : [];
+
   return [
     "HuAI Collab Chatroom System\uC758 \uC791\uC5C5 \uACB0\uACFC\uB97C \uB3C5\uB9BD \uAC10\uC0AC\uD558\uC138\uC694.",
     "\uB300\uC0C1 \uC791\uC5C5: " + taskId,
@@ -1437,7 +1502,8 @@ export function buildSingleWorkerAuditPrompt(taskId: string, actor: string, resu
     resultSummary || "(\uBCF4\uACE0 \uC5C6\uC74C)",
     "",
     "\uBCC0\uACBD\uB41C \uC0B0\uCD9C\uBB3C:",
-    ...(artifactPaths.length > 0 ? artifactPaths.map((path) => "- " + path) : ["(\uC5C6\uC74C)"])
+    ...(artifactPaths.length > 0 ? artifactPaths.map((path) => "- " + path) : ["(\uC5C6\uC74C)"]),
+    ...recurringLines
   ].join("\n");
 }
 

@@ -338,3 +338,23 @@ test("엔진이 넘어가면 작업 담당도 그 엔진으로 바뀐다", async
   const reassign = calls.requests.find((r) => r.method === "PATCH" && /huai_tasks/.test(r.url) && r.body?.assignee_actor_id !== undefined);
   assert.ok(reassign, "담당을 바꾸지 않으면 현황판이 계속 옛 엔진을 가리킨다");
 });
+
+// 방장 요청(Fable 5 제안 채택) — 같은 지적이 방마다 되풀이되는데, 감사자는 매번 처음처럼
+// 찾는다. 방 기억(sessions/rooms/<방>/<날짜>_위키.md)의 "반복 지적"을 미리 알려준다.
+test("반복 지적이 있으면 감사 프롬프트에 실린다", () => {
+  const prompt = buildSingleWorkerAuditPrompt("task-1", "ClaudeBot", "고쳤습니다", ["README.md"], [
+    "산출물 수집 여부를 확인하지 않는다",
+    "완료 조건을 인용하지 않고 통과시킨다"
+  ]);
+
+  assert.match(prompt, /되풀이된 지적/);
+  assert.match(prompt, /- 산출물 수집 여부를 확인하지 않는다/);
+  assert.match(prompt, /- 완료 조건을 인용하지 않고 통과시킨다/);
+});
+
+test("반복 지적이 없으면 그 자리를 만들지 않는다", () => {
+  // 빈 목록을 넣으면 감사자가 "지적할 것을 찾아야 한다"고 읽는다.
+  const prompt = buildSingleWorkerAuditPrompt("task-1", "ClaudeBot", "고쳤습니다", ["README.md"]);
+
+  assert.equal(prompt.includes("되풀이된 지적"), false);
+});

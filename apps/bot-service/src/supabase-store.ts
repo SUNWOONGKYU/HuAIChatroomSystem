@@ -1,3 +1,5 @@
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import { maskTelegramSensitiveText as maskSensitiveText, safeTelegramTraceUri } from "../../../packages/telegram-ui/src/sanitize.js";
 import {
   type OutboxRecord,
@@ -36,10 +38,17 @@ export type SupabaseStoreConfig = {
   // Mini App 인증(Telegram initData)이 없어 Edge Function 이 401 을 낸다 — 조용히 깨지느니
   // 시작 시점에 던진다.
   miniAppDirectLinkBaseUrl?: string;
+  // 기본값은 sessions/rooms — archive-room-conversations.mjs 의 기본 출력 위치와 같다.
+  archiveRootDir?: string;
 };
 
 // 고정 메시지 본문. 목록을 싣지 않는다 — 고정해두면 만들어진 시점의 목록이 박제되고,
 // 최신 상태는 버튼을 눌러야 보인다(scripts/pin-room-board-message.mjs 와 같은 이유).
+// 소대장 프롬프트에 넣을 방 기억의 양. 최근 며칠 / 하루치 최대 글자.
+// 너무 넣으면 최근 지시가 밀려나고, 너무 적으면 지난 결정을 못 찾는다.
+const ROOM_MEMORY_DAYS = 5;
+const ROOM_MEMORY_MAX_CHARS = 2_000;
+
 export const TOPIC_BOARD_MESSAGE_TEXT = "📋 작업 현황판 — 이 주제의 작업과 승인 대기를 한 화면에서 봅니다.";
 
 function optionalPayloadString(value: unknown): string | undefined {
@@ -62,6 +71,8 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   private readonly roomIdByChatId = new Map<string, string>();
   private readonly now: () => Date;
   private readonly miniAppDirectLinkBaseUrl: string | undefined;
+  // 방 기억(위키)을 읽어올 폴더. 아카이브 스크립트가 쓰는 자리와 같아야 한다.
+  private readonly archiveRootDir: string;
 
   constructor(config: SupabaseStoreConfig) {
     this.client = new SupabaseRestClient({
@@ -73,6 +84,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     this.miniAppDirectLinkBaseUrl = config.miniAppDirectLinkBaseUrl
       ? requireMiniAppDirectLinkBaseUrl(config.miniAppDirectLinkBaseUrl)
       : undefined;
+    this.archiveRootDir = config.archiveRootDir ?? path.join("sessions", "rooms");
   }
 
   // 한 프로세스가 여러 방을 처리하므로 room_id 는 생성자 고정값이 아니라
@@ -444,7 +456,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       const telegramChatId = typeof row.payload.telegramChatId === "string" ? row.payload.telegramChatId : undefined;
       const turns = telegramChatId ? await this.fetchRecentRoomTurns(telegramChatId, roomId) : [];
       const leader = await this.fetchLeaderActor(roomId);
-      const facts = await this.fetchRoomFacts(roomId);
+      const facts = await this.fetchRoomFacts(roomId, await this.fetchRoomLabel(roomId));
       hydrated.push({
         ...row,
         payload: {
@@ -502,7 +514,46 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // 소대장이 방에 대해 이미 알아야 하는 것.
   // 이게 없으면 "이 방에 봇이 몇 개야?" 같은 질문에도 조사 작업을 만든다 —
   // 자기가 모르니까 확인하겠다고 하는 것이고, 방장은 답을 원했는데 일이 하나 생긴다.
-  private async fetchRoomFacts(roomId: string): Promise<RoomFacts | undefined> {
+  // 방 기억을 세션 폴더에서 읽는다.
+  //
+  // 요약을 DB 에 넣지 않는 이유: 이 프로세스가 게이트웨이와 같은 작업 PC 에서 돈다.
+  // 디스크를 직접 읽을 수 있으므로 DB 를 거칠 이유가 없고, 요약까지 DB 에 쌓으면 용량만
+  // 늘어난다. 무손실 원본은 Supabase Storage 에 따로 있다.
+  //
+  // 못 읽어도 판단은 진행한다 — 기억이 얕아질 뿐이고, 그건 이 기능을 붙이기 전의 상태다.
+  private async readRoomMemory(roomId: string, roomLabel: string): Promise<RoomFacts["memory"]> {
+    try {
+      const folder = roomLabel.replace(/[\/:*?"<>|]/g, "_").slice(0, 60);
+      const dir = path.join(this.archiveRootDir, folder);
+      const entries = await readdir(dir).catch(() => [] as string[]);
+      const notes = entries.filter((name) => name.endsWith("_위키.md")).sort().slice(-ROOM_MEMORY_DAYS);
+      const memory: Array<{ date: string; summary: string }> = [];
+      for (const note of notes) {
+        const text = await readFile(path.join(dir, note), "utf8").catch(() => "");
+        if (!text.trim()) continue;
+        // frontmatter 는 사람이 파일을 열었을 때를 위한 것이다. 프롬프트에는 본문만 넣는다.
+        const body = text.replace(/^---[\s\S]*?---\n/, "").trim();
+        memory.push({ date: note.replace("_위키.md", ""), summary: body.slice(0, ROOM_MEMORY_MAX_CHARS) });
+      }
+      return memory.length > 0 ? memory : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // 세션 폴더 이름은 방 이름으로 만들어진다(archive-room-conversations.mjs 와 같은 규칙).
+  private async fetchRoomLabel(roomId: string): Promise<string | undefined> {
+    try {
+      const rows = await this.client
+        .request("GET", "/huai_rooms?room_id=eq." + encodeURIComponent(roomId) + "&select=purpose&limit=1")
+        .then((response) => response.json<Array<{ purpose?: string }>>());
+      return rows[0]?.purpose || roomId;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async fetchRoomFacts(roomId: string, roomLabel?: string): Promise<RoomFacts | undefined> {
     try {
       const [actors, members, tasks] = await Promise.all([
         this.client
@@ -519,6 +570,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       return {
         bots: actors.map((actor) => botLabelForRole(actor.role)),
         memberCount: members.length,
+        memory: roomLabel ? await this.readRoomMemory(roomId, roomLabel) : undefined,
         // TASK_STATUS_META 가 단일 출처다 — 별도 상태 라벨표를 여기 두지 않는다.
         // 이 결과는 소대장 판단 프롬프트(buildLeaderPlanningPrompt)에 순수 텍스트로만
         // 들어간다: `${title}(${status})`. 파싱하는 코드는 없다(packages/orchestrator/src/leader-planning.ts 확인).

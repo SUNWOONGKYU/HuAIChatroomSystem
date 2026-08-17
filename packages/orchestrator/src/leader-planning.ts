@@ -40,6 +40,12 @@ export type RoomFacts = {
   bots: readonly string[];
   memberCount: number;
   openTasks: readonly { title: string; status: string }[];
+  // 지난 며칠치 방 기억. 최근 40턴 밖의 일을 아는 유일한 통로다.
+  //
+  // 이게 없으면 소대장은 40턴 창 밖을 아예 모른다 — 3주 전 결정을 되물으면 답을 못 하고,
+  // 이미 끝난 작업을 새 작업으로 제안한다(라이브에서 달걀 게임이 그랬다: 진행 중 8건만
+  // 보고 판단했고 끝난 작업은 시야에 없었다).
+  memory?: readonly { date: string; summary: string }[];
 };
 
 export function buildLeaderPlanningPrompt(input: {
@@ -66,10 +72,24 @@ export function buildLeaderPlanningPrompt(input: {
       ]
     : [];
 
+  // 방 기억은 사실 정보와 따로 둔다. 최근 대화(아래)와 섞이면 어느 것이 지금 일어난
+  // 일인지 흐려진다 — 오래된 결정을 최근 지시로 착각하면 엉뚱한 작업을 만든다.
+  const memoryLines = (input.facts?.memory ?? []).length > 0
+    ? [
+        "--- 지난 기록 (며칠 전까지의 방 요약) ---",
+        ...(input.facts?.memory ?? []).map((entry) => `[${entry.date}]
+${entry.summary}`),
+        "이미 끝난 일을 새 작업으로 제안하지 마라. 지난 기록에 답이 있으면 그것으로 답하라.",
+        "--- 지난 기록 끝 ---",
+        ""
+      ]
+    : [];
+
   return [
     "너는 Telegram 프로젝트방의 소대장이다. 방에는 사람 여럿과 역할별 AI 봇이 함께 있다.",
     "",
     ...factLines,
+    ...memoryLines,
     "아래는 방에서 사람들이 나눈 최근 논의다. 마지막에 너를 부른 요청이 있다.",
     "",
     "--- 대화 ---",
