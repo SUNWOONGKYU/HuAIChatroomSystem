@@ -5,6 +5,7 @@ import { type GatewayPolicy } from "./index.js";
 import { createNodeProcessRunner } from "./process-runner.js";
 import { buildLocalGatewaySupabaseOutboxStoreFromEnv } from "./supabase-store.js";
 import { createArtifactCollector, type ArtifactCollector } from "./artifact-collector.js";
+import { createPlaywrightScreenshotCapturer, type ScreenshotCapturer } from "./screenshot.js";
 
 export type LocalGatewayRuntimeConfig = {
   intervalMs: number;
@@ -23,6 +24,7 @@ export type LocalGatewayLoopDependencies = {
   artifacts?: ArtifactCollector;
   // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다(기능 스위치).
   artifactVercelProject?: string;
+  screenshot?: ScreenshotCapturer;
   setTimeout: (callback: () => void, ms: number) => unknown;
   shouldContinue: () => boolean;
   now: () => Date;
@@ -45,6 +47,7 @@ export async function runLocalGatewayLoop(
         sink: deps.sink,
         artifacts: deps.artifacts,
         artifactVercelProject: deps.artifactVercelProject,
+        screenshot: deps.screenshot,
         limit: config.limit,
         concurrency: config.concurrency,
         leaseUntil: new Date(now.getTime() + config.leaseMs).toISOString(),
@@ -75,7 +78,10 @@ export function buildLocalGatewayRuntimeFromEnv(env: NodeJS.ProcessEnv = process
     sink: createConsoleGatewayEventSink(),
     artifacts: createArtifactCollector(),
     // 실행이 만든 .html 을 여기 올려 폰에서 열 수 있게 한다. 안 두면 예전처럼 로컬 경로만 남는다.
-    artifactVercelProject: env.LOCAL_GATEWAY_ARTIFACT_VERCEL_PROJECT || undefined
+    artifactVercelProject: env.LOCAL_GATEWAY_ARTIFACT_VERCEL_PROJECT || undefined,
+    // 기본 켜짐 — chromium 이 없는 머신에서만 env 로 끈다. 캡처 자체의 playwright import 는
+    // capture() 호출 시점에 지연 실행되므로, 여기서 확인 못 해도 게이트웨이 기동은 안 막힌다.
+    screenshot: env.LOCAL_GATEWAY_SCREENSHOT_ENABLED === "false" ? undefined : createPlaywrightScreenshotCapturer()
   };
 }
 

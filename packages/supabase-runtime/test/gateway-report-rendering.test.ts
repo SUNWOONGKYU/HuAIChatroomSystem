@@ -31,6 +31,47 @@ test("gateway report hides internal json and hook output from Telegram text", ()
   assert.equal(text.includes("OUTPUT:"), false);
 });
 
+// claude 어댑터를 --output-format text 에서 json 으로 바꿨다(session_id 를 stdout 에
+// 실으려면 그래야 한다 — text 모드엔 아예 안 실렸다). 그 JSON 통짜 덩어리가 방에 그대로
+// 뜨면 안 되고, 안의 result 필드(사람이 볼 답)만 나가야 한다. 아래 JSON은
+// `claude --print --output-format json` 을 실제로 호출해서 받은 실측 응답을 그대로 썼다
+// (내용만 "hello world" → 이 테스트 문구로 바꿈).
+test("claude json 출력에서 result 만 뽑아 보여주고 나머지 필드는 감춘다 (output-format 전환 회귀 방지)", () => {
+  const claudeJson = JSON.stringify({
+    is_error: false,
+    duration_api_ms: 2204,
+    num_turns: 1,
+    stop_reason: "end_turn",
+    session_id: "70d92161-02d7-45cd-8a3b-a4a1c3383e51",
+    total_cost_usd: 0.069088,
+    usage: { input_tokens: 9, output_tokens: 75 },
+    permission_denials: [],
+    terminal_reason: "completed",
+    subtype: "success",
+    api_error_status: null,
+    result: "확인했습니다. 다음 조치를 진행하겠습니다.",
+    type: "result",
+    duration_ms: 3165,
+    uuid: "4bf44264-43b4-4b80-9f35-24123bf50b94"
+  });
+
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "claude_code" },
+    status: "completed",
+    events: [
+      { type: "accepted", taskId: "task-1", attemptId: "attempt-1" },
+      { type: "started", taskId: "task-1", attemptId: "attempt-1", at: "2026-08-11T00:00:00.000Z" },
+      { type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: claudeJson }
+    ]
+  });
+
+  assert.match(text, /확인했습니다\. 다음 조치를 진행하겠습니다\./);
+  assert.equal(text.includes("session_id"), false);
+  assert.equal(text.includes("total_cost_usd"), false);
+  assert.equal(text.includes("70d92161"), false, "세션 id 가 방 화면에 그대로 새어 나가면 안 된다");
+  assert.equal(text.includes('"type":"result"'), false, "JSON 원문이 아니라 사람이 볼 텍스트만 나가야 한다");
+});
+
 test("gateway failure report uses human-readable reason", () => {
   const text = renderGatewayReportText({
     request: makeRequest(),

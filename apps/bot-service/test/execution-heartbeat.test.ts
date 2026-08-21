@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   formatElapsed,
   PROGRESS_DONE_TEXT,
+  PROGRESS_PLANNING_DONE_TEXT,
   runExecutionHeartbeatOnce,
   summarizeByChat,
   type InFlightExecution
@@ -68,8 +69,16 @@ test("방마다 가장 오래 걸린 실행을 기준으로 삼는다", () => {
   // 방장이 알고 싶은 것은 "제일 오래 기다린 게 얼마나 됐나"다.
   const byChat = summarizeByChat([execution("-1001", 9000), execution("-1001", 3000), execution("-1002", 5000)]);
 
-  assert.equal(byChat.get("-1001"), 3000);
-  assert.equal(byChat.get("-1002"), 5000);
+  assert.equal(byChat.get("-1001")?.startedAtMs, 3000);
+  assert.equal(byChat.get("-1002")?.startedAtMs, 5000);
+});
+
+test("실제 실행이 하나라도 섞여 있으면 kind 는 execution 이다", () => {
+  const byChat = summarizeByChat([execution("-1001", 1000, true), execution("-1001", 2000, false)]);
+  assert.equal(byChat.get("-1001")?.kind, "execution");
+
+  const onlyPlanning = summarizeByChat([execution("-1002", 1000, true)]);
+  assert.equal(onlyPlanning.get("-1002")?.kind, "planning");
 });
 
 test("방 번호가 없는 실행은 건너뛴다", () => {
@@ -87,8 +96,8 @@ test("경과 시간을 사람이 읽는 말로 쓴다", () => {
   assert.equal(formatElapsed(-5_000), "0초");
 });
 
-function execution(telegramChatId: string, startedAtMs: number): InFlightExecution {
-  return { telegramChatId, startedAtMs };
+function execution(telegramChatId: string, startedAtMs: number, isPlanning = false): InFlightExecution {
+  return { telegramChatId, startedAtMs, isPlanning };
 }
 
 // 방장이 반복해 제기한 문제 — "실행 버튼 움직임이 결과 나오기 전에 끝나버린다".
@@ -158,4 +167,73 @@ test("실행이 끝나면 표시를 끝났다고 못박는다", async () => {
 
   assert.deepEqual(edited, [PROGRESS_DONE_TEXT]);
   assert.equal(progress.size, 0, "끝난 방을 들고 있으면 다음 실행이 옛 메시지를 고친다");
+});
+
+// 방장이 실제로 겪은 문제 — "작업이 끝났습니다" 가 뜨고 바로 "작업 중입니다" 가 다시 떠서
+// 왔다갔다 하는 것처럼 보인다. 원인은 소대장 판단(planning) 행이 끝난 순간과 승인된
+// 실제 실행 행이 생기는 순간 사이의 빈틈을 "전체 종료"로 오판했기 때문이다.
+test("planning 만 끝난 빈틈은 '끝났다'가 아니라 '다음 단계 준비 중'이라고 말한다", async () => {
+  const edited: string[] = [];
+  const progress = new Map();
+  let inFlight = [{ telegramChatId: "1001", startedAtMs: 0, isPlanning: true }];
+  const ports = {
+    async listInFlightExecutions() { return inFlight; },
+    async sendTypingAction() {},
+    async sendProgressMessage() { return "msg-1"; },
+    async editProgressMessage(_chatId: string, _messageId: string, text: string) { edited.push(text); }
+  };
+
+  await runExecutionHeartbeatOnce(ports, progress, 1_000);
+  inFlight = []; // planning 행이 끝나고, 다음 단계(실제 실행) 행은 아직 안 생겼다
+  await runExecutionHeartbeatOnce(ports, progress, 20_000); // 유예시간을 넉넉히 지난 시점
+
+  assert.deepEqual(edited, [PROGRESS_PLANNING_DONE_TEXT], "'작업이 끝났습니다' 라고 말하면 안 된다 — 아직 승인/실행이 남아 있다");
+  assert.equal(progress.size, 1, "다음 단계 행이 곧 생길 수 있으므로 진행 표시를 계속 들고 있어야 한다");
+});
+
+test("빈틈이 유예시간 안이면 아무 것도 하지 않는다(다음 단계 행이 금방 생기는 정상 경우)", async () => {
+  const edited: string[] = [];
+  const progress = new Map();
+  let inFlight = [{ telegramChatId: "1001", startedAtMs: 0, isPlanning: true }];
+  const ports = {
+    async listInFlightExecutions() { return inFlight; },
+    async sendTypingAction() {},
+    async sendProgressMessage() { return "msg-1"; },
+    async editProgressMessage(_chatId: string, _messageId: string, text: string) { edited.push(text); }
+  };
+
+  await runExecutionHeartbeatOnce(ports, progress, 1_000);
+  inFlight = [];
+  await runExecutionHeartbeatOnce(ports, progress, 3_000); // 유예시간(8초) 안
+
+  assert.deepEqual(edited, [], "짧은 빈틈에 성급하게 문구를 바꾸면 안 된다");
+  assert.equal(progress.size, 1);
+});
+
+test("planning 다음 실제 실행이 이어지면 진행 표시를 그대로 이어받고, 실행이 끝나야 '끝났다'고 말한다", async () => {
+  const edited: string[] = [];
+  const progress = new Map();
+  let inFlight: Array<{ telegramChatId: string; startedAtMs: number; isPlanning: boolean }> = [
+    { telegramChatId: "1001", startedAtMs: 0, isPlanning: true }
+  ];
+  const ports = {
+    async listInFlightExecutions() { return inFlight; },
+    async sendTypingAction() {},
+    async sendProgressMessage() { return "msg-1"; },
+    async editProgressMessage(_chatId: string, _messageId: string, text: string) { edited.push(text); }
+  };
+
+  await runExecutionHeartbeatOnce(ports, progress, 1_000); // planning 진행 중
+  inFlight = []; // planning 이 끝나는 찰나
+  await runExecutionHeartbeatOnce(ports, progress, 20_000); // 유예시간 지나 "다음 단계 준비 중"
+  assert.deepEqual(edited, [PROGRESS_PLANNING_DONE_TEXT]);
+
+  inFlight = [{ telegramChatId: "1001", startedAtMs: 20_000, isPlanning: false }]; // 승인된 실제 실행 시작
+  await runExecutionHeartbeatOnce(ports, progress, 25_000);
+  assert.deepEqual(edited, [PROGRESS_PLANNING_DONE_TEXT, "⏳ 작업 중 · 5초 경과"], "실제 실행이 시작되면 같은 메시지에 진행 표시가 이어져야 한다");
+
+  inFlight = []; // 실제 실행이 완전히 끝남
+  await runExecutionHeartbeatOnce(ports, progress, 34_000);
+  assert.deepEqual(edited, [PROGRESS_PLANNING_DONE_TEXT, "⏳ 작업 중 · 5초 경과", PROGRESS_DONE_TEXT]);
+  assert.equal(progress.size, 0, "진짜 실행이 끝났으니 이번엔 완전히 종료 처리해야 한다");
 });

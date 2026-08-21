@@ -20,6 +20,8 @@ export function buildCommandHelp(): string {
     "/verify <id> 검증 요청",
     "/done <id> 승인 요청/처리",
     "/cancel <id> 취소 요청",
+    "/newagent <이름> <claude_leader|codex_leader> <할 일> 페르소나 추가",
+    "/agents 등록된 페르소나 목록",
     "/help 사용법"
   ].join("\n");
 }

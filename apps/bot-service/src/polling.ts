@@ -9,8 +9,10 @@
 // 대가: 봇 토큰 하나당 수신자가 하나여야 한다(같은 토큰으로 두 곳에서 폴링하면 서로 뺏는다).
 // 그래서 폴링을 켤 때는 등록된 webhook 을 먼저 지운다.
 
+import path from "node:path";
 import { type TelegramInboundQueueMessage } from "../../../packages/contracts/src/index.js";
 import { routeTelegramUpdate, type BotServiceConfig, type TelegramWebhookPorts } from "./index.js";
+import { downloadTelegramAttachment, extractAttachmentRef } from "./telegram-attachments.js";
 
 export type TelegramPollingBot = {
   botUsername: string;
@@ -21,6 +23,9 @@ export type TelegramPollingDependencies = {
   fetchImpl?: typeof fetch;
   now?: () => string;
   onIgnored?: (botUsername: string, reason: string) => void;
+  // 사진/문서 첨부를 실제로 내려받아 저장할 폴더. 방마다(하위 폴더는 chat id) 나뉜다.
+  attachmentsDir?: string;
+  onAttachmentError?: (error: unknown) => void;
 };
 
 export type PollingCycleResult = {
@@ -80,6 +85,7 @@ export async function runTelegramPollingCycle(input: {
 }): Promise<PollingCycleResult> {
   const fetchImpl = input.deps?.fetchImpl ?? fetch;
   const now = input.deps?.now ?? (() => new Date().toISOString());
+  const attachmentsDir = input.deps?.attachmentsDir ?? path.join("C:\\tmp", "huai-telegram-attachments");
   const result: PollingCycleResult = { fetched: 0, queued: 0, duplicated: 0, ignored: 0 };
 
   for (const bot of input.bots) {
@@ -97,7 +103,11 @@ export async function runTelegramPollingCycle(input: {
         continue;
       }
 
-      const receipt = await input.ports.updates.recordUpdateOnce(decision.input.envelope, update, "received");
+      // 이 봇에게 실제로 말을 건 메시지에만 다운로드한다 — 같은 update 를 그룹의 다른
+      // 봇들도 각자 받지만, 주소 안 된 봇은 위 "ignored" 분기에서 이미 걸러졌다.
+      const updateForStorage = await withDownloadedAttachment(update, bot.token, attachmentsDir, fetchImpl, input.deps?.onAttachmentError);
+
+      const receipt = await input.ports.updates.recordUpdateOnce(decision.input.envelope, updateForStorage, "received");
       if (!receipt.inserted) {
         result.duplicated += 1;
         continue;
@@ -138,6 +148,42 @@ async function fetchUpdates(
   });
   const payload = await response.json().catch(() => ({ ok: false, result: [] }));
   return Array.isArray(payload?.result) ? payload.result : [];
+}
+
+// 실패해도 폴링 자체는 막지 않는다 — 다운로드 오류로 메시지 수신 전체가 멎으면
+// 사진 없는 평범한 지시조차 못 받게 되므로, 여기서는 원본 update 를 그대로 돌려준다.
+async function withDownloadedAttachment(
+  update: unknown,
+  token: string,
+  attachmentsDir: string,
+  fetchImpl: typeof fetch,
+  onError?: (error: unknown) => void
+): Promise<unknown> {
+  const message = (update as { message?: Record<string, unknown> })?.message;
+  const ref = extractAttachmentRef(message);
+  if (!ref) return update;
+
+  try {
+    const chatId = (message?.chat as { id?: unknown })?.id;
+    const destDir = path.join(attachmentsDir, String(chatId ?? "unknown"));
+    const localPath = await downloadTelegramAttachment({
+      token,
+      fileId: ref.fileId,
+      destDir,
+      fileNameHint: ref.suggestedName,
+      fetchImpl
+    });
+    return {
+      ...(update as Record<string, unknown>),
+      message: {
+        ...message,
+        _huaiLocalAttachments: [{ path: localPath, kind: ref.kind }]
+      }
+    };
+  } catch (error) {
+    onError?.(error);
+    return update;
+  }
 }
 
 function routeTelegramUpdateSafe(botUsername: string, payload: unknown, config: BotServiceConfig) {

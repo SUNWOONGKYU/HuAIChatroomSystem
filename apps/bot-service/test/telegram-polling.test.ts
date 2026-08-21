@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   TelegramPollingOffsets,
@@ -103,6 +106,88 @@ test("깨진 update 하나가 주기 전체를 멈추지 않는다", async () =>
   assert.equal(result.queued, 1, "앞의 것이 깨져도 뒤의 정상 메시지는 처리되어야 한다");
 });
 
+test("주소된 메시지의 사진 첨부는 다운로드해서 raw_update 에 로컬 경로를 남긴다", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "huai-attach-test-"));
+  try {
+    const ports = makePorts();
+    const seenFileIds: string[] = [];
+    const update = photoMessage(501, "@leader_chatroom_bot 이 화면 참고해서 고쳐줘");
+
+    const result = await runTelegramPollingCycle({
+      bots: bots(),
+      config: config(),
+      ports: ports.ports,
+      offsets: new TelegramPollingOffsets(),
+      deps: { fetchImpl: fetchWithFileDownload([update], seenFileIds), attachmentsDir: dir }
+    });
+
+    assert.equal(result.queued, 1);
+    assert.deepEqual(seenFileIds, ["large-file-id"], "여러 해상도 중 가장 큰 것을 받아야 한다");
+
+    const received = ports.recorded.find((r) => r.status === "received");
+    const storedMessage = (received?.rawUpdate as { message?: Record<string, unknown> })?.message;
+    const attachments = storedMessage?._huaiLocalAttachments as Array<{ path: string; kind: string }> | undefined;
+    assert.equal(attachments?.length, 1);
+    assert.equal(attachments?.[0]?.kind, "photo");
+    assert.ok(existsSync(attachments![0].path), "다운로드한 파일이 실제로 디스크에 있어야 한다");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("주소된 메시지의 문서(이미지 아닌 파일) 첨부도 다운로드해서 경로를 남긴다", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "huai-attach-test-"));
+  try {
+    const ports = makePorts();
+    const seenFileIds: string[] = [];
+    const update = documentMessage(503, "@leader_chatroom_bot 이 문서 참고해서 사업계획서 고쳐줘");
+
+    const result = await runTelegramPollingCycle({
+      bots: bots(),
+      config: config(),
+      ports: ports.ports,
+      offsets: new TelegramPollingOffsets(),
+      deps: { fetchImpl: fetchWithFileDownload([update], seenFileIds), attachmentsDir: dir }
+    });
+
+    assert.equal(result.queued, 1);
+    assert.deepEqual(seenFileIds, ["doc-file-id"]);
+
+    const received = ports.recorded.find((r) => r.status === "received");
+    const storedMessage = (received?.rawUpdate as { message?: Record<string, unknown> })?.message;
+    const attachments = storedMessage?._huaiLocalAttachments as Array<{ path: string; kind: string }> | undefined;
+    assert.equal(attachments?.length, 1);
+    assert.equal(attachments?.[0]?.kind, "document", "사진이 아니라 문서로 분류돼야 한다");
+    assert.ok(existsSync(attachments![0].path));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("주소되지 않은(무시된) 메시지의 사진은 내려받지 않는다", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "huai-attach-test-"));
+  try {
+    const ports = makePorts();
+    const update = photoMessage(502, "이 화면 참고해서 고쳐줘"); // 봇 멘션 없음
+    (update.message as { chat: { id: string } }).chat.id = "-100999"; // 미허용 방으로 확실히 무시시킨다
+
+    const seenFileIds: string[] = [];
+    const result = await runTelegramPollingCycle({
+      bots: bots(),
+      config: config(),
+      ports: ports.ports,
+      offsets: new TelegramPollingOffsets(),
+      deps: { fetchImpl: fetchWithFileDownload([update], seenFileIds), attachmentsDir: dir }
+    });
+
+    assert.equal(result.ignored, 1);
+    assert.deepEqual(seenFileIds, [], "무시된 메시지는 다운로드를 시도하면 안 된다");
+    assert.deepEqual(readdirSync(dir), [], "무시된 메시지는 파일을 남기면 안 된다");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("폴링 시작 전 webhook 을 해제한다", async () => {
   const called: string[] = [];
   const fetchImpl: typeof fetch = async (url) => {
@@ -141,11 +226,14 @@ function message(updateId: number, text: string) {
 function makePorts() {
   const seen = new Set<string>();
   const queued: Array<{ input: { kind: string } }> = [];
+  const recorded: Array<{ envelope: { telegramBotId: string; updateId: string }; rawUpdate: unknown; status: string }> = [];
   return {
     queued,
+    recorded,
     ports: {
       updates: {
-        async recordUpdateOnce(envelope: { telegramBotId: string; updateId: string }) {
+        async recordUpdateOnce(envelope: { telegramBotId: string; updateId: string }, rawUpdate: unknown, status: string) {
+          recorded.push({ envelope, rawUpdate, status });
           const key = `${envelope.telegramBotId}:${envelope.updateId}`;
           if (seen.has(key)) return { inserted: false as const, status: "processed" as const, idempotencyKey: key };
           seen.add(key);
@@ -168,4 +256,51 @@ function fetchReturning(updates: unknown[]): typeof fetch {
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+function photoMessage(updateId: number, caption: string) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId * 10,
+      chat: { id: CHAT },
+      from: { id: "5001", is_bot: false, first_name: "방장" },
+      caption,
+      photo: [
+        { file_id: "small-file-id", width: 90, height: 90 },
+        { file_id: "large-file-id", width: 800, height: 800 }
+      ]
+    }
+  };
+}
+
+function documentMessage(updateId: number, caption: string) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId * 10,
+      chat: { id: CHAT },
+      from: { id: "5001", is_bot: false, first_name: "방장" },
+      caption,
+      document: { file_id: "doc-file-id", file_name: "사업계획서.txt" }
+    }
+  };
+}
+
+// getUpdates 는 배열로 주어진 update 를 그대로 돌려주고, getFile/파일 다운로드는
+// 고정된 바이트를 돌려주는 가짜 텔레그램. 실제로 무엇을 받았는지(file_id) 검사용으로 기록한다.
+function fetchWithFileDownload(updates: unknown[], seenFileIds: string[]): typeof fetch {
+  return async (url) => {
+    const s = String(url);
+    if (s.includes("/getUpdates")) return jsonResponse({ ok: true, result: updates });
+    if (s.includes("/getFile")) {
+      const fileId = new URL(s).searchParams.get("file_id") ?? "";
+      seenFileIds.push(fileId);
+      return jsonResponse({ ok: true, result: { file_id: fileId, file_path: "photos/fake.jpg" } });
+    }
+    if (s.includes("/file/bot")) {
+      return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
+    }
+    return jsonResponse({ ok: false });
+  };
 }

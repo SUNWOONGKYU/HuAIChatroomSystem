@@ -20,6 +20,9 @@ export type LeaderPlan = {
   completionCriteria: string;
   assignee: "claude_leader" | "codex_leader" | "both";
   reason: string;
+  // "버전 3개 만들어줘" 처럼 명시적으로 여러 변형을 요청했을 때만 2 이상. 기본 1(=변형 없음).
+  // 2~4 로 강제 제한한다 — 그 이상은 비용·리소스가 과해서 방장이 정말 원하는지 다시 확인해야 한다.
+  variantCount: number;
 };
 
 export type LeaderDecision =
@@ -48,14 +51,42 @@ export type RoomFacts = {
   memory?: readonly { date: string; summary: string }[];
 };
 
+// 방에서 부를 수 있는 이름 붙은 페르소나. huai_agent_personas 에 저장돼 있다.
+export type AgentPersona = {
+  name: string;
+  baseRole: "claude_leader" | "codex_leader";
+  instructions: string;
+};
+
+// "!페르소나이름 지시문" 형태로 시작하는 요청에서 페르소나 이름을 뽑아낸다.
+// 실제 페르소나 존재 여부(DB 조회)는 이 함수가 모른다 — store 계층이 이 이름으로
+// huai_agent_personas 를 찾아본다. 못 찾으면 그냥 평범한 요청으로 처리된다.
+export function extractPersonaTag(text: string): { personaName: string; remainingText: string } | undefined {
+  const match = /^!([A-Za-z0-9가-힣_-]{1,32})\s+([\s\S]+)$/.exec(text.trim());
+  if (!match) return undefined;
+  return { personaName: match[1], remainingText: match[2].trim() };
+}
+
 export function buildLeaderPlanningPrompt(input: {
   turns: readonly RoomTurn[];
   triggeringText: string;
   facts?: RoomFacts;
+  persona?: AgentPersona;
 }): string {
   const transcript = input.turns.length === 0
     ? "(직전 논의 없음 — 아래 요청만 보고 판단하라)"
     : input.turns.map((turn) => `[${turn.isOwner ? "방장" : turn.speaker}] ${turn.text}`).join("\n");
+
+  const persona = input.persona;
+  const personaLines = persona
+    ? [
+        `--- 이 요청은 등록된 페르소나 "${persona.name}"를 지목했다 ---`,
+        `이 페르소나가 하는 일: ${persona.instructions}`,
+        `이 페르소나의 담당은 ${persona.baseRole}다 — ASSIGNEE 는 반드시 ${persona.baseRole}로 정하라.`,
+        "--- 페르소나 지시 끝 ---",
+        ""
+      ]
+    : [];
 
   const facts = input.facts;
   const factLines = facts
@@ -92,6 +123,7 @@ ${entry.summary}`),
   return [
     "너는 Telegram 프로젝트방의 소대장이다. 방에는 사람 여럿과 역할별 AI 봇이 함께 있다.",
     "",
+    ...personaLines,
     ...factLines,
     ...memoryLines,
     "아래는 방에서 사람들이 나눈 최근 논의다. 마지막에 너를 부른 요청이 있다.",
@@ -114,6 +146,10 @@ ${entry.summary}`),
     "   방장이 답을 원한 질문에 조사 작업을 만들면, 원하지도 않은 일이 하나 생기는 것이다.",
     "2) 코드·파일·실행 결과를 실제로 열어봐야만 알 수 있는 것만 작업으로 만들어라.",
     "",
+    "변형 개수 판단: 요청이 \"버전 3개\", \"N개 만들어줘\", \"여러 안을 동시에\"처럼 여러 결과물을",
+    "명시적으로 원할 때만 VARIANTS 를 2 이상으로 써라. 그 외(보통의 단일 작업)에는 반드시 1이다.",
+    "짐작으로 늘리지 마라 — 안 쓴 변형은 그대로 비용과 방 혼선이 된다. 최대 4까지만 허용된다.",
+    "",
     "아래 형식으로만 답하라. 앞뒤 설명·코드펜스 금지. 값은 한 줄로 쓴다.",
     "",
     "작업으로 만들 때:",
@@ -124,6 +160,7 @@ ${entry.summary}`),
     "DONE: <완료 조건 — 검증자가 합격/불합격을 판정할 기준>",
     "ASSIGNEE: claude_leader 또는 codex_leader 또는 both",
     "REASON: <그 담당을 고른 이유>",
+    "VARIANTS: <병렬로 만들 변형 개수, 기본 1, 최대 4>",
     "",
     "질문이거나 설명을 구하는 것이면:",
     "DECISION: answer",
@@ -149,7 +186,7 @@ function parseLineFormat(raw: string): LeaderDecision | undefined {
   const fields = new Map<string, string>();
   let currentKey: string | undefined;
   for (const line of raw.split(/\r?\n/)) {
-    const match = /^\s*(DECISION|TITLE|PURPOSE|SCOPE|DONE|ASSIGNEE|REASON|ANSWER)\s*:\s*(.*)$/i.exec(line);
+    const match = /^\s*(DECISION|TITLE|PURPOSE|SCOPE|DONE|ASSIGNEE|REASON|ANSWER|VARIANTS)\s*:\s*(.*)$/i.exec(line);
     if (match) {
       currentKey = match[1].toUpperCase();
       fields.set(currentKey, match[2].trim());
@@ -186,9 +223,19 @@ function parseLineFormat(raw: string): LeaderDecision | undefined {
       scope,
       completionCriteria,
       assignee,
-      reason: fields.get("REASON") ?? ""
+      reason: fields.get("REASON") ?? "",
+      variantCount: clampVariantCount(fields.get("VARIANTS"))
     }
   };
+}
+
+// LLM 이 안 쓰거나(기본 1), 숫자가 아니거나, 범위를 벗어나면 안전한 쪽(1=변형 없음)으로
+// 떨어뜨린다. 위쪽 한도(4)는 프롬프트로도 못박았지만, 모델이 그걸 무시해도 여기서 막는다 —
+// 비용·워크트리 개수 폭주를 코드가 최종 방어선으로 자른다.
+function clampVariantCount(raw: string | undefined): number {
+  const parsed = Number.parseInt((raw ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 1) return 1;
+  return Math.min(parsed, 4);
 }
 
 function parseJsonFormat(raw: string): LeaderDecision | undefined {
@@ -215,6 +262,7 @@ function parseJsonFormat(raw: string): LeaderDecision | undefined {
   if (!title || !scope || !completionCriteria) return undefined;
 
   const assignee = ASSIGNEES.find((candidate) => candidate === parsed.assignee) ?? "codex_leader";
+  const variantCountRaw = typeof parsed.variantCount === "number" ? String(parsed.variantCount) : undefined;
   return {
     kind: "plan",
     plan: {
@@ -223,7 +271,8 @@ function parseJsonFormat(raw: string): LeaderDecision | undefined {
       scope,
       completionCriteria,
       assignee,
-      reason: text(parsed.reason) ?? ""
+      reason: text(parsed.reason) ?? "",
+      variantCount: clampVariantCount(variantCountRaw)
     }
   };
 }

@@ -2,6 +2,7 @@
 import { executeGatewayRequest, type GatewayEventSink, type ProcessRunner } from "./executor.js";
 import { maskSensitiveOutput, type GatewayPolicy } from "./index.js";
 import { type ArtifactCollector } from "./artifact-collector.js";
+import { type ScreenshotCapturer } from "./screenshot.js";
 
 export type LocalGatewayOutboxStore = {
   leasePendingLocalGateway(limit: number, leaseUntil: string): Promise<OutboxRecord[]>;
@@ -38,6 +39,8 @@ export async function runLocalGatewayConsumerOnce(input: {
   artifacts?: ArtifactCollector;
   // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다.
   artifactVercelProject?: string;
+  // 배포된 .html 미리보기 스크린샷 캡처. 없으면 스크린샷 없이 기존과 동일하게 동작한다.
+  screenshot?: ScreenshotCapturer;
   limit: number;
   leaseUntil: string;
   maxAttempts: number;
@@ -76,6 +79,7 @@ async function processOutboxRow(
     artifacts?: ArtifactCollector;
   // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다.
   artifactVercelProject?: string;
+  screenshot?: ScreenshotCapturer;
     maxAttempts: number;
     now?: () => string;
   },
@@ -97,6 +101,7 @@ async function processOutboxRow(
     sink: input.sink,
     artifacts: input.artifacts,
     artifactVercelProject: input.artifactVercelProject,
+    screenshot: input.screenshot,
     now: input.now
   });
 

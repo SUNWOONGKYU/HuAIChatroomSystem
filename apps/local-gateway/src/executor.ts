@@ -9,8 +9,10 @@ import {
   planExecution,
   type GatewayPolicy
 } from "./index.js";
-import { type ArtifactCollector } from "./artifact-collector.js";
+import { readFile } from "node:fs/promises";
+import { type ArtifactCollector, sha256Hex, toArtifactUri } from "./artifact-collector.js";
 import { publishWebArtifacts } from "./artifact-publisher.js";
+import { type ScreenshotCapturer } from "./screenshot.js";
 
 export type ProcessRunResult = {
   exitCode: number;
@@ -50,6 +52,9 @@ export async function executeGatewayRequest(input: {
   artifacts?: ArtifactCollector;
   // 웹 산출물을 올릴 Vercel 프로젝트. 없으면 올리지 않는다(기능 스위치).
   artifactVercelProject?: string;
+  // 배포된 .html 산출물의 미리보기 스크린샷을 찍는다. 없으면(스킵) 링크만 나간다 —
+  // 예전과 완전히 동일한 동작이다.
+  screenshot?: ScreenshotCapturer;
   now?: () => string;
 }): Promise<ExecutionResult> {
   const now = input.now ?? (() => new Date().toISOString());
@@ -127,6 +132,22 @@ export async function executeGatewayRequest(input: {
           reason: collection.failureReason
         });
       }
+      if (input.screenshot) {
+        const screenshotArtifacts = await captureScreenshots(
+          input.screenshot,
+          collection.artifacts,
+          published.publishedUrlByPath,
+          input.request.projectPath
+        );
+        for (const artifact of screenshotArtifacts) {
+          events.push({
+            type: "artifact_collected",
+            taskId: input.request.taskId,
+            attemptId: input.request.attemptId,
+            artifact
+          });
+        }
+      }
       events.push({ type: "completed", taskId: input.request.taskId, attemptId: input.request.attemptId, at: now() });
       await publishNewEvents(events, input.sink, 2);
       return { status: "completed", retryable: false, events };
@@ -202,6 +223,45 @@ async function collectArtifacts(
   }
 }
 
+
+// 배포 주소가 붙은 .html 산출물마다 미리보기 스크린샷을 찍어 별도 산출물로 만든다.
+// 이름은 "-preview.png" 로 끝낸다 — WORKING_ARTIFACT_PATTERN(-broken/-debug/-temp 등)에
+// 안 걸려야 방으로 실제 전달된다(packages/supabase-runtime 의 isDeliverableDocument 참고).
+// 실패해도(예: chromium 미설치) 실행 자체는 성공으로 남는다 — 링크는 이미 나갔다.
+export async function captureScreenshots(
+  capturer: ScreenshotCapturer,
+  artifacts: readonly ArtifactManifest[],
+  publishedUrlByPath: Map<string, string>,
+  projectPath: string
+): Promise<ArtifactManifest[]> {
+  const results: ArtifactManifest[] = [];
+  for (const artifact of artifacts) {
+    if (!/\.html?$/i.test(artifact.path)) continue;
+    const publicUrl = publishedUrlByPath.get(artifact.path);
+    if (!publicUrl) continue;
+
+    const screenshotRelPath = artifact.path.replace(/\.html?$/i, "-preview.png");
+    const screenshotAbsPath = `${projectPath}/${screenshotRelPath}`;
+    try {
+      await capturer.capture({ url: publicUrl, outPath: screenshotAbsPath });
+      const bytes = await readFile(screenshotAbsPath);
+      results.push({
+        path: screenshotRelPath,
+        sizeBytes: bytes.length,
+        checksum: sha256Hex(bytes),
+        version: artifact.version,
+        uri: toArtifactUri(projectPath, screenshotRelPath)
+      });
+    } catch (error) {
+      console.error(JSON.stringify({
+        type: "screenshot_capture_failed",
+        artifactPath: artifact.path,
+        reason: maskSensitiveOutput(error instanceof Error ? error.message : String(error))
+      }));
+    }
+  }
+  return results;
+}
 
 export function classifyAgentFailure(result: ProcessRunResult, adapterType: string = "codex"): string | undefined {
   const allowUsageLimit = adapterType === "claude_code";

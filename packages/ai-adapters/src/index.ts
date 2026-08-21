@@ -52,7 +52,14 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
         "--model",
         request.model ?? "sonnet",
         "--output-format",
-        "text",
+        // text 였을 때는 session_id 가 stdout 어디에도 안 실려서 --resume 이 한 번도
+        // 못 걸렸다(실측 확인 — codex 의 thread_id 미스매치와 같은 종류의 결함).
+        // json 은 단일 JSON 객체를 돌려주고 그 안에 session_id·result(사람이 읽을 답)가
+        // 둘 다 있다(claude --print --output-format json 실제 호출로 확인:
+        // {"type":"result","result":"...","session_id":"...",...}). 사람이 볼 텍스트는
+        // supabase-runtime 의 extractClaudeAgentMessage 가 이 JSON 에서 result 필드를
+        // 꺼내 쓴다 — 그 짝을 안 맞추면 방에 JSON 원문이 그대로 뜬다.
+        "json",
         `--add-dir=${request.projectPath}`,
         // 이전 세션을 이어받으면 소대장이 방의 맥락을 기억한다.
         ...(request.resumeSessionId ? ["--resume", request.resumeSessionId] : [])
@@ -94,6 +101,23 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
         `${Math.ceil(request.timeoutMs / 1000)}s`,
         ...(request.model ? ["--model", request.model] : [])
       ],
+      request.projectPath,
+      request.timeoutMs
+    );
+  }
+
+  // 이전 세션을 이어받으면 방 맥락을 다시 안 쌓아도 된다(claude_code 의 --resume 과 동급).
+  // `codex exec resume <id> [prompt]` 서브커맨드가 실제로 있다(codex exec resume --help
+  // 로 실측 확인) — 문제는 이 서브커맨드 옵션 목록에 --sandbox·--approve-for-me·--add-dir
+  // 가 없다는 것이다. 세션을 처음 만들 때(resumeSessionId 가 없는 첫 호출) 이 코드가
+  // 항상 readOnly 여부에 맞는 승인 모드로 세션을 열므로, 이어받는 세션도 그 모드를 그대로
+  // 물려받는다는 가정으로 짰다 — 다만 이 가정은 Codex 사용량 한도(2026-08-20 리셋 예정)에
+  // 걸려 라이브로 끝까지 확인은 못 했다. 최악의 경우도 무한 정지가 아니라 게이트웨이
+  // 타임아웃으로 실패·재시도되는 선에서 그친다(기존 timeoutMs 킬 로직이 그대로 적용됨).
+  if (request.resumeSessionId) {
+    return platformPlan(
+      "codex",
+      ["exec", "resume", request.resumeSessionId, "--ignore-user-config", "--skip-git-repo-check", "--json", "--", request.prompt],
       request.projectPath,
       request.timeoutMs
     );

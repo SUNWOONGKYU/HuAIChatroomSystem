@@ -200,6 +200,10 @@ function routeTelegramInput(
       case "/cancel":
       case "/verify":
         return applyOwnerTaskCommand(input, ports);
+      case "/newagent":
+        return createAgentPersonaFromTelegram(input);
+      case "/agents":
+        return listAgentPersonasFromTelegram(input);
     }
   }
 
@@ -740,6 +744,87 @@ export function renderTelegramQuery(
   };
 }
 
+const AGENT_PERSONA_NAME_PATTERN = /^[A-Za-z0-9가-힣_-]{1,32}$/;
+const AGENT_PERSONA_BASE_ROLES = ["claude_leader", "codex_leader"] as const;
+
+// 텔레그램은 봇 API로 새 봇 계정을 못 만든다 — 그래서 "새 에이전트"는 기존 실행 담당
+// 봇(claude_leader/codex_leader) 위에 얹는 이름 붙은 페르소나로 구현한다. 실제 DB 기록은
+// store 계층(hydrateAgentPersonaRows)이 담당한다 — 여기서는 명령을 outbox payload 에
+// 표식(agentPersonaCommand)으로만 실어 보낸다(오케스트레이터는 DB 를 안 읽는다).
+export function createAgentPersonaFromTelegram(
+  input: Extract<NormalizedTelegramInput, { kind: "command" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const [personaName, baseRole, ...rest] = input.command.args;
+  const instructions = rest.join(" ").trim();
+  const usage = "사용법: /newagent <이름> <claude_leader 또는 codex_leader> <이 페르소나가 할 일>";
+
+  const idempotencyKey = `telegram:newagent:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
+  const target = makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId);
+
+  const validName = Boolean(personaName) && AGENT_PERSONA_NAME_PATTERN.test(personaName);
+  const validRole = (AGENT_PERSONA_BASE_ROLES as readonly string[]).includes(baseRole ?? "");
+
+  if (!validName || !validRole || !instructions) {
+    return {
+      accepted: true,
+      authorization: { allowed: true },
+      events: [],
+      outbox: [
+        {
+          target,
+          idempotencyKey,
+          payload: { text: usage, binding: { kind: "event", eventId: idempotencyKey } }
+        }
+      ]
+    };
+  }
+
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: [],
+    outbox: [
+      {
+        target,
+        idempotencyKey,
+        payload: {
+          text: "페르소나 등록 처리 중…",
+          binding: { kind: "event", eventId: idempotencyKey },
+          agentPersonaCommand: {
+            action: "create",
+            personaName,
+            baseRole,
+            instructions,
+            createdByTelegramUserId: input.envelope.telegramUserId
+          }
+        }
+      }
+    ]
+  };
+}
+
+export function listAgentPersonasFromTelegram(
+  input: Extract<NormalizedTelegramInput, { kind: "command" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const idempotencyKey = `telegram:agents:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: [],
+    outbox: [
+      {
+        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        idempotencyKey,
+        payload: {
+          text: "등록된 페르소나 조회 중…",
+          binding: { kind: "event", eventId: idempotencyKey },
+          agentPersonaCommand: { action: "list" }
+        }
+      }
+    ]
+  };
+}
+
 type RoutedProposalText = {
   text: string;
   intent: "new_task" | "task_followup" | "multi_ai_review";
@@ -1036,7 +1121,10 @@ function requiredPermissionForInput(input: NormalizedTelegramInput): RoomPermiss
       case "/search":
       case "/trace":
       case "/help":
+      case "/agents":
         return "task:read";
+      case "/newagent":
+        return "task:create";
       case "/approve":
         return "task:approve";
       case "/reject":

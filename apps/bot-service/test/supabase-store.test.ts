@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
 import { buildApprovedTelegramTaskPromptForTest, SupabaseBotServiceStore } from "../src/supabase-store.js";
+import { createNodeGitRunner, removeWorktree, worktreePathFor } from "../../local-gateway/src/worktree.js";
 
 const ROOM_ID = "00000000-0000-0000-0000-000000000010";
 
@@ -132,6 +135,61 @@ test("hydrates approved local gateway execution prompt from proposal event", asy
   assert.match(hydratedPrompt, /Do not call this product an MVP/);
   assert.match(hydratedPrompt, /OPERATION_STATUS\.md/);
 });
+
+// "버전 N개 만들어줘" 변형 제안이 승인되면, 공유 프로젝트 폴더가 아니라 자기만의 격리된
+// git worktree 에서 실행돼야 한다 — 이 저장소를 실제 repoPath 로 써서 진짜 git worktree
+// 가 생기는지까지 확인한다(가짜 러너가 아니라 실제 git 호출).
+test("useIsolatedWorktree 제안이 승인되면 실행 요청의 projectPath 가 격리된 worktree 로 바뀐다", async () => {
+  const repoRoot = findRepoRoot(import.meta.dirname);
+  if (!repoRoot) {
+    console.log("skip: .git 없음 (격리 워크트리 통합 테스트 건너뜀)");
+    return;
+  }
+
+  const proposalId = "proposal_00000000-0000-4000-8000-000000000002";
+  const rawText = "print only OK";
+  const taskId = "33333333-3333-4333-8333-333333333333";
+  const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
+    jsonResponse(200, [{ payload: { proposalId, rawText, title: "변형 테스트", useIsolatedWorktree: true } }]),
+    jsonResponse(200, []),
+    jsonResponse(201, []),
+    jsonResponse(200, []),
+    jsonResponse(201, [{ task_id: taskId }]),
+    jsonResponse(201, [{ huai_outbox_id: "outbox-local-2", event_id: null, idempotency_key: "gateway:execution:2", target_kind: "local_gateway", target: JSON.stringify({ kind: "local_gateway", gatewayId: "gateway-local" }), payload: { executionRequest: { taskId, prompt: rawText } }, status: "pending", attempts: 0, created_at: "2026-08-10T00:00:00.000Z" }])
+  ]);
+  const store = makeStore(calls.fetchImpl);
+  const expectedWorktreePath = worktreePathFor(repoRoot, taskId, 1);
+
+  try {
+    await store.commitTelegramInputResult(
+      makeOutboxCommit("gateway:execution:2", { kind: "local_gateway", gatewayId: "gateway-local" }, {
+        executionRequest: { taskId: proposalId, prompt: "Execute approved task " + proposalId, projectPath: repoRoot }
+      })
+    );
+
+    const hydratedRequest = calls.requests[6]?.body[0].payload.executionRequest;
+    assert.equal(hydratedRequest.taskId, taskId);
+    assert.equal(hydratedRequest.projectPath, expectedWorktreePath, "projectPath 가 공유 폴더가 아니라 격리 워크트리로 바뀌어야 한다");
+    assert.notEqual(hydratedRequest.projectPath, repoRoot);
+    assert.ok(existsSync(expectedWorktreePath), "워크트리가 실제 디스크에 생겨야 한다(가짜가 아니라 진짜 git 호출)");
+  } finally {
+    const runner = createNodeGitRunner();
+    await removeWorktree({ runner, repoPath: repoRoot, handle: { path: expectedWorktreePath, branch: `variant/${taskId}-v1` }, force: true }).catch(() => undefined);
+    await runner.run({ cwd: repoRoot, command: "git", args: ["branch", "-D", `variant/${taskId}-v1`] }).catch(() => undefined);
+  }
+});
+
+function findRepoRoot(startDir: string): string | undefined {
+  let dir = startDir;
+  for (let i = 0; i < 8; i += 1) {
+    if (existsSync(path.join(dir, ".git"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+  return undefined;
+}
 
 test("hydrates approved execution actor from requested proposal role", async () => {
   const proposalId = "proposal_00000000-0000-4000-8000-000000000002";

@@ -538,6 +538,10 @@
         if (!report) throw new Error("empty");
         document.title = "보고 전문";
         stateEl.textContent = "";
+        // 헤더 부제가 "불러오는 중…" 에 멈춰 있으면 이 화면 전체가 아직도 로딩
+        // 중이거나 고장난 것처럼 보인다 — 여기는 보고 전문만 보여주는 화면이라
+        // 작업 목록/승인 버튼이 없는 게 정상임을 알려준다.
+        subtitleEl.textContent = "보고 전문 — 작업 목록·승인은 방에 고정된 현황판 버튼에서 볼 수 있습니다.";
         boardEl.innerHTML = "";
 
         var wrap = document.createElement("div");

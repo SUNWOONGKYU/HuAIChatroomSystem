@@ -33,3 +33,6 @@ _WorkLog/
 *.pnglogs/
 
 .vercel
+
+# git worktree 병렬 변형 실행이 만드는 작업 디렉터리 (apps/local-gateway/src/worktree.ts)
+.worktrees/

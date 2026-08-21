@@ -284,7 +284,7 @@ export class SupabaseOutboxStore {
         botRole: "platoon_leader",
         messageThreadId: request.telegramMessageThreadId,
         telegramChatId,
-        text: "바꾼 파일이 없어 별도 검증 없이 마쳤습니다.\n완료 승인은 고정된 작업 현황판에서 결정해 주세요.",
+        text: "파일 수정 작업이 아니어서 검증 없이 마쳤습니다.\n완료 승인은 고정된 작업 현황판에서 결정해 주세요.",
         binding: { kind: "event", eventId: sourceEventId },
         idempotencyKey
       },
@@ -471,10 +471,13 @@ export class SupabaseOutboxStore {
     await this.rememberLeaderSession(input.request.actorId, input.events);
 
     const idempotencyKey = "telegram-leader-plan:" + input.request.attemptId;
-    // Telegram 표시용 정리본(summarizeGatewayOutput)은 JSON 을 내부 로그로 보고 걷어낸다.
-    // 소대장 판단은 JSON 이므로 반드시 원본 stdout 에서 읽어야 한다.
+    // claude 는 --output-format json 으로 부른다(session_id 를 잡으려고, Task D 참고) —
+    // 그러면 DECISION/TITLE/... 줄들이 stdout 최상위 줄바꿈이 아니라 JSON "result"
+    // 문자열 안에 \n 으로 이스케이프된 채 갇힌다. extractAgentResultText 로 그 겉포장을
+    // 먼저 벗겨야 parseLeaderDecision 의 줄 단위 파서가 DECISION: 을 찾을 수 있다.
+    // 실전에서 이걸 빼먹어 "요청을 작업으로 정리하지 못했습니다"만 계속 나갔다(라이브 확인).
     const decision = input.status === "completed"
-      ? parseLeaderDecision(rawStdoutFromGatewayEvents(input.events))
+      ? parseLeaderDecision(extractAgentResultText(rawStdoutFromGatewayEvents(input.events)))
       : undefined;
 
     if (!decision) {
@@ -543,21 +546,53 @@ export class SupabaseOutboxStore {
     }
 
     const plan = decision.plan;
+    // 변형이 없으면(기본, variantCount<=1) 지금까지와 똑같이 제안 1개. 변형이 있으면
+    // "판단 1번 → 제안 N개" — 제안마다 독립된 승인·작업이다(기존 1제안=1작업 불변식을
+    // 그대로 지킨다, 승인 증거 체인 AC-08도 안 건드린다). 유일한 새 정보는
+    // useIsolatedWorktree 표식뿐 — 방장이 승인하면 그 작업은 공유 폴더가 아니라
+    // 자기만의 git worktree 에서 돈다(huai_tasks.use_isolated_worktree, 아래 store 계층 참고).
+    const variantCount = Math.max(1, plan.variantCount || 1);
+    for (let variantIndex = 1; variantIndex <= variantCount; variantIndex += 1) {
+      await this.emitLeaderProposal({
+        request: input.request,
+        telegramChatId,
+        sourceEventId,
+        idempotencyKey: variantCount > 1 ? `${idempotencyKey}:v${variantIndex}` : idempotencyKey,
+        plan,
+        variantIndex: variantCount > 1 ? variantIndex : undefined,
+        variantCount: variantCount > 1 ? variantCount : undefined
+      });
+    }
+  }
+
+  private async emitLeaderProposal(input: {
+    request: ExecutionRequest;
+    telegramChatId: string;
+    sourceEventId: string;
+    idempotencyKey: string;
+    plan: LeaderPlan;
+    variantIndex?: number;
+    variantCount?: number;
+  }): Promise<void> {
+    const plan = input.plan;
+    const isVariant = Boolean(input.variantIndex && input.variantCount);
+    const title = isVariant ? `${plan.title} (변형 ${input.variantIndex}/${input.variantCount})` : plan.title;
     // Telegram 콜백 데이터는 64바이트가 한계다.
     // "proposal:<id>:approve" 형태로 실려 나가므로 id 를 짧게 유지해야 한다.
     // 처음엔 attemptId 를 그대로 붙였다가 71바이트가 되어 BUTTON_DATA_INVALID 로 죽었다.
-    const proposalId = shortProposalId(input.request.attemptId);
+    const baseProposalId = shortProposalId(input.request.attemptId);
+    const proposalId = isVariant ? `${baseProposalId}v${input.variantIndex}` : baseProposalId;
     await this.insertEventIdempotently({
       room_id: input.request.roomId,
       task_id: null,
       event_type: "proposal_created",
-      idempotency_key: "leader-proposal:" + input.request.attemptId,
+      idempotency_key: "leader-proposal:" + input.request.attemptId + (isVariant ? `:v${input.variantIndex}` : ""),
       payload: {
         proposalId,
         // 소대장 판단은 방장이 말을 건 주제에서 시작됐다. 그 주제를 여기서 놓치면
         // 승인 뒤 만들어지는 작업이 어느 주제 것인지 알 길이 없어진다.
         messageThreadId: input.request.telegramMessageThreadId,
-        title: plan.title,
+        title,
         purpose: plan.purpose,
         scope: plan.scope,
         completionCriteria: plan.completionCriteria,
@@ -567,23 +602,24 @@ export class SupabaseOutboxStore {
         assignee: plan.assignee,
         assigneeReason: plan.reason,
         stage: "leader_planned",
+        useIsolatedWorktree: isVariant,
         createdAt: new Date().toISOString()
       }
     });
 
     await this.insertOutboxIdempotently({
-      event_id: sourceEventId,
-      idempotency_key: idempotencyKey,
+      event_id: input.sourceEventId,
+      idempotency_key: input.idempotencyKey,
       target_kind: "telegram_bot",
-      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: input.telegramChatId }),
       payload: {
         botRole: "platoon_leader",
         messageThreadId: input.request.telegramMessageThreadId,
-        telegramChatId,
-        text: renderLeaderPlanMessage(plan),
+        telegramChatId: input.telegramChatId,
+        text: renderLeaderPlanMessage({ ...plan, title }),
         keyboard: buildProposalKeyboard(proposalId),
-        binding: { kind: "event", eventId: sourceEventId },
-        idempotencyKey
+        binding: { kind: "event", eventId: input.sourceEventId },
+        idempotencyKey: input.idempotencyKey
       },
       room_id: input.request.roomId
     });
@@ -1124,11 +1160,19 @@ export function rawStdoutFromGatewayEvents(events: readonly GatewayEvent[]): str
     .join("\n");
 }
 
-// claude --output-format json 은 session_id 를 돌려준다. stdout 에서 건져낸다.
+// claude --output-format json 은 session_id 를 돌려준다. codex --json 은 --json
+// 필드 이름이 다르다 — `{"type":"thread.started","thread_id":"..."}` (실측 확인,
+// codex exec --json 실제 호출 결과). 소대장(platoon_leader)은 기본 어댑터가 codex 라서
+// thread_id 를 못 잡으면 세션이 한 번도 저장되지 않는다 — 실제로 라이브 방들의
+// cli_session_id 가 전부 null 이었다.
+//
+// claude_code 쪽은 이 저장소가 --output-format text(평문)로 부르고 있어 session_id 가
+// 애초에 stdout 에 안 실린다 — 그건 이 함수가 아니라 호출 플래그를 바꿔야 하는
+// 별도 문제라 여기서는 건드리지 않는다.
 export function sessionIdFromGatewayEvents(events: readonly GatewayEvent[]): string | undefined {
   for (const event of events) {
     if (event.type !== "stdout" || typeof event.text !== "string") continue;
-    const match = event.text.match(/"session_id"\s*:\s*"([0-9a-fA-F-]{16,})"/);
+    const match = event.text.match(/"(?:session_id|thread_id)"\s*:\s*"([0-9a-fA-F-]{16,})"/);
     if (match) return match[1];
   }
   return undefined;
@@ -1684,9 +1728,18 @@ function summarizeGatewayOutput(events: GatewayEvent[]): string | undefined {
   );
   const text = stdout?.text ?? stderr?.text;
   if (!text) return undefined;
-  const agentMessage = extractCodexAgentMessage(text);
-  const visible = cleanHumanVisibleOutput(agentMessage ?? text);
+  const visible = cleanHumanVisibleOutput(extractAgentResultText(text));
   return visible ? maskSensitiveText(visible) : undefined;
+}
+
+// 두 엔진 출력의 겉포장을 벗겨 사람이 볼(또는 파서가 읽을) 실제 텍스트만 남긴다.
+// codex 는 JSONL 스트림(agent_message), claude 는 --output-format json 통짜 객체
+// (result 필드) — 어느 쪽도 아니면(과거 텍스트 모드 등) 원본을 그대로 돌려준다.
+// Telegram 보고문 요약과 소대장 판단(DECISION: 줄 파싱) 둘 다 이 함수로 겉포장을
+// 벗긴 뒤 처리한다 — 벗기지 않으면 파서가 JSON 이스케이프된 \n 뒤에 숨은
+// "DECISION: plan" 을 못 찾는다(실전에서 실제로 이 증상이 났다).
+export function extractAgentResultText(text: string): string {
+  return extractCodexAgentMessage(text) ?? extractClaudeAgentMessage(text) ?? text;
 }
 
 function cleanHumanVisibleOutput(text: string): string | undefined {
@@ -1843,6 +1896,22 @@ function extractCodexAgentMessage(text: string): string | undefined {
   }
   return latest;
 }
+// claude --print --output-format json 은 codex 와 달리 JSONL 스트림이 아니라
+// 통째로 하나의 JSON 객체를 돌려준다(실측: {"type":"result","result":"<사람이 볼 답>",
+// "session_id":"...",...}). 앞뒤에 다른 줄이 섞여 있을 수 있으니 "{"로 시작하는
+// 통짜 JSON을 찾아 파싱한다 — 못 찾거나 형식이 다르면 undefined 로 원본 텍스트 표시로 폴백한다.
+function extractClaudeAgentMessage(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: string; result?: unknown };
+    if (parsed.type === "result" && typeof parsed.result === "string") return parsed.result;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : value.slice(0, maxLength) + "...";
 }

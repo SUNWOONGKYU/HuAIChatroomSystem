@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildLeaderPlanningPrompt,
   executionRolesForAssignee,
+  extractPersonaTag,
   parseLeaderDecision,
   type RoomTurn
 } from "../src/leader-planning.js";
@@ -104,6 +105,44 @@ test("줄 형식 계획을 파싱한다", () => {
   if (decision?.kind !== "plan") return;
   assert.equal(decision.plan.assignee, "claude_leader");
   assert.match(decision.plan.completionCriteria, /코드 근거/);
+  assert.equal(decision.plan.variantCount, 1, "VARIANTS 를 안 쓰면 변형 없음(1)이어야 한다");
+});
+
+test("VARIANTS 를 명시하면 변형 개수로 파싱한다", () => {
+  const decision = parseLeaderDecision([
+    "DECISION: plan",
+    "TITLE: 랜딩페이지 시안",
+    "PURPOSE: 방향 비교",
+    "SCOPE: 서로 다른 세 가지 톤으로",
+    "DONE: 셋 다 배포된 링크로 확인 가능",
+    "ASSIGNEE: claude_leader",
+    "REASON: 정적 페이지 생성",
+    "VARIANTS: 3"
+  ].join("\n"));
+
+  assert.equal(decision?.kind, "plan");
+  if (decision?.kind !== "plan") return;
+  assert.equal(decision.plan.variantCount, 3);
+});
+
+test("VARIANTS 가 4를 넘으면 4로 자른다 — 비용 폭주를 코드가 최종 방어한다", () => {
+  const decision = parseLeaderDecision(
+    ["DECISION: plan", "TITLE: t", "SCOPE: s", "DONE: d", "ASSIGNEE: codex_leader", "VARIANTS: 999"].join("\n")
+  );
+  assert.equal(decision?.kind, "plan");
+  if (decision?.kind !== "plan") return;
+  assert.equal(decision.plan.variantCount, 4);
+});
+
+test("VARIANTS 가 숫자가 아니거나 1 이하면 변형 없음으로 취급한다", () => {
+  for (const bad of ["없음", "0", "-1", ""]) {
+    const decision = parseLeaderDecision(
+      ["DECISION: plan", "TITLE: t", "SCOPE: s", "DONE: d", "ASSIGNEE: codex_leader", `VARIANTS: ${bad}`].join("\n")
+    );
+    assert.equal(decision?.kind, "plan");
+    if (decision?.kind !== "plan") continue;
+    assert.equal(decision.plan.variantCount, 1, `VARIANTS: ${bad} 은 1이어야 한다`);
+  }
 });
 
 test("여러 줄에 걸친 값을 이어 붙인다", () => {
@@ -201,4 +240,34 @@ test("지난 기록이 이번 작업 범위로 딸려 들어가지 않게 못박
 
   assert.match(prompt, /지난 기록은 맥락일 뿐이다/);
   assert.match(prompt, /이번 작업의 범위에는 지금 요청에서 나온 것만 담아라/);
+});
+
+// 텔레그램은 봇 API로 새 봇 계정을 못 만든다 — 그래서 "새 에이전트"는 "!이름 지시" 태그로
+// 기존 봇 위의 페르소나를 부르는 방식으로 구현했다.
+test("!페르소나이름 지시 형태에서 이름과 나머지 지시문을 뽑아낸다", () => {
+  const tag = extractPersonaTag("!연구원 최신 AI 트렌드 조사해줘");
+  assert.deepEqual(tag, { personaName: "연구원", remainingText: "최신 AI 트렌드 조사해줘" });
+});
+
+test("페르소나 태그가 없으면 undefined 다", () => {
+  assert.equal(extractPersonaTag("로그인 버그 고쳐줘"), undefined);
+  assert.equal(extractPersonaTag("!"), undefined, "이름 없이 느낌표만 있으면 태그가 아니다");
+  assert.equal(extractPersonaTag("!연구원"), undefined, "지시문 없이 이름만 있으면 태그가 아니다");
+});
+
+test("페르소나가 지목되면 프롬프트에 담당·지시가 실리고 ASSIGNEE 를 못박는다", () => {
+  const prompt = buildLeaderPlanningPrompt({
+    turns: [],
+    triggeringText: "최신 AI 트렌드 조사해줘",
+    persona: { name: "연구원", baseRole: "claude_leader", instructions: "업계 동향을 조사하고 요약해서 보고한다" }
+  });
+
+  assert.match(prompt, /등록된 페르소나 "연구원"를 지목했다/);
+  assert.match(prompt, /업계 동향을 조사하고 요약해서 보고한다/);
+  assert.match(prompt, /ASSIGNEE 는 반드시 claude_leader로 정하라/);
+});
+
+test("페르소나가 없으면 그 문단 자체가 프롬프트에 없다", () => {
+  const prompt = buildLeaderPlanningPrompt({ turns: [], triggeringText: "로그인 버그 고쳐줘" });
+  assert.doesNotMatch(prompt, /지목했다/);
 });

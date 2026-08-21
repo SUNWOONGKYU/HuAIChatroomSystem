@@ -461,7 +461,7 @@ export const BASELINE = {
   "FR-005": "pass", "FR-006": "partial", "FR-007": "pass", "FR-008": "pass",
   "FR-009": "partial", "FR-010": "partial", "FR-011": "missing", "FR-012": "partial",
   "FR-013": "pass", "FR-014": "partial", "FR-015": "pass", "FR-016": "partial",
-  "FR-017": "partial", "FR-018": "missing", "FR-019": "pass", "FR-020": "partial",
+  "FR-017": "partial", "FR-018": "partial", "FR-019": "pass", "FR-020": "partial",
   "H-01": "pass", "H-02": "pass", "H-03": "pass", "H-04": "partial",
   "H-05": "missing", "H-06": "pass", "H-07": "pass", "H-08": "partial",
   "H-09": "pass", "H-10": "partial", "H-11": "pass", "H-12": "partial",

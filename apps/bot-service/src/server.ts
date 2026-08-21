@@ -101,6 +101,10 @@ async function maybeStartTelegramPolling(
           deps: {
             onIgnored(botUsername, reason) {
               if (reason !== "bot-message-ignored") console.log(JSON.stringify({ type: "telegram_polling_ignored", botUsername, reason }));
+            },
+            attachmentsDir: env.BOT_SERVICE_ATTACHMENTS_DIR,
+            onAttachmentError(error) {
+              console.error(`telegram-attachment-download-failed:${maskServerError(error)}`);
             }
           }
         });

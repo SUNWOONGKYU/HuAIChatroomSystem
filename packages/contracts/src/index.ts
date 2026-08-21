@@ -38,7 +38,9 @@ export type TelegramCommandName =
   | "/verify"
   | "/done"
   | "/cancel"
-  | "/help";
+  | "/help"
+  | "/newagent"
+  | "/agents";
 
 export type TelegramCommand = {
   name: TelegramCommandName;
@@ -514,7 +516,9 @@ export const knownCommands: readonly TelegramCommandName[] = [
   "/verify",
   "/done",
   "/cancel",
-  "/help"
+  "/help",
+  "/newagent",
+  "/agents"
 ] as const;
 
 export function isKnownCommand(value: string): value is TelegramCommandName {

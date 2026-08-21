@@ -43,6 +43,26 @@ create table if not exists huai_ai_actors (
   unique (room_id, role)
 );
 
+-- 방장이 새 에이전트(페르소나)를 코드 배포 없이 추가할 수 있게 한다. 텔레그램 봇 API로는
+-- 새 봇 계정을 만들 수 없어서(사람이 @BotFather 에서 직접 만들어야 함) 실행 담당 두 봇
+-- (claude_leader/codex_leader) 위에 이름 붙은 페르소나를 얹는 방식으로 한다. 위 4역할
+-- 고정 상태머신은 건드리지 않는다.
+create table if not exists huai_agent_personas (
+  persona_id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references huai_rooms(room_id) on delete cascade,
+  persona_name text not null,
+  base_role text not null,
+  instructions text not null,
+  created_by_telegram_user_id bigint,
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  constraint huai_agent_personas_base_role_check check (base_role in ('claude_leader', 'codex_leader')),
+  constraint huai_agent_personas_status_check check (status in ('active', 'inactive')),
+  unique (room_id, persona_name)
+);
+
+create index if not exists huai_agent_personas_room_id_idx on huai_agent_personas (room_id);
+
 create table if not exists huai_telegram_bots (
   telegram_bot_id uuid primary key default gen_random_uuid(),
   telegram_bot_user_id bigint unique,
@@ -169,6 +189,9 @@ create table if not exists huai_tasks (
   completion_criteria text not null,
   -- 이 작업이 시작된 포럼 주제. 없으면 주제 없이 만들어진 작업이다(일반 그룹/General).
   telegram_message_thread_id text,
+  -- "버전 N개 만들어줘" 병렬 변형 중 하나면 true — 공유 프로젝트 폴더가 아니라
+  -- 자기만의 격리된 git worktree 에서 실행된다(apps/local-gateway/src/worktree.ts).
+  use_isolated_worktree boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint huai_tasks_status_check check (status in ('proposal_pending', 'proposal_revision_requested', 'proposal_rejected', 'scheduled', 'waiting_dependencies', 'queued_for_gateway', 'in_progress', 'mid_approval_pending', 'paused_by_owner', 'verification_pending', 'verification_in_progress', 'revision_requested', 'revision_in_progress', 'reverification_pending', 'commander_completion_pending', 'completion_approval_pending', 'owner_supplement_requested', 'completed', 'cancel_requested', 'cancelled', 'failed_retryable', 'blocked', 'rejected_or_cancelled'))

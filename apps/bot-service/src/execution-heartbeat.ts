@@ -18,6 +18,11 @@ export type InFlightExecution = {
   startedAtMs: number;
   // 포럼 주제 번호. 진행 표시도 지시가 오간 주제에 떠야 한다.
   messageThreadId?: string;
+  // 소대장 판단(리더 planning) 단계인지, 승인된 실제 작업 실행 단계인지.
+  // 파이프라인은 이 둘을 순서대로 거치는데, 각각 별도의 outbox 행이라 planning 행이
+  // 끝나고 실행 행이 아직 안 만들어진 찰나에는 두 단계 사이 빈틈이 생긴다. 이 빈틈을
+  // "전체가 끝났다"로 오판하지 않으려면 방금 사라진 게 어느 단계였는지 알아야 한다.
+  isPlanning?: boolean;
 };
 
 export type ExecutionHeartbeatPorts = {
@@ -30,7 +35,9 @@ export type ExecutionHeartbeatPorts = {
 };
 
 // 방마다 진행 표시 메시지 하나. 프로세스가 죽으면 잊히고, 다음 실행 때 새로 만든다.
-export type ProgressMessages = Map<string, { messageId: string; lastText: string }>;
+// lastSeenAtMs/lastKind 는 "지금 막 사라졌다" 판정에 유예시간을 주고, 사라진 것이
+// planning 이었는지 실제 실행이었는지 구분하는 데 쓴다.
+export type ProgressMessages = Map<string, { messageId: string; lastText: string; lastSeenAtMs: number; lastKind: "planning" | "execution" }>;
 
 export function renderProgressText(elapsedMs: number): string {
   return `⏳ 작업 중 · ${formatElapsed(elapsedMs)} 경과`;
@@ -38,20 +45,38 @@ export function renderProgressText(elapsedMs: number): string {
 
 export const PROGRESS_DONE_TEXT = "✅ 작업이 끝났습니다. 결과를 정리해 올리겠습니다.";
 
+// 소대장 판단(리더 planning) 단계만 끝났을 때 쓰는 문구. 아직 승인·실제 실행 단계가
+// 남아 있으므로 "끝났다"고 말하면 안 된다 — 다음 단계가 이어질 것을 알려준다.
+export const PROGRESS_PLANNING_DONE_TEXT = "🧭 판단을 마쳤습니다. 다음 단계(승인/실행)를 준비 중입니다.";
+
+// outbox 행 사이 빈틈(다음 단계 행이 아직 안 만들어진 찰나)을 "전체 종료"로 오판하지
+// 않기 위한 유예시간. 하트비트 주기(기본 4초)보다 넉넉히 크게 잡는다.
+const GONE_GRACE_MS = 8000;
+
 export type ExecutionHeartbeatHandle = { stop(): void };
 
 // 같은 방에서 여러 건이 동시에 돌아도 표시는 하나면 된다. 가장 오래 걸린 것을 기준으로
 // 삼는다 — 방장이 알고 싶은 것은 "제일 오래 기다린 게 얼마나 됐나"다.
-export function summarizeByChat(executions: readonly InFlightExecution[]): Map<string, number> {
-  const oldestByChat = new Map<string, number>();
+//
+// kind 는 "실제 실행이 하나라도 섞여 있으면 execution" 으로 판정한다. planning 행
+// 하나만 도는 방은 아직 판단 단계라 kind: "planning" — 이 행이 사라지는 순간을
+// "전체 종료"로 오인하면 안 되기 때문이다.
+export function summarizeByChat(executions: readonly InFlightExecution[]): Map<string, { startedAtMs: number; kind: "planning" | "execution" }> {
+  const byChat = new Map<string, { startedAtMs: number; kind: "planning" | "execution" }>();
   for (const execution of executions) {
     if (!execution.telegramChatId) continue;
-    const previous = oldestByChat.get(execution.telegramChatId);
-    if (previous === undefined || execution.startedAtMs < previous) {
-      oldestByChat.set(execution.telegramChatId, execution.startedAtMs);
+    const kind: "planning" | "execution" = execution.isPlanning ? "planning" : "execution";
+    const previous = byChat.get(execution.telegramChatId);
+    if (!previous) {
+      byChat.set(execution.telegramChatId, { startedAtMs: execution.startedAtMs, kind });
+      continue;
     }
+    byChat.set(execution.telegramChatId, {
+      startedAtMs: Math.min(previous.startedAtMs, execution.startedAtMs),
+      kind: previous.kind === "execution" || kind === "execution" ? "execution" : "planning"
+    });
   }
-  return oldestByChat;
+  return byChat;
 }
 
 export function formatElapsed(elapsedMs: number): string {
@@ -72,7 +97,7 @@ export async function runExecutionHeartbeatOnce(
     executions.filter((execution) => execution.messageThreadId).map((execution) => [execution.telegramChatId, execution.messageThreadId])
   );
 
-  for (const [chatId, startedAtMs] of byChat) {
+  for (const [chatId, { startedAtMs, kind }] of byChat) {
     // 한 방이 실패해도 다른 방 표시는 계속돼야 한다.
     try {
       await ports.sendTypingAction(chatId);
@@ -85,9 +110,11 @@ export async function runExecutionHeartbeatOnce(
       const existing = progress.get(chatId);
       if (!existing) {
         const messageId = await ports.sendProgressMessage?.(chatId, text, threadByChat.get(chatId));
-        if (messageId) progress.set(chatId, { messageId, lastText: text });
+        if (messageId) progress.set(chatId, { messageId, lastText: text, lastSeenAtMs: nowMs, lastKind: kind });
         continue;
       }
+      existing.lastSeenAtMs = nowMs;
+      existing.lastKind = kind;
       // 같은 글자로 고치면 Telegram 이 거절한다. 초가 바뀔 때만 보낸다.
       if (existing.lastText === text) continue;
       await ports.editProgressMessage?.(chatId, existing.messageId, text);
@@ -99,8 +126,27 @@ export async function runExecutionHeartbeatOnce(
 
   // 끝난 방의 표시는 끝났다고 못박는다. 숫자가 멈춘 채로 남으면 방장은 그게 멈춘 건지
   // 아직 도는 건지 알 수 없다 — 표시를 붙인 이유가 사라진다.
+  //
+  // 단, outbox 행 사이 빈틈(다음 단계 행이 아직 안 만들어진 찰나)일 수 있으므로 두 가지로
+  // 방어한다. (1) 유예시간: 사라진 지 얼마 안 됐으면 아직 판단하지 않는다 — 곧 다음 단계
+  // 행이 생기면 다시 나타난다. (2) 단계 구분: 유예시간이 지나 진짜 끊긴 것으로 봐도,
+  // 방금까지 돌던 게 planning(소대장 판단) 뿐이었다면 "전체가 끝났다"가 아니라 "다음 단계
+  // 준비 중"이라고 말한다 — 승인·실제 실행이 아직 남아 있어서다.
   for (const [chatId, entry] of [...progress]) {
     if (byChat.has(chatId)) continue;
+    if (nowMs - entry.lastSeenAtMs < GONE_GRACE_MS) continue;
+
+    if (entry.lastKind === "planning") {
+      if (entry.lastText === PROGRESS_PLANNING_DONE_TEXT) continue;
+      try {
+        await ports.editProgressMessage?.(chatId, entry.messageId, PROGRESS_PLANNING_DONE_TEXT);
+        entry.lastText = PROGRESS_PLANNING_DONE_TEXT;
+      } catch {
+        // 이미 지워졌거나 편집이 막힌 메시지다. 다음 실행은 새 메시지로 시작한다.
+      }
+      continue;
+    }
+
     progress.delete(chatId);
     try {
       await ports.editProgressMessage?.(chatId, entry.messageId, PROGRESS_DONE_TEXT);

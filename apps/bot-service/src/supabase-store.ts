@@ -19,8 +19,15 @@ import { makeTelegramUpdateIdempotencyKey } from "./index.js";
 import { isForbiddenTransition, transitionTaskStatus, type TaskStatus, type WorkflowContext, type WorkflowEventType } from "../../../packages/workflow/src/index.js";
 import { summarizeSupabaseSendResult } from "../../../packages/supabase-runtime/src/index.js";
 import { isLeaderPlanningAttempt } from "../../../packages/orchestrator/src/index.js";
-import { buildLeaderPlanningPrompt, type RoomFacts, type RoomTurn } from "../../../packages/orchestrator/src/leader-planning.js";
+import {
+  buildLeaderPlanningPrompt,
+  extractPersonaTag,
+  type AgentPersona,
+  type RoomFacts,
+  type RoomTurn
+} from "../../../packages/orchestrator/src/leader-planning.js";
 import { buildMiniAppOpenKeyboard } from "../../../packages/telegram-ui/src/index.js";
+import { createNodeGitRunner, ensureWorktree } from "../../local-gateway/src/worktree.js";
 
 export type SupabaseStoreConfig = {
   url: string;
@@ -178,7 +185,8 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     const startedHydratedRows = await this.hydrateExecutionStartedMessages(outboxRows, roomId);
     const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows, roomId);
     const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows, roomId);
-    const hydratedOutboxRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
+    const taskQueryHydratedRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
+    const hydratedOutboxRows = await this.hydrateAgentPersonaRows(taskQueryHydratedRows, roomId);
     // 현황판 행은 주제당 하나뿐이라 두 번째 메시지부터는 반드시 이미 존재한다. 아래 배치
     // 삽입은 "행 하나라도 이미 있으면 전체 실패"라서, 같이 넣으면 그 주제의 모든 처리가
     // 멎는다(라이브에서 outbox-idempotency-conflict 로 제안 메시지가 통째로 안 나갔다).
@@ -215,7 +223,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   // 실행 중 표시("…이 입력 중")를 유지하려면 어느 방이 도는지 알아야 한다. 별도 상태를
   // 만들지 않고 huai_outbox 를 그대로 읽는다 — 게이트웨이가 리스해서 processing 인 행이
   // 곧 실행 중인 것이고, 끝나면 sent/dead 로 바뀌어 표시도 자연히 멎는다.
-  async listInFlightExecutions(): Promise<Array<{ telegramChatId: string; startedAtMs: number }>> {
+  async listInFlightExecutions(): Promise<Array<{ telegramChatId: string; startedAtMs: number; isPlanning: boolean }>> {
     const rows = await this.client
       // 리스 전(pending)·재시도 대기(retry_pending)도 실행 중으로 친다.
       //
@@ -228,11 +236,12 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return rows
       .map((row) => {
         const telegramChatId = typeof row.payload?.telegramChatId === "string" ? row.payload.telegramChatId : "";
-        const request = row.payload?.executionRequest as { telegramMessageThreadId?: unknown } | undefined;
+        const request = row.payload?.executionRequest as { telegramMessageThreadId?: unknown; attemptId?: unknown } | undefined;
         const messageThreadId = typeof request?.telegramMessageThreadId === "string" ? request.telegramMessageThreadId : undefined;
         // 언제부터 돌았는지는 리스한 시각이 가장 가깝다. 없으면 행이 생긴 시각으로 대체한다.
         const startedAt = Date.parse(String(row.locked_at ?? row.created_at ?? ""));
-        return { telegramChatId, messageThreadId, startedAtMs: Number.isFinite(startedAt) ? startedAt : Date.now() };
+        const isPlanning = typeof request?.attemptId === "string" && isLeaderPlanningAttempt(request.attemptId);
+        return { telegramChatId, messageThreadId, startedAtMs: Number.isFinite(startedAt) ? startedAt : Date.now(), isPlanning };
       })
       .filter((execution) => execution.telegramChatId.length > 0);
   }
@@ -452,7 +461,12 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         hydrated.push(row);
         continue;
       }
-      const triggeringText = typeof row.payload.triggeringText === "string" ? row.payload.triggeringText : "";
+      const rawTriggeringText = typeof row.payload.triggeringText === "string" ? row.payload.triggeringText : "";
+      // "!페르소나이름 지시" 형태면 등록된 페르소나를 찾아 프롬프트에 실어준다. 못 찾으면
+      // 태그를 떼지 않고 그대로 평범한 요청으로 취급한다 — 오타로 지시 자체가 사라지면 안 된다.
+      const personaTag = extractPersonaTag(rawTriggeringText);
+      const persona = personaTag ? await this.fetchAgentPersona(roomId, personaTag.personaName) : undefined;
+      const triggeringText = persona && personaTag ? personaTag.remainingText : rawTriggeringText;
       const telegramChatId = typeof row.payload.telegramChatId === "string" ? row.payload.telegramChatId : undefined;
       const turns = telegramChatId ? await this.fetchRecentRoomTurns(telegramChatId, roomId) : [];
       const leader = await this.fetchLeaderActor(roomId);
@@ -463,7 +477,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
           ...row.payload,
           executionRequest: {
             ...request,
-            prompt: buildLeaderPlanningPrompt({ turns, triggeringText, facts }),
+            prompt: buildLeaderPlanningPrompt({ turns, triggeringText, facts, persona }),
             ...(leader?.actor_id ? { actorId: leader.actor_id } : {}),
             ...(leader?.cli_session_id ? { resumeSessionId: leader.cli_session_id } : {})
           }
@@ -615,7 +629,15 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         ? actorsByRole.get("codex_leader") ?? actorsByRole.get("claude_leader")
         : hint.requestedActorRole ? actorsByRole.get(hint.requestedActorRole) : undefined;
       const taskId = await this.ensureApprovedProposalTask(proposalId, hint, primaryActor?.actor_id, roomId);
-      const taskExecutionRequest = { ...executionRequest, taskId, sourceProposalId: proposalId };
+      const isolatedProjectPath = hint.useIsolatedWorktree && typeof executionRequest.projectPath === "string"
+        ? await this.ensureIsolatedWorktree(taskId, executionRequest.projectPath)
+        : undefined;
+      const taskExecutionRequest = {
+        ...executionRequest,
+        taskId,
+        sourceProposalId: proposalId,
+        ...(isolatedProjectPath ? { projectPath: isolatedProjectPath } : {})
+      };
       if (hint.executionMode === "multi_ai_review") {
         hydrated.push(...buildMultiAiExecutionRows(row, taskExecutionRequest, hint, actorsByRole));
         continue;
@@ -640,6 +662,26 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return hydrated;
   }
 
+  // "버전 N개" 변형은 공유 프로젝트 폴더가 아니라 자기만의 git worktree 에서 돈다 —
+  // 안 그러면 변형끼리 같은 파일을 밟는다(이 격리가 없으면 병렬 변형의 존재 이유가 없다).
+  // taskId 하나마다 워크트리 하나(variantIndex 는 항상 1 — 여기 도달한 시점에 이미
+  // "제안 1개 = 변형 1개 = 작업 1개"로 갈라져 있어서 taskId 자체가 이미 유일하다).
+  // 실패해도(예: git 오류) 실행을 막지 않는다 — 공유 폴더로 폴백한다. 최악의 경우도
+  // "격리가 덜 됐다"이지 "작업이 아예 안 됐다"가 아니다.
+  private async ensureIsolatedWorktree(taskId: string, repoPath: string): Promise<string | undefined> {
+    try {
+      const handle = await ensureWorktree({ runner: createNodeGitRunner(), repoPath, taskId, variantIndex: 1 });
+      return handle.path;
+    } catch (error) {
+      console.error(JSON.stringify({
+        type: "isolated_worktree_create_failed",
+        taskId,
+        reason: maskSensitiveText(error instanceof Error ? error.message : String(error))
+      }));
+      return undefined;
+    }
+  }
+
   private async fetchProposalExecutionHints(proposalIds: readonly string[], roomId: string): Promise<Map<string, ProposalExecutionHint>> {
     if (proposalIds.length === 0) return new Map();
     // room_id 필터 없이 전역 최근 200건만 보면, 방이 늘수록 이 창이 남의 방 제안으로
@@ -653,7 +695,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       const proposalId = typeof row.payload.proposalId === "string" ? row.payload.proposalId : undefined;
       if (!proposalId || !wanted.has(proposalId) || hints.has(proposalId)) continue;
       const prompt = proposalPromptFromPayload(row.payload);
-      if (prompt) hints.set(proposalId, { prompt, messageThreadId: optionalPayloadString(row.payload.messageThreadId), title: proposalTitleFromPayload(row.payload), requestedActorRole: proposalActorRoleFromPayload(row.payload), executionMode: proposalExecutionModeFromPayload(row.payload), rawText: proposalRequestTextFromPayload(row.payload), purpose: proposalFieldFromPayload(row.payload, "purpose"), scope: proposalFieldFromPayload(row.payload, "scope"), completionCriteria: proposalFieldFromPayload(row.payload, "completionCriteria") });
+      if (prompt) hints.set(proposalId, { prompt, messageThreadId: optionalPayloadString(row.payload.messageThreadId), title: proposalTitleFromPayload(row.payload), requestedActorRole: proposalActorRoleFromPayload(row.payload), executionMode: proposalExecutionModeFromPayload(row.payload), rawText: proposalRequestTextFromPayload(row.payload), purpose: proposalFieldFromPayload(row.payload, "purpose"), scope: proposalFieldFromPayload(row.payload, "scope"), completionCriteria: proposalFieldFromPayload(row.payload, "completionCriteria"), useIsolatedWorktree: row.payload.useIsolatedWorktree === true });
     }
     return hints;
   }
@@ -730,7 +772,8 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         scope: hint.scope ?? hint.rawText ?? hint.title,
         completion_criteria: hint.completionCriteria ?? DEFAULT_COMPLETION_CRITERIA,
         // 현황판을 주제별로 가르는 값. 없으면 주제 없이 만들어진 작업이다.
-        telegram_message_thread_id: hint.messageThreadId ?? null
+        telegram_message_thread_id: hint.messageThreadId ?? null,
+        use_isolated_worktree: hint.useIsolatedWorktree ?? false
       },
       prefer: "return=representation"
     });
@@ -763,6 +806,92 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       hydrated.push({ ...row, payload: { ...row.payload, text, ...(keyboard ? { keyboard } : {}) } });
     }
     return hydrated;
+  }
+
+  // /newagent·/agents 는 오케스트레이터가 표식만 실어 보내고, 실제 DB 기록·조회는
+  // 여기서 한다(오케스트레이터는 DB 를 안 읽는 순수 함수라서). 새 봇 계정을 만들지 않고
+  // 기존 실행 담당 봇(claude_leader/codex_leader) 위에 이름 붙은 페르소나를 얹는다 —
+  // huai_ai_actors 의 role 4종 고정 상태머신은 건드리지 않는다.
+  private async hydrateAgentPersonaRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
+    const hydrated: OutboxInsertRow[] = [];
+    for (const row of rows) {
+      const command = agentPersonaCommandPayload(row.payload);
+      if (!command || row.target_kind !== "telegram_bot") {
+        hydrated.push(row);
+        continue;
+      }
+
+      const text = command.action === "create"
+        ? await this.createAgentPersona(roomId, command)
+        : await this.renderAgentPersonaList(roomId);
+      hydrated.push({ ...row, payload: { ...row.payload, text } });
+    }
+    return hydrated;
+  }
+
+  private async fetchAgentPersona(roomId: string, personaName: string): Promise<AgentPersona | undefined> {
+    const rows = await this.client
+      .request(
+        "GET",
+        "/huai_agent_personas?room_id=eq." + encodeURIComponent(roomId) +
+          "&persona_name=eq." + encodeURIComponent(personaName) +
+          "&status=eq.active&select=persona_name,base_role,instructions&limit=1"
+      )
+      .then((response) => response.json<Array<{ persona_name: string; base_role: string; instructions: string }>>());
+    const row = rows[0];
+    if (!row || (row.base_role !== "claude_leader" && row.base_role !== "codex_leader")) return undefined;
+    return { name: row.persona_name, baseRole: row.base_role, instructions: row.instructions };
+  }
+
+  private async createAgentPersona(
+    roomId: string,
+    command: { personaName: string; baseRole: string; instructions: string; createdByTelegramUserId?: string }
+  ): Promise<string> {
+    const response = await this.client.request("POST", "/huai_agent_personas", {
+      body: {
+        room_id: roomId,
+        persona_name: command.personaName,
+        base_role: command.baseRole,
+        instructions: command.instructions,
+        created_by_telegram_user_id: command.createdByTelegramUserId
+          ? toBigIntString(command.createdByTelegramUserId, "created_by_telegram_user_id")
+          : null
+      },
+      prefer: "return=minimal"
+    });
+
+    if (response.status === 409) {
+      return `이미 "${command.personaName}" 페르소나가 있습니다. 다른 이름을 쓰거나 기존 것을 그대로 사용하세요.`;
+    }
+    await response.expectOk();
+
+    const roleLabel = command.baseRole === "claude_leader" ? "ClaudeBot" : "CodexBot";
+    return [
+      `페르소나 "${command.personaName}" 등록 완료 (담당: ${roleLabel}).`,
+      `이제 리더봇을 부를 때 "!${command.personaName} <지시>" 형식으로 쓰면 이 페르소나로 처리됩니다.`,
+      `예: @leader_chatroom_bot !${command.personaName} 최신 소식 조사해줘`
+    ].join("\n");
+  }
+
+  private async renderAgentPersonaList(roomId: string): Promise<string> {
+    const rows = await this.client
+      .request(
+        "GET",
+        "/huai_agent_personas?room_id=eq." + encodeURIComponent(roomId) +
+          "&status=eq.active&select=persona_name,base_role,instructions&order=created_at.asc"
+      )
+      .then((response) => response.json<Array<{ persona_name: string; base_role: string; instructions: string }>>());
+
+    if (rows.length === 0) {
+      return "등록된 페르소나가 없습니다.\n/newagent <이름> <claude_leader|codex_leader> <할 일> 로 추가할 수 있습니다.";
+    }
+
+    const lines = [`등록된 페르소나 (${rows.length}개)`];
+    for (const row of rows) {
+      const roleLabel = row.base_role === "claude_leader" ? "ClaudeBot" : "CodexBot";
+      lines.push("", `!${row.persona_name} (담당: ${roleLabel})`, row.instructions.slice(0, 200));
+    }
+    return lines.join("\n");
   }
 
   // Phase 3: /tasks 를 평문 나열에서 상태별 그룹 + 경과시간 + 담당자 표시로 바꾼다.
@@ -1182,6 +1311,9 @@ type ProposalExecutionHint = {
   purpose?: string;
   scope?: string;
   completionCriteria?: string;
+  // "버전 N개 만들어줘" 변형이면 true — 공유 프로젝트 폴더가 아니라 자기만의 격리된
+  // git worktree 에서 실행돼야 한다(huai_tasks.use_isolated_worktree).
+  useIsolatedWorktree?: boolean;
 };
 
 type OutboxInsertRow = {
@@ -1261,6 +1393,25 @@ function taskQueryPayload(payload: Record<string, unknown>): TaskQueryPayload | 
   return undefined;
 }
 
+type AgentPersonaCommandPayload =
+  | { action: "create"; personaName: string; baseRole: string; instructions: string; createdByTelegramUserId?: string }
+  | { action: "list" };
+function agentPersonaCommandPayload(payload: Record<string, unknown>): AgentPersonaCommandPayload | undefined {
+  const value = payload.agentPersonaCommand;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const command = value as Record<string, unknown>;
+  if (command.action === "list") return { action: "list" };
+  if (command.action === "create") {
+    return {
+      action: "create",
+      personaName: typeof command.personaName === "string" ? command.personaName : "",
+      baseRole: typeof command.baseRole === "string" ? command.baseRole : "",
+      instructions: typeof command.instructions === "string" ? command.instructions : "",
+      createdByTelegramUserId: typeof command.createdByTelegramUserId === "string" ? command.createdByTelegramUserId : undefined
+    };
+  }
+  return undefined;
+}
 
 function formatTraceTime(value?: string | null): string {
   return value ? " · " + value : "";
@@ -1421,12 +1572,24 @@ function roomTurnFromRawUpdate(rawUpdate: Record<string, unknown>, ownerTelegram
   const from = message.from as Record<string, unknown> | undefined;
   if (from?.is_bot === true) return undefined;
   const text = typeof message.text === "string" ? message.text : typeof message.caption === "string" ? message.caption : "";
-  const trimmed = text.trim();
-  if (!trimmed) return undefined;
+  const attachmentNote = attachmentNoteFromMessage(message);
+  const combined = [text.trim(), attachmentNote].filter(Boolean).join("\n");
+  if (!combined) return undefined;
   const userId = from?.id === undefined ? undefined : String(from.id);
   const isOwner = Boolean(userId && ownerTelegramUserId && userId === ownerTelegramUserId);
   const speaker = isOwner ? "방장" : nameFromTelegramUser(from, userId);
-  return { speaker, text: maskSensitiveText(trimmed).slice(0, 500), isOwner };
+  return { speaker, text: maskSensitiveText(combined).slice(0, 500), isOwner };
+}
+
+// 다운로드에 성공한 첨부는 polling.ts 가 message._huaiLocalAttachments 에 로컬 경로를
+// 실어 저장해 둔다. 여기서 그 경로를 프롬프트에 노출해야 AI 실행기가 Read 로 열어 본다.
+function attachmentNoteFromMessage(message: Record<string, unknown>): string {
+  const attachments = message._huaiLocalAttachments as Array<{ path?: unknown; kind?: unknown }> | undefined;
+  if (!Array.isArray(attachments) || attachments.length === 0) return "";
+  return attachments
+    .filter((item) => typeof item.path === "string")
+    .map((item) => `[첨부 ${item.kind === "document" ? "파일" : "이미지"}: ${item.path}]`)
+    .join("\n");
 }
 
 function nameFromTelegramUser(from: Record<string, unknown> | undefined, userId: string | undefined): string {

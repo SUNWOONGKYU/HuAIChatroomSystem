@@ -115,7 +115,11 @@
     "archive:rooms": "node --env-file=.env.operation.local scripts/archive-room-conversations.mjs",
     "verify:archive-prune": "node --test scripts/prune-archived-rows.test.mjs",
     "distill:rooms": "node --env-file=.env.operation.local scripts/distill-room-memory.mjs",
-    "prune:archived": "node --env-file=.env.operation.local scripts/prune-archived-rows.mjs"
+    "prune:archived": "node --env-file=.env.operation.local scripts/prune-archived-rows.mjs",
+    "verify:agent-persona": "npm run build && node --test dist/packages/orchestrator/test/agent-persona.test.js",
+    "verify:worktree": "npm run build && node --test dist/apps/local-gateway/test/worktree.test.js",
+    "verify:screenshot": "npm run build && node --test dist/apps/local-gateway/test/screenshot.test.js",
+    "verify:gate47": "npm run verify:agent-persona && npm run verify:worktree && npm run verify:screenshot"
   },
   "workspaces": [
     "apps/*",
@@ -129,6 +133,7 @@
     "typescript": "5.9.2"
   },
   "dependencies": {
-    "grammy": "^1.45.1"
+    "grammy": "^1.45.1",
+    "playwright": "1.62.1"
   }
 }
