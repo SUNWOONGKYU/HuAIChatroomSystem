@@ -275,6 +275,19 @@
   }
   #decision-note.show { display: block; }
 
+  /* 인지부채 방지 퀴즈 — 완료 승인 전 이해도 확인용 객관식 3문항. */
+  .quiz-question { margin-bottom: 14px; }
+  .quiz-question p { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  .quiz-choice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .quiz-choice input { margin: 0; }
+
   /* 제안 섹션 — huai_tasks 기반 작업 현황판과 성격이 달라(아직 실행 시작 전) 탭/칸반과
      분리된 별도 섹션으로 둔다. 접었다 펼 수 있게 해서 제안이 없을 때 화면을 안 잡아먹는다. */
   #proposals-section {
@@ -435,6 +448,14 @@
         <ul id="detail-artifacts" class="artifact-list"></ul>
       </div>
       <p id="detail-hint" class="hint" hidden></p>
+      <div id="quiz-section" hidden>
+        <p class="hint">완료를 승인하기 전에, 무엇이 바뀌었는지 확인하는 문제 3개입니다.</p>
+        <div id="quiz-questions"></div>
+        <p id="quiz-feedback" class="hint" hidden></p>
+        <div class="action-row">
+          <button type="button" class="btn btn-accent" id="quiz-submit-btn" style="flex:1 1 100%;">제출</button>
+        </div>
+      </div>
       <div class="action-row" id="action-row" hidden></div>
       <div id="decision-note"></div>
       <div class="action-row">
@@ -938,6 +959,11 @@
   var detailHint = document.getElementById("detail-hint");
   var detailArtifactsField = document.getElementById("detail-artifacts-field");
   var detailArtifacts = document.getElementById("detail-artifacts");
+  var quizSection = document.getElementById("quiz-section");
+  var quizQuestions = document.getElementById("quiz-questions");
+  var quizFeedback = document.getElementById("quiz-feedback");
+  var quizSubmitBtn = document.getElementById("quiz-submit-btn");
+  var currentQuizTaskId = "";
 
   function openDetail(task) {
     detailTitle.textContent = task.title || "(제목 없음)";
@@ -954,12 +980,112 @@
     renderArtifacts(task.artifacts || []);
     decisionNote.className = "";
     decisionNote.textContent = "";
-    renderActions(task);
+    resolveQuizThenActions(task);
     overlayEl.classList.add("open");
+  }
+
+  // 완료 승인 가능한 작업만 퀴즈 여부를 물어본다 — 그 외 상태는 애초에 최종승인
+  // 버튼이 없으니 퀴즈도 의미가 없다(renderActions 의 task.decidable 판정과 동일 전제).
+  function resolveQuizThenActions(task) {
+    quizSection.hidden = true;
+    quizFeedback.hidden = true;
+    quizFeedback.textContent = "";
+    currentQuizTaskId = task.taskId;
+
+    if (!task.decidable) {
+      renderActions(task);
+      return;
+    }
+
+    actionRow.hidden = true;
+    detailHint.hidden = true;
+    apiFetch("/miniapp-quiz?taskId=" + encodeURIComponent(task.taskId), { method: "GET" })
+      .then(function (res) {
+        if (currentQuizTaskId !== task.taskId) return; // 그 사이 다른 작업을 열었다.
+        if (!res.hasQuiz || res.passed) {
+          renderActions(task);
+          return;
+        }
+        renderQuiz(task, res.questions);
+      })
+      .catch(function () {
+        // 퀴즈 조회 실패는 승인 자체를 막을 이유가 아니다 — 어차피 miniapp-approve 가
+        // 서버에서 다시 한 번 강제하므로, 여기서는 평소대로 버튼을 보여준다.
+        if (currentQuizTaskId === task.taskId) renderActions(task);
+      });
+  }
+
+  function renderQuiz(task, questions) {
+    quizQuestions.innerHTML = "";
+    questions.forEach(function (question, qIndex) {
+      var block = document.createElement("div");
+      block.className = "quiz-question";
+      var qText = document.createElement("p");
+      qText.textContent = (qIndex + 1) + ". " + question.q;
+      block.appendChild(qText);
+      question.choices.forEach(function (choice, cIndex) {
+        var label = document.createElement("label");
+        label.className = "quiz-choice";
+        var input = document.createElement("input");
+        input.type = "radio";
+        input.name = "quiz-q" + qIndex;
+        input.value = String(cIndex);
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(choice));
+        block.appendChild(label);
+      });
+      quizQuestions.appendChild(block);
+    });
+    quizSection.hidden = false;
+    quizSubmitBtn.disabled = false;
+    quizSubmitBtn.textContent = "제출";
+
+    quizSubmitBtn.onclick = function () {
+      var answers = [];
+      for (var i = 0; i < questions.length; i += 1) {
+        var checked = quizQuestions.querySelector('input[name="quiz-q' + i + '"]:checked');
+        if (!checked) {
+          quizFeedback.hidden = false;
+          quizFeedback.textContent = "모든 문항에 답해주세요.";
+          return;
+        }
+        answers.push(Number(checked.value));
+      }
+      quizSubmitBtn.disabled = true;
+      quizSubmitBtn.textContent = "채점 중…";
+      quizFeedback.hidden = true;
+
+      apiFetch("/miniapp-quiz", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ taskId: task.taskId, answers: answers })
+      })
+        .then(function (res) {
+          if (res.passed) {
+            quizSection.hidden = true;
+            tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
+            renderActions(task);
+            return;
+          }
+          quizSubmitBtn.disabled = false;
+          quizSubmitBtn.textContent = "다시 제출";
+          quizFeedback.hidden = false;
+          quizFeedback.textContent = "3문항 중 " + res.correctCount + "문항 정답입니다. " +
+            (res.summary ? "설명: " + res.summary : "다시 확인하고 골라주세요.");
+          tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("error");
+        })
+        .catch(function () {
+          quizSubmitBtn.disabled = false;
+          quizSubmitBtn.textContent = "다시 제출";
+          quizFeedback.hidden = false;
+          quizFeedback.textContent = "채점에 실패했습니다. 다시 시도해주세요.";
+        });
+    };
   }
 
   function closeDetail() {
     overlayEl.classList.remove("open");
+    currentQuizTaskId = "";
   }
   closeDetailBtn.addEventListener("click", closeDetail);
   overlayEl.addEventListener("click", function (e) {

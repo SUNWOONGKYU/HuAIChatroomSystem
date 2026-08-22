@@ -576,6 +576,33 @@ test("제안 단계 id 형태가 바뀌어도 작업 명세가 실행자에게 �
   assert.match(prompt, /토큰 만료 로직 확인/);
 });
 
+// 인지부채 방지 퀴즈(Orca/Buzz 벤치마킹) — 완료 보고에 QUIZ 블록을 실어 달라는 지시가
+// 실행 프롬프트 끝에 항상 붙어야 한다. packages/supabase-runtime 의
+// extractTaskQuizFromEvents 가 이 마커를 그대로 찾는다.
+test("실행 프롬프트에는 항상 QUIZ_START/QUIZ_END 이해도 확인 지시가 함께 실린다", async () => {
+  const proposalId = "p_quizmarker0001";
+  const taskId = "77777777-7777-4777-8777-777777777777";
+  const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
+    jsonResponse(200, [{ payload: { proposalId, title: "테스트", rawText: "테스트 작업", purpose: "목적", scope: "범위", completionCriteria: "완료 기준" } }]),
+    jsonResponse(200, []),
+    jsonResponse(201, [{ task_id: taskId }]),
+    jsonResponse(201, [])
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  await store.commitTelegramInputResult(makeOutboxCommit(
+    "gateway:execution:quiz-marker",
+    { kind: "local_gateway", gatewayId: "gateway-local" },
+    { executionRequest: { taskId: proposalId, prompt: "Execute approved task " + proposalId } }
+  ));
+
+  const outboxInsert = calls.requests.find((request) => request.method === "POST" && /huai_outbox$/.test(request.url));
+  const prompt = String(outboxInsert?.body?.[0]?.payload?.executionRequest?.prompt ?? "");
+  assert.match(prompt, /QUIZ_START[\s\S]*QUIZ_END/, "완료 보고에 이해도 퀴즈를 요청하는 지시가 있어야 한다");
+  assert.match(prompt, /"correct":0/);
+});
+
 // humanTaskStatus() 를 없애고 TASK_STATUS_META 를 단일 출처로 통일했다. 이 결함이 특히 나빴던
 // 지점이 room facts — 소대장 판단 프롬프트에 방의 열린 작업 상태가 원문 snake_case 로 그대로
 // 들어가고 있었다(예: "mid_approval_pending"). 소대장이 그걸 읽고 판단해야 했다는 뜻이다.

@@ -119,7 +119,9 @@
     "verify:agent-persona": "npm run build && node --test dist/packages/orchestrator/test/agent-persona.test.js",
     "verify:worktree": "npm run build && node --test dist/apps/local-gateway/test/worktree.test.js",
     "verify:screenshot": "npm run build && node --test dist/apps/local-gateway/test/screenshot.test.js",
-    "verify:gate47": "npm run verify:agent-persona && npm run verify:worktree && npm run verify:screenshot"
+    "verify:gate47": "npm run verify:agent-persona && npm run verify:worktree && npm run verify:screenshot",
+    "verify:task-quiz": "npm run build && node --test dist/packages/supabase-runtime/test/task-quiz.test.js",
+    "verify:gate48": "npm run verify:task-quiz && npm run verify:gateway-report-rendering && npm run verify:supabase-store"
   },
   "workspaces": [
     "apps/*",

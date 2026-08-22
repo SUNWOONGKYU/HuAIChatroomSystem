@@ -211,6 +211,107 @@ test("gateway failure report detects Claude limit before internal output is filt
   assert.equal(text.includes('{"type":"result"'), false);
   assert.equal(text.includes("weekly limit"), false);
 });
+// 인지부채 방지 퀴즈 — 파일을 실제로 바꾼 작업자 실행이 완료되면, 보고 끝에 실린
+// QUIZ_START/QUIZ_END 블록이 (1) huai_task_quizzes 에 저장되고 (2) 방으로 나가는
+// 보고 텍스트에서는 지워져야 한다(방장에게 원문 JSON이 그대로 보이면 안 된다).
+test("완료 보고의 QUIZ 블록은 huai_task_quizzes 에 저장되고 방 보고문에서는 사라진다", async () => {
+  const quiz = {
+    summary: "index.ts에 로그인 체크를 추가했습니다.",
+    questions: [
+      { q: "무엇을 추가했나요?", choices: ["로그인 체크", "삭제 로직", "캐시", "알림"], correct: 0 },
+      { q: "왜 필요했나요?", choices: ["보안", "속도", "디자인", "비용"], correct: 0 },
+      { q: "영향받는 파일은?", choices: ["index.ts", "README.md", "없음", "전체"], correct: 0 }
+    ]
+  };
+  const quizText = ["작업을 완료했습니다.", "QUIZ_START", JSON.stringify(quiz), "QUIZ_END"].join("\n");
+  const stdoutText = JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: quizText } });
+
+  const calls = makeFetchSequence();
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  const taskId = "11111111-1111-4111-8111-111111111111";
+  const roomId = "22222222-2222-4222-8222-222222222222";
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), taskId, roomId, reportBotRole: "codex_leader" },
+    status: "completed",
+    events: [
+      { type: "stdout", taskId, attemptId: "attempt-1", text: stdoutText },
+      { type: "artifact_collected", taskId, attemptId: "attempt-1", artifact: { path: "index.ts", sizeBytes: 10, checksum: "abc", version: "attempt-1" } }
+    ],
+    occurredAt: "2026-08-22T00:00:00.000Z"
+  });
+
+  const quizInsert = calls.requests.find((request) => request.method === "POST" && request.url.includes("/huai_task_quizzes"));
+  assert.ok(quizInsert, "expected a POST to huai_task_quizzes");
+  assert.equal(quizInsert!.body.task_id, taskId);
+  assert.equal(quizInsert!.body.room_id, roomId);
+  assert.equal(quizInsert!.body.summary, quiz.summary);
+  assert.deepEqual(quizInsert!.body.questions, quiz.questions);
+  assert.equal(quizInsert!.body.passed, false);
+
+  const reportInsert = calls.requests.find((request) => request.method === "POST" && request.url.includes("/huai_outbox") && request.body?.target_kind !== undefined);
+  const reportText = String(reportInsert?.body?.payload?.text ?? "");
+  assert.equal(reportText.includes("QUIZ_START"), false, "QUIZ 원문 JSON이 방 보고문에 새면 안 된다");
+  assert.match(reportText, /작업을 완료했습니다/, "본문 자체는 그대로 남아야 한다");
+});
+
+test("감사(auditor) 완료 실행에서는 퀴즈를 저장하지 않는다", async () => {
+  const quiz = {
+    summary: "요약",
+    questions: [
+      { q: "q1", choices: ["a", "b", "c", "d"], correct: 0 },
+      { q: "q2", choices: ["a", "b", "c", "d"], correct: 0 },
+      { q: "q3", choices: ["a", "b", "c", "d"], correct: 0 }
+    ]
+  };
+  const stdoutText = ["감사 완료.", "QUIZ_START", JSON.stringify(quiz), "QUIZ_END"].join("\n");
+
+  const calls = makeFetchSequence();
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  const taskId = "33333333-3333-4333-8333-333333333333";
+  const roomId = "44444444-4444-4444-8444-444444444444";
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), taskId, roomId, reportBotRole: "auditor" },
+    status: "completed",
+    events: [
+      { type: "stdout", taskId, attemptId: "attempt-1", text: stdoutText },
+      { type: "artifact_collected", taskId, attemptId: "attempt-1", artifact: { path: "index.ts", sizeBytes: 10, checksum: "abc", version: "attempt-1" } }
+    ],
+    occurredAt: "2026-08-22T00:00:00.000Z"
+  });
+
+  const quizInsert = calls.requests.find((request) => request.method === "POST" && request.url.includes("/huai_task_quizzes"));
+  assert.equal(quizInsert, undefined, "감사는 방장이 이해해야 할 변경이 아니다");
+});
+
+test("파일을 바꾸지 않은(조회성) 완료 실행에서는 QUIZ 블록이 있어도 저장하지 않는다", async () => {
+  const quiz = {
+    summary: "요약",
+    questions: [
+      { q: "q1", choices: ["a", "b", "c", "d"], correct: 0 },
+      { q: "q2", choices: ["a", "b", "c", "d"], correct: 0 },
+      { q: "q3", choices: ["a", "b", "c", "d"], correct: 0 }
+    ]
+  };
+  const stdoutText = ["README.md 줄 수: 86줄", "QUIZ_START", JSON.stringify(quiz), "QUIZ_END"].join("\n");
+
+  const calls = makeFetchSequence();
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  const taskId = "55555555-5555-4555-8555-555555555555";
+  const roomId = "66666666-6666-4666-8666-666666666666";
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), taskId, roomId, reportBotRole: "codex_leader" },
+    status: "completed",
+    events: [{ type: "stdout", taskId, attemptId: "attempt-1", text: stdoutText }],
+    occurredAt: "2026-08-22T00:00:00.000Z"
+  });
+
+  const quizInsert = calls.requests.find((request) => request.method === "POST" && request.url.includes("/huai_task_quizzes"));
+  assert.equal(quizInsert, undefined, "바꾼 파일이 없으면 이해도를 확인할 diff 자체가 없다");
+});
+
 function makeRequest(): ExecutionRequest {
   return {
     roomId: "room-1",

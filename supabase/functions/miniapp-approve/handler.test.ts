@@ -48,6 +48,7 @@ function makeDeps(overrides: Partial<ApproveHandlerDeps> = {}): ApproveHandlerDe
     checkProposalAlreadyDecided: async () => ({ data: false }),
     insertApproval: async () => ({ data: { approval_id: "appr-1" } }),
     insertEvent: async () => ({}),
+    fetchTaskQuizStatus: async () => ({ data: { hasQuiz: false, passed: false } }),
     ...overrides
   };
 }
@@ -422,4 +423,46 @@ test("제안 승인 — huai_events(miniapp_decision_recorded) payload에 propos
   assert.equal(eventPayload.action, "request_revision");
   assert.equal(eventPayload.decision, "revision_requested");
   assert.equal(eventPayload.reason, "더 구체화 필요");
+});
+
+// ── 인지부채 방지 퀴즈 게이트 (Orca/Buzz 벤치마킹) ──
+
+test("퀴즈가 있는데 통과 못 했으면 final_approve 는 409 quiz-not-passed", async () => {
+  let approvalInserted = false;
+  const deps = makeDeps({
+    fetchTaskQuizStatus: async () => ({ data: { hasQuiz: true, passed: false } }),
+    insertApproval: async () => { approvalInserted = true; return { data: { approval_id: "appr-x" } }; }
+  });
+  const res = await handleMiniappApproveRequest(req({ taskId: "task-1", action: "final_approve" }), deps);
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.error, "quiz-not-passed");
+  assert.equal(approvalInserted, false, "퀴즈를 안 풀었으면 승인 원장에 아예 기록되면 안 된다");
+});
+
+test("퀴즈를 통과했으면 final_approve 는 정상 처리된다", async () => {
+  const deps = makeDeps({ fetchTaskQuizStatus: async () => ({ data: { hasQuiz: true, passed: true } }) });
+  const res = await handleMiniappApproveRequest(req({ taskId: "task-1", action: "final_approve" }), deps);
+  assert.equal(res.status, 200);
+});
+
+test("퀴즈 행 자체가 없으면(파일 안 바꾼 작업) final_approve 는 게이트 없이 통과된다", async () => {
+  const deps = makeDeps({ fetchTaskQuizStatus: async () => ({ data: { hasQuiz: false, passed: false } }) });
+  const res = await handleMiniappApproveRequest(req({ taskId: "task-1", action: "final_approve" }), deps);
+  assert.equal(res.status, 200);
+});
+
+test("request_revision(보완요청)은 퀴즈를 통과하지 않았어도 막히지 않는다", async () => {
+  const deps = makeDeps({
+    fetchMembershipRole: async () => ({ data: { role: "owner" } }),
+    fetchTaskQuizStatus: async () => ({ data: { hasQuiz: true, passed: false } })
+  });
+  const res = await handleMiniappApproveRequest(req({ taskId: "task-1", action: "request_revision" }), deps);
+  assert.equal(res.status, 200);
+});
+
+test("퀴즈 상태 조회가 실패하면 500 (승인을 조용히 통과시키지 않는다)", async () => {
+  const deps = makeDeps({ fetchTaskQuizStatus: async () => ({ error: "network-error" }) });
+  const res = await handleMiniappApproveRequest(req({ taskId: "task-1", action: "final_approve" }), deps);
+  assert.equal(res.status, 500);
 });

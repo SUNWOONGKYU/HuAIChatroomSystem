@@ -653,7 +653,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
           executionRequest: {
             ...taskExecutionRequest,
             ...(actor ? { actorId: actor.actor_id, adapterType: actor.adapter_type, reportBotRole: actor.role } : {}),
-            prompt: hint.prompt
+            prompt: appendQuizInstruction(hint.prompt)
           }
         }
       });
@@ -1535,13 +1535,40 @@ function buildMultiAiExecutionRows(row: OutboxInsertRow, executionRequest: Recor
   const claude = actorsByRole.get("claude_leader");
   const codex = actorsByRole.get("codex_leader");
   const requestText = hint.rawText ?? hint.prompt;
-  if (claude) rows.push(buildRoleExecutionRow(row, executionRequest, "claude", claude, buildRoleSpecificPrompt("claude_leader", requestText), `${baseAttemptId}-claude`));
-  if (codex) rows.push(buildRoleExecutionRow(row, executionRequest, "codex", codex, buildRoleSpecificPrompt("codex_leader", requestText), `${baseAttemptId}-codex`));
-  return rows.length > 0 ? rows : [{ ...row, payload: { ...row.payload, executionRequest: { ...executionRequest, prompt: hint.prompt } } }];
+  if (claude) rows.push(buildRoleExecutionRow(row, executionRequest, "claude", claude, appendQuizInstruction(buildRoleSpecificPrompt("claude_leader", requestText)), `${baseAttemptId}-claude`));
+  if (codex) rows.push(buildRoleExecutionRow(row, executionRequest, "codex", codex, appendQuizInstruction(buildRoleSpecificPrompt("codex_leader", requestText)), `${baseAttemptId}-codex`));
+  return rows.length > 0 ? rows : [{ ...row, payload: { ...row.payload, executionRequest: { ...executionRequest, prompt: appendQuizInstruction(hint.prompt) } } }];
 }
 
 function buildRoleExecutionRow(row: OutboxInsertRow, executionRequest: Record<string, unknown>, suffix: string, actor: ExecutionActorRow, prompt: string, attemptId: string): OutboxInsertRow {
   return { ...row, idempotency_key: row.idempotency_key + ":" + suffix, payload: { ...row.payload, executionRequest: { ...executionRequest, attemptId, actorId: actor.actor_id, adapterType: actor.adapter_type, prompt, reportBotRole: actor.role } } };
+}
+
+// 파일을 실제로 바꾼 작업만, 완료 보고 끝에 이해도 확인용 객관식 3문항을 실어 달라고
+// 요청한다 — 방장이 "완료" 버튼을 누르기 전에 무엇이 바뀌었는지 실제로 이해했는지
+// 확인하기 위함(인지부채 방지, Orca/Buzz 벤치마킹). packages/supabase-runtime 의
+// extractTaskQuizFromEvents 가 이 블록을 파싱하고, huai_task_quizzes 로 저장돼
+// miniapp-approve 가 통과 여부를 강제한다. 조회성 작업(파일 변경 없음)에는 의미가
+// 없어 생략을 허용한다 — 어차피 저장 쪽도 producedRealArtifacts 로 한 번 더 거른다.
+function appendQuizInstruction(prompt: string): string {
+  return [
+    prompt,
+    "",
+    "---",
+    "파일을 실제로 만들거나 바꿨다면(조회·설명뿐이었다면 이 블록은 생략하세요), 보고의",
+    "맨 끝에 아래 형식 그대로 한 블록을 추가하세요. 방장이 변경 내용을 이해했는지",
+    "확인하는 객관식 3문항입니다 — 방장에게 그대로 보이는 문장이니 자연스러운 한국어로",
+    "쓰세요.",
+    "QUIZ_START",
+    '{"summary":"무엇을 왜 바꿨는지 3~5문장 요약","questions":[',
+    '{"q":"질문1","choices":["보기1","보기2","보기3","보기4"],"correct":0},',
+    '{"q":"질문2","choices":["보기1","보기2","보기3","보기4"],"correct":0},',
+    '{"q":"질문3","choices":["보기1","보기2","보기3","보기4"],"correct":0}',
+    "]}",
+    "QUIZ_END",
+    "correct 는 0부터 시작하는 정답 인덱스입니다. QUIZ_START 와 QUIZ_END 사이에는",
+    "유효한 JSON 외에 다른 말을 넣지 마세요."
+  ].join("\n");
 }
 
 function buildRoleSpecificPrompt(role: "claude_leader" | "codex_leader" | "auditor", requestText: string): string {

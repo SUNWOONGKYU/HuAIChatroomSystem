@@ -236,6 +236,18 @@ export class SupabaseOutboxStore {
       await this.persistCollectedArtifacts(input.request, input.events);
     }
 
+    // 인지부채 방지 퀴즈 — 작업자(감사·소대장 판단 아님)가 실제로 파일을 바꾼 실행에서만
+    // 저장한다. 감사는 검증이지 방장이 이해해야 할 변경이 아니고, 소대장 판단은 애초에
+    // 이 지점에 도달하지 않는다(위 isLeaderPlanningAttempt 체크에서 이미 return 함).
+    if (
+      input.status === "completed" &&
+      input.request.reportBotRole !== "auditor" &&
+      producedRealArtifacts(input.events)
+    ) {
+      const quiz = extractTaskQuizFromEvents(input.events);
+      if (quiz) await this.saveTaskQuiz(input.request, quiz);
+    }
+
     if (input.status === "completed" && input.request.reportBotRole === "auditor") {
       // 감사가 아무 판정도 못 내고 끝나는 일이 있다. CLI 가 권한 문제로 도구를 하나도
       // 못 써서 "no output produced" 만 남기고 종료코드 0 으로 끝난 경우다(라이브에서
@@ -634,6 +646,30 @@ export class SupabaseOutboxStore {
       .request("PATCH", "/huai_ai_actors?actor_id=eq." + encodeURIComponent(actorId), {
         body: { cli_session_id: sessionId, cli_session_updated_at: new Date().toISOString() },
         prefer: "return=minimal"
+      })
+      .then((response) => response.expectOk())
+      .catch(() => undefined);
+  }
+
+  // 인지부채 방지 퀴즈를 저장한다. 실패해도 완료 처리 자체를 막지 않는다 — 퀴즈는
+  // 방장 이해도 확인용 부가 기능이지, 없다고 결과물이 사라지는 건 아니다(miniapp-approve
+  // 는 퀴즈 행이 아예 없으면 통과시킨다 — 정상 동작으로 폴백한다).
+  // on_conflict=task_id 로 업서트한다 — 엔진 폴백(engine-fallback)으로 같은 task 가
+  // 다시 실행되면 새 퀴즈로 덮어써야 하므로 passed/attempts 도 매번 초기화한다.
+  private async saveTaskQuiz(request: ExecutionRequest, quiz: TaskQuiz): Promise<void> {
+    if (!isUuid(request.taskId) || !isUuid(request.roomId)) return;
+    await this.client
+      .request("POST", "/huai_task_quizzes?on_conflict=task_id", {
+        body: {
+          task_id: request.taskId,
+          room_id: request.roomId,
+          summary: quiz.summary,
+          questions: quiz.questions,
+          passed: false,
+          attempts: 0,
+          updated_at: new Date().toISOString()
+        },
+        prefer: "resolution=merge-duplicates,return=minimal"
       })
       .then((response) => response.expectOk())
       .catch(() => undefined);
@@ -1742,8 +1778,64 @@ export function extractAgentResultText(text: string): string {
   return extractCodexAgentMessage(text) ?? extractClaudeAgentMessage(text) ?? text;
 }
 
+export type TaskQuizQuestion = { q: string; choices: [string, string, string, string]; correct: 0 | 1 | 2 | 3 };
+export type TaskQuiz = { summary: string; questions: [TaskQuizQuestion, TaskQuizQuestion, TaskQuizQuestion] };
+
+const QUIZ_BLOCK_PATTERN = /QUIZ_START([\s\S]*?)QUIZ_END/;
+
+function stripTaskQuizBlock(text: string): string {
+  return text.replace(QUIZ_BLOCK_PATTERN, "").trim();
+}
+
+// 완료 이벤트의 원본(겉포장 벗긴, 정제 전) 텍스트에서 QUIZ_START/QUIZ_END 블록을 찾아
+// 파싱한다. cleanHumanVisibleOutput 이 쓰는 것과 별개의 원본 경로를 쓴다 — 정제된
+// 텍스트는 줄 필터·길이 절단을 거쳐 블록이 훼손됐을 수 있어서다(appendQuizInstruction,
+// apps/bot-service/src/supabase-store.ts 가 이 형식으로 출력하라고 요청한다).
+export function extractTaskQuizFromEvents(events: readonly GatewayEvent[]): TaskQuiz | undefined {
+  const stdout = [...events].reverse().find((event): event is GatewayEvent & { type: "stdout"; text: string } =>
+    event.type === "stdout" && typeof event.text === "string" && event.text.trim().length > 0
+  );
+  const stderr = [...events].reverse().find((event): event is GatewayEvent & { type: "stderr"; text: string } =>
+    event.type === "stderr" && typeof event.text === "string" && event.text.trim().length > 0
+  );
+  const text = stdout?.text ?? stderr?.text;
+  if (!text) return undefined;
+  return parseTaskQuizBlock(extractAgentResultText(text));
+}
+
+export function parseTaskQuizBlock(text: string): TaskQuiz | undefined {
+  const match = QUIZ_BLOCK_PATTERN.exec(text);
+  if (!match) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[1].trim());
+  } catch {
+    return undefined;
+  }
+  return isValidTaskQuiz(parsed) ? parsed : undefined;
+}
+
+function isValidTaskQuiz(value: unknown): value is TaskQuiz {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.summary !== "string" || !candidate.summary.trim()) return false;
+  if (!Array.isArray(candidate.questions) || candidate.questions.length !== 3) return false;
+  return candidate.questions.every((question) => {
+    if (!question || typeof question !== "object") return false;
+    const q = question as Record<string, unknown>;
+    if (typeof q.q !== "string" || !q.q.trim()) return false;
+    if (!Array.isArray(q.choices) || q.choices.length !== 4) return false;
+    if (!q.choices.every((choice) => typeof choice === "string" && choice.trim())) return false;
+    return typeof q.correct === "number" && Number.isInteger(q.correct) && q.correct >= 0 && q.correct <= 3;
+  });
+}
+
 function cleanHumanVisibleOutput(text: string): string | undefined {
-  const lines = text
+  // QUIZ 블록은 방장 이해도 확인용 데이터지 방에 보일 문장이 아니다 — 줄 단위 필터
+  // 이전에 통째로 잘라낸다(JSON 내부 줄이 isInternalOutputLine 에 우연히 안 걸려도
+  // 새어나가지 않게, 그리고 길이 절단이 블록 중간을 자르는 것도 막게).
+  const withoutQuiz = stripTaskQuizBlock(text);
+  const lines = withoutQuiz
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)

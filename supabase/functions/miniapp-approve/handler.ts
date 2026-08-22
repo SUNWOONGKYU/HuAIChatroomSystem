@@ -132,6 +132,9 @@ export type ApproveHandlerDeps = {
   checkProposalAlreadyDecided(roomId: string, proposalId: string): Promise<{ error?: string; data?: boolean }>;
   insertApproval(row: ApprovalInsertRow): Promise<{ error?: { code: string; message: string }; data?: { approval_id: string } | null }>;
   insertEvent(row: EventInsertRow): Promise<{ error?: { code: string; message: string } }>;
+  // 인지부채 방지 퀴즈(huai_task_quizzes) 게이트. 파일을 안 바꾼 작업은 애초에 행이
+  // 없다(hasQuiz=false) — 그런 작업은 이 게이트가 아무 영향을 주지 않는다.
+  fetchTaskQuizStatus(taskId: string): Promise<{ error?: string; data?: { hasQuiz: boolean; passed: boolean } | null }>;
 };
 
 export async function handleMiniappApproveRequest(req: Request, deps: ApproveHandlerDeps): Promise<Response> {
@@ -255,6 +258,22 @@ async function handleTaskDecision(
     return jsonResponse(500, { error: "lookup-failed" });
   }
   if (!permResult.data) return jsonResponse(403, { error: "forbidden" });
+
+  // 인지부채 방지 퀴즈(Orca/Buzz 벤치마킹) — 파일을 실제로 바꾼 작업은, 방장이 완료
+  // 승인을 누르기 전에 무엇이 바뀌었는지 이해했는지 객관식 3문항으로 먼저 확인한다.
+  // Grok Bot 의 "행동 카테고리별 승인" 과는 다른 축이지만 같은 목적(승인이 형식적
+  // 클릭으로 끝나지 않게)이라 같은 게이트 지점에 건다. 클라이언트가 이 검사를
+  // 우회할 방법이 없다 — 퀴즈 정답은 miniapp-quiz 함수 밖으로 절대 안 나간다.
+  if (action === "final_approve") {
+    const quizStatusResult = await deps.fetchTaskQuizStatus(taskId);
+    if (quizStatusResult.error) {
+      console.error(`miniapp-approve: quiz status lookup failed: ${quizStatusResult.error}`);
+      return jsonResponse(500, { error: "lookup-failed" });
+    }
+    if (quizStatusResult.data?.hasQuiz && !quizStatusResult.data.passed) {
+      return jsonResponse(409, { error: "quiz-not-passed" });
+    }
+  }
 
   if (requiresOwnerRoleOverride(action)) {
     const membershipResult = await deps.fetchMembershipRole(task.room_id, telegramUserId);

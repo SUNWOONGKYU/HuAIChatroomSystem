@@ -106,6 +106,15 @@ function buildDeps(): ApproveHandlerDeps | undefined {
       const { error } = await supabase.from("huai_events").insert(row);
       if (error) return { error: { code: (error as { code?: string }).code ?? "", message: error.message } };
       return {};
+    },
+    async fetchTaskQuizStatus(taskId) {
+      const { data, error } = await supabase
+        .from("huai_task_quizzes")
+        .select("passed")
+        .eq("task_id", taskId)
+        .maybeSingle();
+      if (error) return { error: error.message };
+      return { data: { hasQuiz: Boolean(data), passed: data?.passed === true } };
     }
   };
 }
