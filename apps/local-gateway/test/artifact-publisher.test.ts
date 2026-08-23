@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { extractDeploymentUrl, isWebArtifact, publishWebArtifacts } from "../src/artifact-publisher.js";
+import { extractDeploymentUrl, isWebArtifact, promoteDeployment, publishWebArtifacts } from "../src/artifact-publisher.js";
 
 // 방장 제기 — "게임을 만들어 줬으면 그걸 연결을 시켜줘야 되는데 연결을 안 시켜주지".
 // 실행이 만든 파일은 이 PC 안에만 있어 폰에서는 열 수 없었다.
@@ -45,7 +45,8 @@ test("올린 파일마다 열 수 있는 주소를 돌려준다", async () => {
   });
 
   assert.equal(commands.length, 1, "실행 하나에 배포도 한 번이어야 한다 — 파일마다 배포하면 주소가 흩어진다");
-  assert.deepEqual(commands[0]?.args, ["deploy", "--prod", "--yes", "--name", "huai-artifacts"]);
+  // --prod 없음 — 완료 승인 전에는 프리뷰로만 올린다(방장 승인 전 프로덕션 노출 방지, 2026-08-23).
+  assert.deepEqual(commands[0]?.args, ["deploy", "--yes", "--name", "huai-artifacts"]);
   assert.equal(result.publishedUrlByPath.get(gamePath), "https://huai-artifacts-xyz.vercel.app/egg-crack-sound-game.html");
   assert.equal(result.publishedUrlByPath.has(notePath), false, "문서는 올리지 않는다");
   assert.equal(result.failureReason, undefined);
@@ -80,4 +81,25 @@ test("프로젝트를 안 정하면 아무것도 올리지 않는다", async () 
   assert.equal(called, false, "설정이 없으면 배포를 시도조차 하지 않는다");
   assert.equal(result.publishedUrlByPath.size, 0);
   assert.equal(result.failureReason, undefined);
+});
+
+test("프리뷰 배포를 프로덕션으로 승격한다", async () => {
+  const commands: Array<{ command: string; args: readonly string[] }> = [];
+  const result = await promoteDeployment("https://huai-artifacts-xyz.vercel.app", async (command, args) => {
+    commands.push({ command, args });
+    return { stdout: "Success! https://huai-artifacts-xyz.vercel.app promoted", exitCode: 0 };
+  });
+
+  assert.deepEqual(commands[0], { command: "vercel", args: ["promote", "https://huai-artifacts-xyz.vercel.app", "--yes"] });
+  assert.equal(result.ok, true);
+});
+
+test("승격 실패는 사유를 남기고 끝난다", async () => {
+  const result = await promoteDeployment("https://huai-artifacts-xyz.vercel.app", async () => ({
+    stdout: "Error: deployment not found",
+    exitCode: 1
+  }));
+
+  assert.equal(result.ok, false);
+  assert.match(String(result.failureReason), /vercel-promote-failed/);
 });

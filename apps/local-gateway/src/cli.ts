@@ -28,6 +28,7 @@ await runLocalGatewayLoop(runtime.config, {
   // 읽어놓고도 루프까지 전달되지 않아, 게임을 만들어도 공개 주소가 안 붙었다.
   artifactVercelProject: runtime.artifactVercelProject,
   screenshot: runtime.screenshot,
+  artifactPromotion: runtime.artifactPromotion,
   setTimeout,
   shouldContinue: () => running,
   now: () => new Date(),
@@ -36,6 +37,9 @@ await runLocalGatewayLoop(runtime.config, {
     healthState.consecutiveErrors = 0;
     healthState.lastError = undefined;
     console.log(JSON.stringify({ type: "local_gateway_tick", ...result }));
+  },
+  onArtifactPromotionResult(result) {
+    console.log(JSON.stringify({ type: "local_gateway_artifact_promotion", ...result }));
   },
   onError(error) {
     healthState.consecutiveErrors += 1;

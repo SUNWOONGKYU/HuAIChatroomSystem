@@ -10,6 +10,12 @@
 //
 // 왜 깃 저장소에 안 넣는가: 산출물마다 커밋이 붙으면 이력이 결과물로 뒤덮이고, 배포도
 // 저장소 상태에 묶인다. 배포는 임시 폴더에서 파일만 올린다.
+//
+// 왜 여기서 바로 --prod 로 안 올리는가(2026-08-23, Grok Bot 사례 반영): 예전엔 실행이
+// 끝나자마자 프로덕션에 바로 올라갔다 — 방장이 완료 승인을 누르기도 전에 결과물이 이미
+// 공개돼 있었다("결과물 공개"와 "방장 승인"의 순서가 뒤집혀 있었다). 이제는 프리뷰만
+// 올린다(Vercel 배포 URL은 프리뷰든 프로덕션이든 형태가 같아 방장이 미리 눌러볼 수 있다).
+// 프로덕션 승격은 완료 승인이 실제로 기록된 뒤 artifact-promotion.ts 가 별도로 한다.
 
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -66,7 +72,8 @@ export async function publishWebArtifacts(
 
     // 한 번의 배포에 이번 실행이 만든 웹 파일을 함께 올린다. 파일마다 배포하면 주소가
     // 흩어지고 배포 횟수도 파일 수만큼 늘어난다.
-    const result = await run("vercel", ["deploy", "--prod", "--yes", "--name", config.vercelProject], stagingDir);
+    // --prod 를 빼서 프리뷰로만 올린다 — 프로덕션 승격은 완료 승인 이후(promoteDeployment)에만.
+    const result = await run("vercel", ["deploy", "--yes", "--name", config.vercelProject], stagingDir);
     const baseUrl = extractDeploymentUrl(result.stdout);
     if (result.exitCode !== 0 || !baseUrl) {
       return { publishedUrlByPath, failureReason: `vercel-deploy-failed:${result.exitCode}` };
@@ -82,6 +89,23 @@ export async function publishWebArtifacts(
   } finally {
     if (stagingDir) await rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+export type DeploymentPromoteResult = { ok: boolean; failureReason?: string };
+export type DeploymentPromoter = (deploymentUrl: string) => Promise<DeploymentPromoteResult>;
+
+// 프리뷰로 올려둔 배포 하나를 프로덕션으로 승격한다. 파일을 다시 올리지 않는다 —
+// Vercel 이 이미 갖고 있는 그 빌드를 프로덕션 별칭에 연결만 한다. 그래서 로컬
+// 작업트리(worktree)가 이미 정리됐어도(완료 승인은 실행 한참 뒤에 올 수 있다) 문제없다.
+export async function promoteDeployment(
+  deploymentUrl: string,
+  runCommand: (command: string, args: readonly string[], cwd: string) => Promise<{ stdout: string; exitCode: number }> = runVercel
+): Promise<DeploymentPromoteResult> {
+  const result = await runCommand("vercel", ["promote", deploymentUrl, "--yes"], process.cwd());
+  if (result.exitCode !== 0) {
+    return { ok: false, failureReason: `vercel-promote-failed:${result.exitCode}` };
+  }
+  return { ok: true };
 }
 
 function runVercel(command: string, args: readonly string[], cwd: string): Promise<{ stdout: string; exitCode: number }> {
