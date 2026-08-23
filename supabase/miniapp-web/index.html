@@ -654,10 +654,10 @@
   function loadTasks(isBackground) {
     if (!roomId) {
       showState("작업 현황판을 열 방이 지정되지 않았습니다. 방의 대화에서 제공된 버튼으로 다시 열어주세요.");
-      return;
+      return Promise.resolve();
     }
     if (!isBackground) showState("불러오는 중…");
-    apiFetch("/miniapp-tasks?roomId=" + encodeURIComponent(roomId) + threadQuery, { method: "GET" })
+    return apiFetch("/miniapp-tasks?roomId=" + encodeURIComponent(roomId) + threadQuery, { method: "GET" })
       .then(function (data) {
         stateEl.style.display = "none";
         tabsEl.hidden = false;
@@ -1130,8 +1130,17 @@
   }
 
   var submittedKeys = {};
+  var submitting = false;
 
   function submitDecision(task, action, triggerBtn) {
+    // 버튼 disabled 만으로는 못 막는 경우가 있다 — 모바일에서 빠른 두 번 탭은 두 click
+    // 이벤트가 이미 큐에 들어간 뒤에야 아래 disabled=true 가 실행돼, 두 번째 탭이 그 사이를
+    // 비집고 들어간다(실측: 방장이 승인을 눌렀는데 "이미 결정된 건"이라는 에러가 떴다 —
+    // 첫 번째 탭은 실제로 성공했고, 거의 동시에 들어간 두 번째 탭만 늦게 도착해 이미
+    // completed 로 넘어간 상태를 만났다). 이 플래그가 그 틈을 막는 마지막 방어선이다.
+    if (submitting) return;
+    submitting = true;
+
     var buttons = actionRow.querySelectorAll("button");
     for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
     decisionNote.className = "show";
@@ -1150,12 +1159,34 @@
       body: JSON.stringify({ taskId: task.taskId, action: action, idempotencyKey: submittedKeys[key] })
     })
       .then(function (res) {
+        submitting = false;
         decisionNote.textContent = decisionSuccessNote(action, res);
         tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
         loadTasks(true);
         setTimeout(closeDetail, 900);
       })
       .catch(function (err) {
+        // 409("이미 결정된 상태")는 위 레이스처럼 사실 내 요청이 성공한 뒤의 메아리일 수 있다.
+        // 다시 불러와서 이 작업이 실제로 더는 결정 대상이 아니게 됐는지 먼저 확인한다 —
+        // 맞으면 실패가 아니라 "이미 처리됨"으로 안내한다. 권한 없음 등 진짜 실패는
+        // decidable 이 그대로 true 로 남으므로 원래 에러 메시지가 그대로 나간다.
+        if (err && err.status === 409) {
+          loadTasks(true).then(function () {
+            submitting = false;
+            var stillPending = lastTasks.some(function (t) { return t.taskId === task.taskId && t.decidable; });
+            if (!stillPending) {
+              decisionNote.textContent = "이미 처리되었습니다.";
+              tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
+              setTimeout(closeDetail, 900);
+              return;
+            }
+            decisionNote.textContent = decisionErrorMessage(err);
+            tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("error");
+            for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
+          });
+          return;
+        }
+        submitting = false;
         decisionNote.textContent = decisionErrorMessage(err);
         tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("error");
         for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
