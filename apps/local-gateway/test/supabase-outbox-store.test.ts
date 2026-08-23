@@ -155,6 +155,45 @@ test("defers local gateway rows while blocking task dependencies are unfinished"
   assert.equal(calls.requests[3]?.body.status, "retry_pending");
   assert.equal(calls.requests[3]?.body.last_error, "waiting-dependencies");
 });
+
+// AC-06 — 부분대기: 의존 후속작업만 블락하고, 무관한 작업은 같은 배치에서도 그대로 진행한다.
+// (2026-08-22 Grok 조사 노트가 "미구현"으로 남겨뒀던 항목 — 실제로는 leasePendingLocalGateway 가
+// 행마다 독립적으로 isTaskRunnable 을 판정해서 이미 되고 있었다. 이 테스트로 그 사실을 못박는다.)
+test("한 배치 안에서 막힌 작업만 대기하고 무관한 작업은 그대로 진행한다", async () => {
+  const blockedTaskId = "33333333-3333-4333-8333-333333333333";
+  const predecessorId = "11111111-1111-4111-8111-111111111111";
+  const readyTaskId = "44444444-4444-4444-8444-444444444444";
+  const calls = makeSupabaseFetch([
+    jsonResponse(200, [
+      {
+        huai_outbox_id: "outbox-blocked",
+        idempotency_key: "gateway:attempt-blocked",
+        target: JSON.stringify({ kind: "local_gateway", gatewayId: "primary" }),
+        payload: { executionRequest: { taskId: blockedTaskId, attemptId: "attempt-blocked" } },
+        status: "processing",
+        attempts: 1
+      },
+      {
+        huai_outbox_id: "outbox-ready",
+        idempotency_key: "gateway:attempt-ready",
+        target: JSON.stringify({ kind: "local_gateway", gatewayId: "primary" }),
+        payload: { executionRequest: { taskId: readyTaskId, attemptId: "attempt-ready" } },
+        status: "processing",
+        attempts: 1
+      }
+    ]),
+    jsonResponse(200, [{ predecessor_task_id: predecessorId, dependency_type: "blocks", is_blocking: true }]),
+    jsonResponse(200, [{ task_id: predecessorId, status: "in_progress" }]),
+    jsonResponse(200, [{ huai_outbox_id: "outbox-blocked" }]),
+    jsonResponse(200, []) // readyTaskId 는 의존 행이 아예 없다.
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  const rows = await store.leasePendingLocalGateway(5, "2026-08-10T00:01:00.000Z");
+
+  assert.equal(rows.length, 1, "막힌 작업 하나 빼고 나머지는 이번 배치에서 그대로 나가야 한다");
+  assert.equal(rows[0]?.outboxId, "outbox-ready");
+});
 // 라이브 결함 회귀 — 방마다 게이트웨이를 하나씩 띄우자 서로 남의 일을 집어갔다.
 // 개발방 작업을 상증세법·DCF 게이트웨이가 먼저 집고 project-path-not-allowed 로 실패시켰다.
 test("게이트웨이는 자기 앞으로 온 행만 리스한다", async () => {
