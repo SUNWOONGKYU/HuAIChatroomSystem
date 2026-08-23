@@ -18,6 +18,8 @@
 - `README.md`
 - `GITHUB_QUICKSTART.md`
 - `GITHUB_RELEASE_CHECKLIST.md`
+- `HuAI_설치_및_사용_설명서.md` — 비개발자용 통합 설치+사용 가이드. GITHUB_QUICKSTART.md 와
+  같은 절차를 다루지만 클릭 단위로 더 잘게 쪼갠 별도 문서다(하나를 고치면 다른 하나도 봐야 한다).
 
 ## 문서 동기화 체크
 

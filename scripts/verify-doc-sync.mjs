@@ -11,6 +11,7 @@ const docs = [
   "README.md",
   "GITHUB_QUICKSTART.md",
   "GITHUB_RELEASE_CHECKLIST.md",
+  "HuAI_설치_및_사용_설명서.md",
 ];
 
 const stalePhrases = [
