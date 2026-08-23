@@ -33,14 +33,17 @@ test("gateway report hides internal json and hook output from Telegram text", ()
 
 // 라이브 확인(2026-08-23): 안티그래비티가 코덱스 폴백으로 대신 일했는데, 방에 나간
 // 보고는 발신 봇(ClaudeBot 이름을 빌림) 하나로만 보여서 방장이 실제 실행 엔진을 알 수
-// 없었다 — PO 지적. 이제 완료/실패 문구 자체에 엔진 이름을 밝힌다.
-test("완료 보고에 실제 실행 엔진이 명시된다 (안티그래비티 폴백도 구분 가능)", () => {
+// 없었다 — PO 지적. 이제 완료/실패 문구 자체에 엔진 이름을 밝힌다. "AntigravityBot"
+// 처럼 봇 이름 형태로 쓰면 등록되지 않은 봇이 있는 것처럼 헷갈린다는 재지적을 받아
+// "봇" 접미어 없는 순수 엔진 이름("엔진: Antigravity")으로 바꿨다.
+test("완료 보고에 실제 실행 엔진이 명시된다 (안티그래비티 폴백도 구분 가능, '봇' 접미어 없이)", () => {
   const text = renderGatewayReportText({
     request: { ...makeRequest(), adapterType: "antigravity" },
     status: "completed",
     events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "파일을 만들었습니다." }]
   });
-  assert.match(text, /AntigravityBot/, "안티그래비티가 실제로 일했다는 사실이 문구에 있어야 한다");
+  assert.match(text, /엔진: Antigravity/, "안티그래비티가 실제로 일했다는 사실이 문구에 있어야 한다");
+  assert.equal(text.includes("AntigravityBot"), false, "등록 안 된 봇 이름처럼 보이면 안 된다");
 });
 
 test("실패 보고에도 실제 실행 엔진이 명시된다", () => {
@@ -50,16 +53,16 @@ test("실패 보고에도 실제 실행 엔진이 명시된다", () => {
     errorKind: "exit-code-1",
     events: []
   });
-  assert.match(text, /^작업 실행 실패 \(CodexBot\)/);
+  assert.match(text, /^작업 실행 실패 \(엔진: Codex\)/);
 });
 
-test("claude_code 로 실행된 완료 보고는 ClaudeBot 으로 표시된다", () => {
+test("claude_code 로 실행된 완료 보고는 '엔진: Claude' 로 표시된다", () => {
   const text = renderGatewayReportText({
     request: { ...makeRequest(), adapterType: "claude_code" },
     status: "completed",
     events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "완료." }]
   });
-  assert.match(text, /ClaudeBot/);
+  assert.match(text, /엔진: Claude/);
 });
 
 // claude 어댑터를 --output-format text 에서 json 으로 바꿨다(session_id 를 stdout 에

@@ -1725,7 +1725,11 @@ export function renderGatewayReportText(input: {
   // \uC774\uB984(ClaudeBot/CodexBot)\uB9CC\uC73C\uB85C\uB294 \uC548\uD2F0\uADF8\uB798\uBE44\uD2F0 \uD3F4\uBC31\uC744 \uAD6C\uBD84\uD560 \uC218 \uC5C6\uB2E4 \u2014 \uC548\uD2F0\uADF8\uB798\uBE44\uD2F0\uB294
   // \uC544\uC9C1 \uC790\uAE30 \uBD07\uC774 \uC5C6\uC5B4 ClaudeBot \uC774\uB984\uC744 \uBE4C\uB824 \uBCF4\uB0B4\uBBC0\uB85C(engineActorName\u00B7reportBotRoleForAdapter
   // \uCC38\uACE0), \uC2E4\uC81C \uC2E4\uD589 \uC5D4\uC9C4\uC744 \uBCF8\uBB38\uC5D0 \uC9C1\uC811 \uBC1D\uD78C\uB2E4(\uB77C\uC774\uBE0C \uD655\uC778 \uD6C4 PO \uC9C0\uC801, 2026-08-23).
-  const engineLabel = "(" + engineActorName(input.request.adapterType) + ")";
+  // engineActorName 은 "ClaudeBot"/"CodexBot"/"AntigravityBot" 처럼 텔레그램 봇 이름
+  // 형태를 돌려준다 — 안티그래비티는 실제로 등록된 봇이 아닌데(ClaudeBot 이름을 빌려
+  // 발신) "AntigravityBot" 이라고 쓰면 방장이 없는 봇으로 착각한다(PO 지적,
+  // 2026-08-23). 여기서는 순수 엔진 이름만 쓴다 — "봇" 접미어를 뗀다.
+  const engineLabel = "(엔진: " + engineActorName(input.request.adapterType).replace(/Bot$/, "") + ")";
   const subject = isAudit ? "\uAC10\uC0AC \uC2E4\uD589" : "\uC791\uC5C5 \uC2E4\uD589";
 
   if (input.status === "completed") {
