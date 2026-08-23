@@ -197,9 +197,9 @@
     </div>
 
     <div class="def-box">
-      HuAI = 텔레그램 방(사람) + LeaderBot(요청 정리·승인 라우팅) + ClaudeBot·CodexBot(실행) +
-      AuditBot(독립 검증) + Supabase(공식 기록) + local-gateway(내 PC에서 실제 실행)가 함께
-      돌아가는 Human-AI 협업 운영 시스템입니다.
+      쉽게 말하면: 텔레그램 방에서 사람이 말하듯 시키면, AI 여러 명이 각자 맡은 역할대로
+      실제 일을 하고, 방장이 확인하고 승인 도장을 찍어야 끝나는 구조입니다.
+      <a href="#t6" onclick="activate('6')" style="font-weight:700">이 안에 뭐가 들어있는지 자세히 →</a>
     </div>
 
     <h3 class="section">시작 전 체크리스트</h3>
@@ -286,15 +286,17 @@ npm run build</code></pre>
     <div class="warn-box">⚠️ 4개는 반드시 서로 다른 봇(다른 토큰)이어야 합니다. 봇 1개로 4역할을 흉내내는 방식이 아닙니다.</div>
 
     <h3 class="section">5단계 — 비공개 그룹 만들고 봇 초대</h3>
+    <p>쉽게 말하면: 방을 만들고, 그 "방 번호"와 "내 번호"를 시스템에 알려주는 단계입니다 — 시스템이 "어느 방에서, 누가" 말했는지 구별하는 데 씁니다.</p>
     <ol>
       <li>텔레그램에서 새 그룹(비공개)을 만들고 봇 4개를 전부 초대합니다.</li>
-      <li><b>그룹 chat_id 알아내기</b>: 그룹에 아무 메시지("테스트")를 보낸 뒤, 브라우저에서
+      <li><b>그룹 chat_id(방 번호) 알아내기</b>: 그룹에 아무 메시지("테스트")를 보낸 뒤, 브라우저에서
         <code>https://api.telegram.org/bot&lt;봇토큰&gt;/getUpdates</code> 를 엽니다.
         <code>"chat":{"id":</code> 뒤에 나오는 숫자(보통 <code>-</code>로 시작)가 chat_id입니다.</li>
-      <li><b>내 user_id 알아내기</b>: 텔레그램에서 <code>@userinfobot</code>을 검색해 아무 메시지나 보내면 숫자 id를 알려줍니다. 이 값이 "방장 권한"의 기준입니다 — 승인 버튼은 이 id를 가진 사람만 누를 수 있습니다.</li>
+      <li><b>내 user_id(내 번호) 알아내기</b>: 텔레그램에서 <code>@userinfobot</code>을 검색해 아무 메시지나 보내면 숫자 id를 알려줍니다. 이 값이 "방장 권한"의 기준입니다 — 승인 버튼은 이 id를 가진 사람만 누를 수 있습니다.</li>
     </ol>
 
     <h3 class="section">6단계 — 설정 파일 채우기</h3>
+    <p>쉽게 말하면: 지금까지 여기저기서 복사해둔 값들을 파일 한 장에 모아 붙여넣는 단계입니다. 아래 표는 "이 빈칸엔 이 값" 대응표일 뿐이니, 항목 이름이 낯설어도 왼쪽 줄이 어디서 나온 값인지만 따라가면 됩니다.</p>
     <ol>
       <li><code>.env.operation.example</code> 파일을 복사해 이름을 <code>.env.operation.local</code>로 바꿉니다.</li>
       <li>메모장으로 열어 아래 표의 값을 채웁니다.</li>
@@ -303,15 +305,16 @@ npm run build</code></pre>
       <tr><th>항목</th><th>어디서 가져오는 값</th></tr>
       <tr><td><code>SUPABASE_URL</code></td><td>탭 02의 Project URL</td></tr>
       <tr><td><code>SUPABASE_SERVICE_ROLE_KEY</code></td><td>탭 02의 service_role 키</td></tr>
-      <tr><td><code>BOT_SERVICE_TELEGRAM_CHAT_ID</code></td><td>위 그룹 chat_id</td></tr>
-      <tr><td><code>BOT_SERVICE_OWNER_TELEGRAM_USER_ID</code></td><td>위 내 user_id</td></tr>
+      <tr><td><code>BOT_SERVICE_TELEGRAM_CHAT_ID</code></td><td>위 그룹 chat_id(방 번호)</td></tr>
+      <tr><td><code>BOT_SERVICE_OWNER_TELEGRAM_USER_ID</code></td><td>위 내 user_id(내 번호)</td></tr>
       <tr><td><code>BOT_SERVICE_PLATOON/CLAUDE/CODEX/AUDITOR_BOT_TOKEN</code></td><td>봇 4개 토큰 (각각)</td></tr>
     </table>
-    <p><code>BOT_SERVICE_RECEIVE_MODE=polling</code> 인지 확인합니다(없으면 추가) — 공개 인터넷 주소·터널 설정 없이 이 PC에서 텔레그램으로 직접 연결됩니다, 가장 간단한 방식입니다. <code>LOCAL_GATEWAY_ALLOWED_ROOTS</code>도 2단계에서 받은 폴더 경로로 맞춥니다.</p>
+    <p><code>BOT_SERVICE_RECEIVE_MODE=polling</code> 인지 확인합니다(없으면 추가) — 이렇게만 해두면 별도 인터넷 주소 설정 없이 이 PC가 텔레그램과 알아서 연결됩니다, 가장 간단한 방식입니다. <code>LOCAL_GATEWAY_ALLOWED_ROOTS</code>도 2단계에서 받은 폴더 경로로 맞춥니다(이 시스템이 손댈 수 있는 폴더를 정해두는 항목입니다).</p>
     <div class="warn-box">⚠️ <code>.env.operation.local</code>은 절대 GitHub에 올리거나 남에게 보내면 안 됩니다. 비밀번호나 다름없는 값들이 들어있습니다.</div>
 
     <h3 class="section">7단계 — 이 방을 시스템에 등록하기</h3>
-    <p>방 고유 번호(UUID)를 만듭니다:</p>
+    <p>쉽게 말하면: "이 텔레그램 방 = 이 컴퓨터의 이 폴더"라고 시스템에 한 번 알려주는 단계입니다. 아래 명령어를 그대로 복사해서 붙여넣으면 됩니다 — 내용을 몰라도 됩니다.</p>
+    <p>먼저 이 방만의 고유 이름표(UUID, 아무 뜻 없는 랜덤 번호)를 하나 만듭니다:</p>
     <pre><code>node -e "console.log(crypto.randomUUID())"</code></pre>
     <p>아래 명령을 실제 값으로 바꿔 실행합니다:</p>
     <pre><code>node scripts/generate-supabase-room-seed.mjs --room-id &lt;room-id&gt; --chat-id &lt;chat-id&gt; --owner-id &lt;owner-id&gt; --project-path "C:\Dev\HuAIChatroomSystem"</code></pre>
@@ -417,6 +420,35 @@ node dist/apps/local-gateway/src/cli.js</code></pre></div>
       <img src="2026_08_23__HuAI_System_작업흐름도.svg" alt="HuAI Collab Chatroom System 작업 흐름도 — 지시 한 줄이 결과물이 되기까지">
       <p class="cap">지시 한 줄이 결과물이 되기까지, 승인 카테고리 분리, 엔진이 막혔을 때의 인계 규칙. 원본: <a href="2026_08_23__HuAI_System_작업흐름도.svg" target="_blank" rel="noopener">SVG</a> · <a href="docs/작업_흐름도.md" target="_blank" rel="noopener">글로 된 설명</a></p>
     </div>
+
+    <h3 class="section" id="components">구성 요소 자세히 보기</h3>
+    <p>탭 00에서 "AI 여러 명이 각자 맡은 역할대로 일한다"고 뭉뚱그려 말한 그 안쪽입니다 — 이 시스템을 이루는 조각들이 정확히 뭘 하는지입니다.</p>
+    <div class="step-grid">
+      <div class="step-card"><div class="step-badge">방</div><h5>텔레그램 방</h5><p>사람이 지시하고 결과를 받는 화면. 이 시스템의 유일한 사용자 인터페이스입니다.</p></div>
+      <div class="step-card"><div class="step-badge">L</div><h5>LeaderBot(소대장)</h5><p>사람 말을 읽고 "이건 질문인지 작업인지" 먼저 판단합니다. 작업이면 목적·범위·완료조건을 갖춘 제안으로 정리해 방에 올립니다.</p></div>
+      <div class="step-card"><div class="step-badge">C</div><h5>ClaudeBot · CodexBot</h5><p>실제로 코드를 읽고 파일을 만들거나 고치는 두 실행자입니다. 하나가 한도에 걸리면 다른 하나가 이어받습니다.</p></div>
+      <div class="step-card"><div class="step-badge">A</div><h5>AuditBot(감사)</h5><p>실행자와 다른 엔진이 결과물을 독립적으로 다시 검토합니다 — 만든 사람이 자기 결과를 자기가 검사하지 않게 하기 위해서입니다.</p></div>
+      <div class="step-card"><div class="step-badge">B</div><h5>bot-service</h5><p>텔레그램과 이 시스템을 연결하는 통로. 누가 말했는지 확인하고, 권한을 검사하고, 답을 다시 텔레그램으로 보냅니다.</p></div>
+      <div class="step-card"><div class="step-badge">G</div><h5>local-gateway</h5><p>내 PC 안에서 실제로 명령을 실행하는 부분. 허락된 폴더 밖은 절대 건드리지 않습니다.</p></div>
+      <div class="step-card"><div class="step-badge">D</div><h5>Supabase</h5><p>"누가 뭘 시켰고 누가 승인했는지"를 남기는 공식 기록 창고. 텔레그램 메시지가 지워져도 여기 기록은 남습니다.</p></div>
+      <div class="step-card"><div class="step-badge">V</div><h5>Vercel</h5><p>AI가 만든 웹페이지를 인터넷 주소로 올려 폰에서 바로 열어볼 수 있게 하는 곳.</p></div>
+    </div>
+
+    <h3 class="section" id="glossary">기술 용어 풀이</h3>
+    <p>본문에 나온 낯선 단어들만 모았습니다. 몰라도 시키는 대로 따라가면 되지만, 궁금할 때 여기서 찾아보세요.</p>
+    <table>
+      <tr><th>용어</th><th>쉬운 뜻</th></tr>
+      <tr><td><code>chat_id</code></td><td>텔레그램 그룹방 하나하나에 매겨진 고유 번호(방 번호)</td></tr>
+      <tr><td><code>user_id</code></td><td>텔레그램 사용자 한 명 한 명에게 매겨진 고유 번호(내 번호)</td></tr>
+      <tr><td>토큰(token) / 키(key)</td><td>"이 계정·이 봇은 나다"를 증명하는 긴 비밀번호 같은 문자열</td></tr>
+      <tr><td><code>UUID</code></td><td>세상에서 겹칠 일이 거의 없는 랜덤 고유 번호. 여기서는 "이 방"을 구별하는 이름표로 씁니다</td></tr>
+      <tr><td>환경변수 / <code>.env</code> 파일</td><td>프로그램이 시작할 때 읽어가는 설정값 모음 파일. 여기에 계정 정보·키를 적어둡니다</td></tr>
+      <tr><td>PowerShell</td><td>윈도우에서 글자로 명령을 내리는 검은(또는 파란) 화면 프로그램</td></tr>
+      <tr><td><code>npm install</code> / <code>npm run build</code></td><td>"필요한 부품 받기" / "실행 가능한 형태로 조립하기" 명령어</td></tr>
+      <tr><td>배포(deploy) / 프로덕션(production)</td><td>결과물을 실제로 인터넷에 올려 아무나 열어볼 수 있는 정식 주소로 만드는 것</td></tr>
+      <tr><td>프리뷰(preview)</td><td>아직 정식 주소가 아닌, 미리 볼 수만 있는 임시 주소</td></tr>
+      <tr><td>SQL</td><td>데이터베이스에 "이런 표 만들어줘/이런 값 넣어줘"라고 지시하는 명령어 언어</td></tr>
+    </table>
 
     <h3 class="section">관련 문서</h3>
     <div class="appendix-grid">
