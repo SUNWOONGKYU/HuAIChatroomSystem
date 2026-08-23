@@ -6,7 +6,8 @@
 
 - Node.js 24 이상
 - Supabase 프로젝트 1개
-- 공개 HTTPS 주소 1개: Cloudflare Tunnel, reverse proxy, 또는 배포 호스트
+- (webhook을 쓸 경우에만) 공개 HTTPS 주소 1개: Cloudflare Tunnel, reverse proxy, 또는 배포 호스트 —
+  기본값인 polling은 이게 아예 필요 없습니다. 아래 5단계 참고.
 - 작업 PC 1대: Codex CLI와 Claude Code가 로그인된 상태
 - Telegram 비공개 그룹 1개
 - Telegram BotFather로 만든 봇 4개
@@ -50,7 +51,7 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 BOT_SERVICE_TELEGRAM_CHAT_ID=
 BOT_SERVICE_OWNER_TELEGRAM_USER_ID=
-BOT_SERVICE_PUBLIC_BASE_URL=
+BOT_SERVICE_RECEIVE_MODE=polling
 BOT_SERVICE_PLATOON_BOT_TOKEN=
 BOT_SERVICE_CLAUDE_BOT_TOKEN=
 BOT_SERVICE_CODEX_BOT_TOKEN=
@@ -59,6 +60,10 @@ BOT_SERVICE_EXECUTION_TIMEOUT_MS=900000
 LOCAL_GATEWAY_MAX_RUNTIME_MS=900000
 LOCAL_GATEWAY_LEASE_MS=960000
 ```
+
+`BOT_SERVICE_RECEIVE_MODE`를 비우거나 `webhook`으로 두면 기본값이 webhook으로 바뀌는데,
+그때만 `BOT_SERVICE_PUBLIC_BASE_URL`(공개 HTTPS 주소)이 필요합니다. polling은 이 값 자체가
+필요 없습니다.
 
 운영 기본 실행 제한은 15분입니다. 더 긴 작업은 작은 단위로 나누는 것이 기본 원칙입니다.
 
@@ -80,25 +85,31 @@ node scripts/generate-supabase-room-seed.mjs
 
 ## 5. Telegram 연결
 
-BotFather에서 네 봇을 만들고 비공개 그룹에 초대합니다. 그룹 privacy는 운영 정책에 맞춰 설정하되, 이 시스템은 webhook으로 들어온 update를 중앙 오케스트레이터에서 권한 검사 후 처리합니다.
+BotFather에서 네 봇을 만들고 비공개 그룹에 초대합니다. 그룹 privacy는 운영 정책에 맞춰
+설정하되, 어느 수신 방식이든 update는 중앙 오케스트레이터에서 권한 검사 후 처리합니다.
 
-webhook 명령 생성:
+### 기본값: polling (권장)
+
+`BOT_SERVICE_RECEIVE_MODE=polling`이면 bot-service가 시작할 때 자동으로 각 봇의 웹훅을
+해제하고 Telegram에서 직접 update를 당겨옵니다 — 이 단계에서 따로 실행할 명령이 없습니다.
+공개 HTTPS 주소, 터널, 인증서 관리가 전부 필요 없습니다. 개인 PC에서 자체 호스팅하거나
+공인 도메인이 없는 대부분의 운영 환경에는 이쪽을 권합니다.
+
+### 대안: webhook
+
+공인 도메인이 있고 안정적으로 열어둘 수 있는 배포라면 webhook을 쓸 수 있습니다.
+`BOT_SERVICE_RECEIVE_MODE=webhook` + `BOT_SERVICE_PUBLIC_BASE_URL`을 설정한 뒤:
 
 ```powershell
 node scripts/generate-telegram-webhook-commands.mjs
-```
-
-실제 적용 전 점검:
-
-```powershell
 node scripts/apply-telegram-webhooks.mjs --dry-run
-```
-
-실제 적용:
-
-```powershell
 node scripts/apply-telegram-webhooks.mjs --apply
 ```
+
+임시 터널(예: `cloudflared tunnel --url ...`)로 webhook을 쓸 경우, 터널은 계정 없이 뜨는 대신
+재시작마다 주소가 바뀌고 통보 없이 끊길 수 있습니다 — `scripts/webhook-watchdog.mjs`를
+Windows 작업 스케줄러 등으로 주기 실행해 자동 감지·복구하거나, 애초에 polling을 쓰는 쪽이
+운영 부담이 적습니다.
 
 ## 6. Telegram 작업 지시 방식
 

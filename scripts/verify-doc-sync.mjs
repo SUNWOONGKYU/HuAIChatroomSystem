@@ -5,8 +5,8 @@ import { test } from "node:test";
 const docs = [
   "2026_08_11__HuAI_Collab_Chatroom_System_페이스북_소개글.md",
   "2026_08_11__CODEX_방식A_다중그룹_온보딩_지시문.md",
-  "2026_08_17__HuAI_System_관계도.svg",
-  "2026_08_17__HuAI_System_작업흐름도.svg",
+  "2026_08_23__HuAI_System_관계도.svg",
+  "2026_08_23__HuAI_System_작업흐름도.svg",
   "SYSTEM_DOCUMENTATION_SYNC.md",
   "README.md",
   "GITHUB_QUICKSTART.md",

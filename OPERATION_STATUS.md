@@ -84,6 +84,79 @@ The original Gate 1 and Telegram transition specifications are not fully impleme
 
 Older Telegram messages may show `process-timeout`, `spawn EINVAL`, `spawn claude ENOENT`, Windows `os error 206`, premature AuditBot `판정 보류`, or old button labels. Treat those as historical unless reproduced by a new task after this verification.
 
+## 2026-08-23 KST — Grok Bot benchmark items closed out (from sessions/wiki 2026-08-22 note)
+
+That note listed two pending items ("HuAI 반영 예정 안건"). Both are now resolved:
+
+- **Grok Phase1 (approval gate before Vercel production deploy)** — was genuinely missing, now built.
+  `artifact-publisher.ts` deploys web artifacts as Vercel *previews* only (no `--prod`); a new poller
+  (`apps/local-gateway/src/artifact-promotion.ts`) promotes the preview to production only after
+  `huai_tasks.status` reaches `completed` (i.e. the owner's final approval), regardless of whether
+  that approval came through the Telegram button or the Mini App. One-time backfill: 226 pre-existing
+  artifact rows (already live before this feature existed) were marked `is_final=true` so the new
+  poller only ever acts on artifacts created from now on.
+- **Grok Phase2 (AC-06 DAG partial wait — block only dependent follow-ups, let unrelated work proceed)**
+  — turned out to already be implemented and live (`isTaskRunnable` / `leasePendingLocalGateway` in
+  `packages/supabase-runtime/src/index.ts`, present since at least the 2026-08-13 GitHub-release
+  commit): each leased outbox row is checked against `huai_task_dependencies` independently, so a
+  blocked task alone gets deferred (`retry_pending`/`waiting-dependencies`) while unrelated ready tasks
+  in the same lease batch still go out. The 2026-08-22 note calling this "미구현" was inaccurate — it
+  compared against Grok without first checking HuAI's own code. Added a regression test
+  (`apps/local-gateway/test/supabase-outbox-store.test.ts`, "한 배치 안에서 막힌 작업만 대기하고
+  무관한 작업은 그대로 진행한다") to pin this down going forward; no production code change was needed.
+
+## 2026-08-23 KST — Third Grok Bot item found and closed: approval-category split
+
+The 2026-08-22 note only listed 2 action items but described 5 Grok characteristics total. Checking
+the other 3 against HuAI's actual code (not just the note's claims): bot count (4, already matches
+Grok's 2-6 range), memory-original-reference (already satisfied — raw daily archive is kept alongside
+the distilled summary), tool hierarchy (not applicable — that's internal to the underlying Claude/Codex
+CLI, not something HuAI's orchestrator controls) were fine. But **approval-category split (필수승인/
+자동허용)** was a real, unflagged gap: every proposal required an explicit owner click to start,
+regardless of risk — Grok separates mandatory-approval actions from auto-allowed ones.
+
+Built and shipped:
+- `LeaderPlan.mutatesFiles: boolean` (`packages/orchestrator/src/leader-planning.ts`) — the leader-
+  planning LLM call now also outputs `MUTATES: yes|no`. Parsing defaults to `true` (approval required)
+  whenever the field is missing, empty, or anything other than exactly "no" — the safe default is
+  *less* automation, never a silently-skipped approval.
+- `emitLeaderProposal` (`packages/supabase-runtime/src/index.ts`) still always posts the proposal card
+  and 실행/수정/반려 buttons — nothing was removed. When `mutatesFiles === false`, it *additionally*
+  inserts a `huai_approvals` row (`stage: task_approval, decision: approved, reason: "auto-allowed: ..."`)
+  attributed to the original requester. `miniapp-decision-poller.ts` — which already watches
+  `huai_approvals` for both Telegram-button and Mini-App decisions and replays them through the exact
+  same `applyOwnerCallback` path — picks this row up on its own and enqueues execution exactly as if
+  the button had been clicked. No new execution-trigger code was written (0 복제 principle preserved).
+- Safety property: because the replay goes through the same authorization check as a real button click,
+  auto-allow can never grant a requester permission they didn't already have — it only skips the click
+  for someone who *would already have been allowed to click it*. If the read-only classification turns
+  out to be wrong, or the requester lacks approve permission, the row is just ignored
+  (`skipped_unauthorized`) and the normal button remains the fallback.
+- Tests: `packages/orchestrator/test/leader-planning.test.ts` (MUTATES parsing, safe-default behavior)
+  and `packages/supabase-runtime/test/leader-planning-result.test.ts` ("파일을 안 바꾸는 작업은 승인
+  카드와 함께 자동승인 행도 남긴다" / "파일을 바꾸는 작업(기본값)은 자동승인 행을 남기지 않는다").
+  Full `verify:operation-ready` passes.
+
+## 2026-08-23 KST — Telegram receive mode switched to polling
+
+- `BOT_SERVICE_RECEIVE_MODE=polling` (`.env.operation.local`). bot-service pulls updates via
+  `getUpdates` instead of a webhook — no public URL/tunnel needed at all.
+- Why: the webhook path depended on a `cloudflared` quick tunnel (`trycloudflare.com`), which
+  silently died for days without anyone noticing (all 4 bot webhooks went `url:""`, task approval
+  from the room stopped working). Quick tunnels have no uptime guarantee and rotate URL on every
+  restart — polling has no such external dependency, so this class of outage can't recur.
+  A watchdog (`scripts/webhook-watchdog.mjs` + a 5-min scheduled task) was built as the first fix,
+  then removed once polling turned out to be the better permanent answer (`maybeStartTelegramPolling`
+  in `apps/bot-service/src/server.ts` already had this mode built in, just not enabled).
+- The webhook path still works if ever needed again — nothing was deleted, just turned off:
+  1. Remove/change `BOT_SERVICE_RECEIVE_MODE=polling` in `.env.operation.local` (default is `webhook`).
+  2. Start a tunnel: `cloudflared tunnel --url http://127.0.0.1:8787` (or a stable named tunnel).
+  3. Set `BOT_SERVICE_PUBLIC_BASE_URL` to that URL, then `node --env-file=.env.operation.local scripts/apply-telegram-webhooks.mjs --apply`.
+  4. Restart operation services (`scripts/restart-operation-services-from-live-env.mjs`).
+  5. Optional safety net: re-register the watchdog task the same way it was built this session
+     (`webhook-watchdog.mjs` on a 5-min Windows scheduled task) — but note it actively conflicts
+     with polling mode (setting a webhook silently stops `getUpdates`), so only run one mode at a time.
+
 ## Required Reporting Rule
 
 When asked for current project progress, first report the verified live-operation state above, then distinguish remaining product-development work from already connected runtime infrastructure.

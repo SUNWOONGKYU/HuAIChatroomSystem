@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1820" height="1100" viewBox="0 0 1820 1100" role="img" aria-labelledby="t d">
+  <title id="t">HuAI Collab Chatroom System 관계도 (2026-08-23)</title>
+  <desc id="d">방장의 텔레그램 주제, 작업 PC의 bot-service와 방별 게이트웨이, Supabase와 Vercel의 관계. 무엇이 어디에 저장되고 무엇이 무엇에 기대는지를 보여준다.</desc>
+
+  <style>
+    .bg{fill:#fafaf7}
+    .panel{fill:#ffffff;stroke:#dce5de;stroke-width:2}
+    .panelHead{fill:#eaf2ed;stroke:#dce5de;stroke-width:2}
+    .card{fill:#ffffff;stroke:#5f6b7a;stroke-width:2}
+    .cardGreen{fill:#eaf2ed;stroke:#2d6a4f;stroke-width:3}
+    .cardGold{fill:#fff8e7;stroke:#c9a961;stroke-width:3}
+    .cardDark{fill:#0a1f14}
+    .title{font:700 38px 'Malgun Gothic',Arial,sans-serif;fill:#0a1f14}
+    .sub{font:20px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a}
+    .colHead{font:700 25px 'Malgun Gothic',Arial,sans-serif;fill:#2d6a4f}
+    .cardHead{font:700 21px 'Malgun Gothic',Arial,sans-serif;fill:#0a1f14}
+    .body{font:19px 'Malgun Gothic',Arial,sans-serif;fill:#3a3a30}
+    .bodyLight{font:19px 'Malgun Gothic',Arial,sans-serif;fill:#fafaf7}
+    .note{font:19px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a}
+    .flow{stroke:#2d6a4f;stroke-width:3;fill:none;marker-end:url(#a)}
+    .flowGold{stroke:#c9a961;stroke-width:3;fill:none;marker-end:url(#ag)}
+    .flowGray{stroke:#5f6b7a;stroke-width:2;fill:none;stroke-dasharray:9 7;marker-end:url(#agr)}
+    .edgeLabel{font:19px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a;paint-order:stroke;stroke:#fafaf7;stroke-width:6;stroke-linejoin:round}
+  </style>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2d6a4f"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c9a961"/>
+    </marker>
+    <marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5f6b7a"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1820" height="1100"/>
+
+  <text class="title" x="60" y="70">HuAI Collab Chatroom System — 관계도</text>
+  <text class="sub" x="60" y="104">사람은 텔레그램만 쓰고, 실행은 작업 PC에서만 일어나며, 공개되는 것은 현황판과 결과물뿐이다</text>
+
+  <!-- 왼쪽: 사람과 텔레그램 -->
+  <rect class="panel" x="60" y="140" width="470" height="500" rx="10"/>
+  <rect class="panelHead" x="60" y="140" width="470" height="52" rx="10"/>
+  <text class="colHead" x="86" y="176">사람 · 텔레그램</text>
+
+  <rect class="cardGreen" x="90" y="220" width="410" height="96" rx="8"/>
+  <text class="cardHead" x="114" y="254">방장 (폰)</text>
+  <text class="body" x="114" y="288">지시하고, 승인하고, 결과물을 연다</text>
+
+  <rect class="card" x="90" y="340" width="410" height="130" rx="8"/>
+  <text class="cardHead" x="114" y="374">텔레그램 프로젝트방 (포럼)</text>
+  <text class="body" x="114" y="408">주제(topic)마다 작업이 따로 흐른다</text>
+  <text class="body" x="114" y="440">주제마다 현황판이 따로 고정된다</text>
+
+  <rect class="card" x="90" y="494" width="410" height="122" rx="8"/>
+  <text class="cardHead" x="114" y="528">역할 봇 4개</text>
+  <text class="body" x="114" y="562">LeaderBot · ClaudeBot</text>
+  <text class="body" x="114" y="594">CodexBot · AuditBot</text>
+
+  <!-- 가운데: 작업 PC -->
+  <rect class="panel" x="600" y="140" width="500" height="830" rx="10"/>
+  <rect class="panelHead" x="600" y="140" width="500" height="52" rx="10"/>
+  <text class="colHead" x="626" y="176">작업 PC (사람의 데스크톱)</text>
+
+  <rect class="cardGreen" x="630" y="220" width="440" height="150" rx="8"/>
+  <text class="cardHead" x="654" y="254">bot-service</text>
+  <text class="body" x="654" y="288">수신(polling, 기본값) · 권한 · 멱등 · 발신</text>
+  <text class="body" x="654" y="320">방 기억 파일을 디스크에서 읽는다</text>
+  <text class="note" x="654" y="352">공개 URL·터널 불필요(webhook은 선택)</text>
+
+  <rect class="cardGold" x="630" y="394" width="440" height="176" rx="8"/>
+  <text class="cardHead" x="654" y="428">local-gateway — 방마다 1개</text>
+  <text class="body" x="654" y="462">자기 gateway_id 로 온 일만 리스</text>
+  <text class="body" x="654" y="494">허용된 폴더 안에서만 실행</text>
+  <text class="body" x="654" y="526">웹 산출물은 프리뷰까지 여기서</text>
+  <text class="note" x="654" y="554">프로덕션 승격은 완료 승인 후 별도 폴러가</text>
+
+  <rect class="card" x="630" y="594" width="440" height="130" rx="8"/>
+  <text class="cardHead" x="654" y="628">실행 엔진 3종</text>
+  <text class="body" x="654" y="662">Claude Code · Codex · Antigravity</text>
+  <text class="body" x="654" y="694">한도에 걸리면 최대 2회 인계</text>
+
+  <rect class="card" x="630" y="748" width="440" height="200" rx="8"/>
+  <text class="cardHead" x="654" y="782">디스크</text>
+  <text class="body" x="654" y="816">방별 작업 폴더 (실행은 여기서만)</text>
+  <text class="body" x="654" y="848">sessions/rooms — 대화 원본·요약</text>
+  <text class="note" x="654" y="892">bot-service 와 게이트웨이가 같은</text>
+  <text class="note" x="654" y="918">기계에 있어야 이 경로가 산다</text>
+
+  <!-- 오른쪽: 클라우드 -->
+  <rect class="panel" x="1290" y="140" width="470" height="830" rx="10"/>
+  <rect class="panelHead" x="1290" y="140" width="470" height="52" rx="10"/>
+  <text class="colHead" x="1316" y="176">클라우드</text>
+
+  <rect class="cardDark" x="1320" y="220" width="410" height="192" rx="8"/>
+  <text class="bodyLight" x="1344" y="256" style="font-weight:700">Supabase Postgres</text>
+  <text class="bodyLight" x="1344" y="290">작업 · 승인(자동승인 포함) · 산출물</text>
+  <text class="bodyLight" x="1344" y="322">보고 전문 · 보관 장부</text>
+  <text class="bodyLight" x="1344" y="354">통신 기록은 60일 후 정리</text>
+  <text class="bodyLight" x="1344" y="386">최신 40턴은 나이와 무관히 보존</text>
+
+  <rect class="card" x="1320" y="436" width="410" height="130" rx="8"/>
+  <text class="cardHead" x="1344" y="470">Supabase Storage</text>
+  <text class="body" x="1344" y="504">대화 원본 jsonl (무손실 사본)</text>
+  <text class="body" x="1344" y="536">지우기 전에 반드시 있어야 한다</text>
+
+  <rect class="cardGold" x="1320" y="590" width="410" height="130" rx="8"/>
+  <text class="cardHead" x="1344" y="624">Vercel — huai-board</text>
+  <text class="body" x="1344" y="658">작업 현황판 (Mini App)</text>
+  <text class="body" x="1344" y="690">전문 보기 · 완료 승인</text>
+
+  <rect class="cardGold" x="1320" y="744" width="410" height="186" rx="8"/>
+  <text class="cardHead" x="1344" y="778">Vercel — huai-artifacts</text>
+  <text class="body" x="1344" y="812">웹 산출물 — 프리뷰 → 프로덕션</text>
+  <text class="note" x="1344" y="848">완료 승인 전엔 프리뷰 주소만 있다</text>
+  <text class="note" x="1344" y="876">승인 후에만 프로덕션 주소로 승격</text>
+
+  <!-- 연결선 — 선을 먼저 전부 그리고, 라벨을 그 위에 얹는다 (라벨이 선에 잘리지 않도록) -->
+  <path class="flow" d="M 500 268 L 640 268 L 640 220"/>
+  <path class="flow" d="M 1070 290 L 1320 290"/>
+  <path class="flowGold" d="M 1070 460 L 1320 460"/>
+  <path class="flowGold" d="M 1070 500 L 1216 500 L 1216 836 L 1320 836"/>
+  <path class="flowGray" d="M 1070 540 L 1250 540 L 1250 790 L 1320 790"/>
+  <path class="flow" d="M 1070 866 L 1240 866 L 1240 500 L 1320 500"/>
+  <path class="flowGray" d="M 500 560 L 630 560"/>
+  <path class="flowGray" d="M 1320 640 L 1264 640 L 1264 362 L 515 362 L 515 290 L 500 290"/>
+
+  <text class="edgeLabel" x="516" y="248">지시·승인</text>
+  <text class="edgeLabel" x="1082" y="272">작업·승인 기록</text>
+  <text class="edgeLabel" x="1082" y="442">자기 일만 리스</text>
+  <text class="edgeLabel" x="1082" y="516">프리뷰 배포</text>
+  <text class="edgeLabel" x="1082" y="556">승인 후 승격</text>
+  <text class="edgeLabel" x="1082" y="896">대화 원본 보관</text>
+  <text class="edgeLabel" x="510" y="542">폴링·발신</text>
+  <text class="edgeLabel" x="496" y="216" text-anchor="end">현황판 열기 · 결과물 실행</text>
+
+  <text class="note" x="60" y="700">저장 위치가 갈린 이유</text>
+  <text class="body" x="60" y="736">원본은 무손실이라 지우기 전 필수 —</text>
+  <text class="body" x="60" y="768">텔레그램은 지난 대화를 돌려주지 않는다.</text>
+  <text class="body" x="60" y="800">요약은 읽히기 위한 손실 압축이라</text>
+  <text class="body" x="60" y="832">DB 용량을 쓰지 않고 파일로 둔다.</text>
+  <text class="body" x="60" y="880">방마다 게이트웨이가 따로인 이유는</text>
+  <text class="body" x="60" y="912">개인회생 방의 실행이 회계 폴더를</text>
+  <text class="body" x="60" y="944">열 수 없게 하기 위해서다.</text>
+
+  <text class="note" x="60" y="1050">2026-08-23 기준 · 실행 엔진 3종 · 방 4개 운영 · 수신 기본 polling · 승인 카테고리 분리 · 배포 전 승인 게이트</text>
+</svg>
