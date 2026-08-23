@@ -20,7 +20,7 @@
     .flow{stroke:#2d6a4f;stroke-width:3;fill:none;marker-end:url(#a)}
     .flowGold{stroke:#c9a961;stroke-width:3;fill:none;marker-end:url(#ag)}
     .flowGray{stroke:#5f6b7a;stroke-width:2;fill:none;stroke-dasharray:9 7;marker-end:url(#agr)}
-    .edgeLabel{font:19px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a;paint-order:stroke;stroke:#fafaf7;stroke-width:6;stroke-linejoin:round}
+    .edgeLabel{font:19px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a;paint-order:stroke;stroke:#fafaf7;stroke-width:11;stroke-linejoin:round}
   </style>
 
   <defs>
@@ -72,10 +72,10 @@
 
   <rect class="cardGold" x="630" y="394" width="440" height="176" rx="8"/>
   <text class="cardHead" x="654" y="428">local-gateway — 방마다 1개</text>
-  <text class="body" x="654" y="462">자기 gateway_id 로 온 일만 리스</text>
+  <text class="body" x="654" y="462">자기 gateway_id 로 온 일만 처리</text>
   <text class="body" x="654" y="494">허용된 폴더 안에서만 실행</text>
   <text class="body" x="654" y="526">웹 산출물은 프리뷰까지 여기서</text>
-  <text class="note" x="654" y="554">프로덕션 승격은 완료 승인 후 별도 폴러가</text>
+  <text class="note" x="654" y="554">프로덕션 승격은 완료 승인 후 자동 진행</text>
 
   <rect class="card" x="630" y="594" width="440" height="130" rx="8"/>
   <text class="cardHead" x="654" y="628">실행 엔진 3종</text>
@@ -118,23 +118,24 @@
   <text class="note" x="1344" y="876">승인 후에만 프로덕션 주소로 승격</text>
 
   <!-- 연결선 — 선을 먼저 전부 그리고, 라벨을 그 위에 얹는다 (라벨이 선에 잘리지 않도록) -->
-  <path class="flow" d="M 500 268 L 640 268 L 640 220"/>
+  <path class="flow" d="M 500 268 L 630 268"/>
   <path class="flow" d="M 1070 290 L 1320 290"/>
-  <path class="flowGold" d="M 1070 460 L 1320 460"/>
+  <path class="flowGold" d="M 1070 430 L 1200 430 L 1200 338 L 1320 338"/>
   <path class="flowGold" d="M 1070 500 L 1216 500 L 1216 836 L 1320 836"/>
   <path class="flowGray" d="M 1070 540 L 1250 540 L 1250 790 L 1320 790"/>
   <path class="flow" d="M 1070 866 L 1240 866 L 1240 500 L 1320 500"/>
-  <path class="flowGray" d="M 500 560 L 630 560"/>
-  <path class="flowGray" d="M 1320 640 L 1264 640 L 1264 362 L 515 362 L 515 290 L 500 290"/>
+  <path class="flowGray" d="M 500 560 L 612 560 L 612 330 L 630 330"/>
+  <path class="flowGray" d="M 500 290 L 512 290 L 512 995 L 1264 995 L 1264 640 L 1320 640"/>
+  <path class="flowGray" d="M 1264 995 L 1264 912 L 1320 912"/>
 
-  <text class="edgeLabel" x="516" y="248">지시·승인</text>
-  <text class="edgeLabel" x="1082" y="272">작업·승인 기록</text>
-  <text class="edgeLabel" x="1082" y="442">자기 일만 리스</text>
-  <text class="edgeLabel" x="1082" y="516">프리뷰 배포</text>
-  <text class="edgeLabel" x="1082" y="556">승인 후 승격</text>
-  <text class="edgeLabel" x="1082" y="896">대화 원본 보관</text>
-  <text class="edgeLabel" x="510" y="542">폴링·발신</text>
-  <text class="edgeLabel" x="496" y="216" text-anchor="end">현황판 열기 · 결과물 실행</text>
+  <text class="edgeLabel" x="516" y="275">지시·승인</text>
+  <text class="edgeLabel" x="1082" y="297">작업·승인 기록</text>
+  <text class="edgeLabel" x="1082" y="437">자기 방 일만</text>
+  <text class="edgeLabel" x="1082" y="507">프리뷰 배포</text>
+  <text class="edgeLabel" x="1082" y="547">승인 후 승격</text>
+  <text class="edgeLabel" x="1082" y="873">대화 원본 보관</text>
+  <text class="edgeLabel" x="524" y="567">폴링·발신</text>
+  <text class="edgeLabel" x="900" y="1002" text-anchor="middle">현황판 열기 · 결과물 실행</text>
 
   <text class="note" x="60" y="700">저장 위치가 갈린 이유</text>
   <text class="body" x="60" y="736">원본은 무손실이라 지우기 전 필수 —</text>

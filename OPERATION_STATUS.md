@@ -74,7 +74,10 @@ The original Gate 1 and Telegram transition specifications are not fully impleme
 ## Latest Fixes Verified On 2026-08-13
 
 - Telegram proposal buttons remain compact text: `실행`, `수정`, `반려`.
-- Completion buttons remain compact text: `검증`, `보완`, `완료`.
+- Completion buttons: superseded on 2026-08-23. Completion is now decided in the Mini App board, whose
+  `FINAL_APPROVAL_ACTIONS` are `승인` (final_approve) and `보완 요청` (request_revision) only. The older
+  in-room three-button keyboard (`검증`, `보완`, `완료` via `buildCompletionKeyboard`) is no longer wired
+  into any production path.
 - Multi-AI collaboration requests are now routed as `multi_ai_review` when the request mentions Claude/Codex/Audit collaboration or asks for improvement review.
 - The user phrase `추가로 개선할 사항을 찾는 작업이다` was live-smoke tested through the Telegram webhook path and stored as `intent=multi_ai_review`.
 - Multi-AI approval no longer starts AuditBot before ClaudeBot/CodexBot results exist. ClaudeBot and CodexBot are queued first.
