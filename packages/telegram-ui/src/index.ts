@@ -26,15 +26,19 @@ export function buildCommandHelp(): string {
   ].join("\n");
 }
 
-export function buildProposalKeyboard(proposalId: string): InlineKeyboardMarkup {
+// autoAllowed=true(파일을 안 바꾸는 조회성 제안)면 "실행" 버튼을 아예 뺀다.
+// 라이브 실측(2026-08-23): 자동허용으로 이미 실행이 시작된 제안에 "실행" 버튼이 그대로
+// 뜨자 방장이 "안 눌렀는데 왜 실행됐지" 하고 헷갈렸다 — 이미 끝난 일을 다시 "시작하라"는
+// 버튼이 남아있는 게 문제였다. "수정"·"반려"(막거나 고치는 용도)는 자동허용 뒤에도 여전히
+// 의미가 있으므로 남긴다 — 판단이 틀렸을 때의 유일한 개입 수단이다.
+export function buildProposalKeyboard(proposalId: string, options?: { autoAllowed?: boolean }): InlineKeyboardMarkup {
+  const approveButton = { text: "실행", callback_data: `proposal:${proposalId}:approve` };
+  const rest = [
+    { text: "수정", callback_data: `proposal:${proposalId}:revise` },
+    { text: "반려", callback_data: `proposal:${proposalId}:reject` }
+  ];
   return {
-    inline_keyboard: [
-      [
-        { text: "실행", callback_data: `proposal:${proposalId}:approve` },
-        { text: "수정", callback_data: `proposal:${proposalId}:revise` },
-        { text: "반려", callback_data: `proposal:${proposalId}:reject` }
-      ]
-    ]
+    inline_keyboard: [options?.autoAllowed ? rest : [approveButton, ...rest]]
   };
 }
 

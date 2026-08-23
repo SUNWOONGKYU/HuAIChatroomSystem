@@ -72,9 +72,15 @@ test("파일을 안 바꾸는 작업은 승인 카드와 함께 자동승인 행
     occurredAt: "2026-08-15T00:00:00.000Z"
   });
 
+  // 실측(2026-08-23): 이미 자동으로 시작된 제안에 "실행" 버튼이 남아있으면 방장이
+  // "안 눌렀는데 왜 실행됐지" 하고 헷갈린다 — 개입 수단(수정·반려)만 남기고 뺀다.
   const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
   assert.match(message?.body.payload.text, /🟢 조회성 작업/);
-  assert.ok(message?.body.payload.keyboard, "판단이 틀렸을 때 대비용 버튼은 그대로 남아야 한다");
+  assert.deepEqual(
+    message?.body.payload.keyboard?.inline_keyboard?.[0]?.map((b: { text: string }) => b.text),
+    ["수정", "반려"],
+    "이미 시작된 제안에 '실행' 버튼이 남아있으면 안 된다"
+  );
 
   const approvalCall = calls.requests.find((request) => request.url.includes("/huai_approvals"));
   assert.ok(approvalCall, "자동승인 행이 huai_approvals 에 남아야 한다");
@@ -102,6 +108,13 @@ test("파일을 바꾸는 작업(기본값)은 자동승인 행을 남기지 않
   });
 
   assert.equal(calls.requests.some((request) => request.url.includes("/huai_approvals")), false);
+
+  const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
+  assert.deepEqual(
+    message?.body.payload.keyboard?.inline_keyboard?.[0]?.map((b: { text: string }) => b.text),
+    ["실행", "수정", "반려"],
+    "승인이 필요한 제안은 실행 버튼이 그대로 있어야 한다"
+  );
 });
 
 // "버전 3개 만들어줘" — 소대장 판단 1번이 제안 3개로 나뉜다. 각 제안은 독립적으로

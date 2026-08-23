@@ -629,7 +629,7 @@ export class SupabaseOutboxStore {
         messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId: input.telegramChatId,
         text: renderLeaderPlanMessage({ ...plan, title }),
-        keyboard: buildProposalKeyboard(proposalId),
+        keyboard: buildProposalKeyboard(proposalId, { autoAllowed: plan.mutatesFiles === false }),
         binding: { kind: "event", eventId: input.sourceEventId },
         idempotencyKey: input.idempotencyKey
       },
