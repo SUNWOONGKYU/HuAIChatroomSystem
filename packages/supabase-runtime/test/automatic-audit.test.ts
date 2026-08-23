@@ -409,3 +409,21 @@ test("이미 써 본 엔진은 다시 고르지 않는다", () => {
   // 전부 써 봤으면 더 넘길 곳이 없다.
   assert.equal(nextEngineAfterTried(["claude_code", "codex", "antigravity"]), undefined);
 });
+
+// 라이브 확인(2026-08-23): ASSIGNEE=codex_leader 작업이 코덱스 한도로 막혔을 때
+// 클로드로 넘어갔다 — PO 는 "코덱스가 막히면 안티그래비티로"를 기대했는데, 고정
+// 배열 순서(claude_code 가 항상 먼저) 때문에 어긋났다. 막힌 엔진의 바로 다음 자리부터
+// 순환하도록 고쳐 이 기대와 맞춘다.
+test("워커 엔진이 코덱스로 막히면(감사 아님) 안티그래비티가 클로드보다 먼저다", () => {
+  assert.equal(nextEngineAfterTried(["codex"]), "antigravity");
+  // 안티그래비티까지 막히면 그제서야 클로드.
+  assert.equal(nextEngineAfterTried(["codex", "antigravity"]), "claude_code");
+});
+
+test("워커 엔진이 클로드로 막히면 코덱스가 다음이다 (원래 배열 순서와 동일)", () => {
+  assert.equal(nextEngineAfterTried(["claude_code"]), "codex");
+});
+
+test("워커 엔진이 안티그래비티로 막히면 클로드가 다음이다", () => {
+  assert.equal(nextEngineAfterTried(["antigravity"]), "claude_code");
+});

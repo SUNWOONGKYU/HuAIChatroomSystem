@@ -1519,11 +1519,21 @@ export function fallbackHopCount(attemptId: string): number {
 
 // 이미 시도한 엔진을 빼고 다음을 고른다. 두 번째 넘길 때 첫 번째로 막힌 엔진을 다시
 // 고르면 같은 실패를 반복한다.
+//
+// 고정된 배열 순서(claude_code→codex→antigravity)로 고르면 코덱스가 막혔을 때 항상
+// 클로드부터 가고, 안티그래비티는 클로드까지 막혀야만 차례가 온다 — "코덱스가 막히면
+// 안티그래비티로" 라는 실제 기대(라이브 확인 후 PO 지적)와 어긋난다. 그래서 막힌
+// 엔진의 "다음 자리"부터 순환한다 — 방금 막힌 엔진 바로 뒤가 다음 후보다.
 export function nextEngineAfterTried(
   tried: readonly AiAdapterType[],
   workerAdapterType?: AiAdapterType
 ): AiAdapterType | undefined {
-  const remaining = AI_ADAPTER_TYPES.filter((engine) => !tried.includes(engine));
+  const blocked = tried[tried.length - 1];
+  const blockedIndex = AI_ADAPTER_TYPES.indexOf(blocked);
+  const rotated = blockedIndex === -1
+    ? AI_ADAPTER_TYPES
+    : [...AI_ADAPTER_TYPES.slice(blockedIndex + 1), ...AI_ADAPTER_TYPES.slice(0, blockedIndex + 1)];
+  const remaining = rotated.filter((engine) => !tried.includes(engine));
   const independent = remaining.filter((engine) => engine !== workerAdapterType);
   return independent[0] ?? remaining[0];
 }
