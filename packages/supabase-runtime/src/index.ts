@@ -1721,13 +1721,18 @@ export function renderGatewayReportText(input: {
   // \uAC10\uC0AC\uB294 \uC791\uC5C5\uC774 \uC544\uB2C8\uB2E4. \uB458\uC744 \uAC19\uC740 \uBB38\uAD6C\uB85C \uBCF4\uACE0\uD558\uBA74 \uAC10\uC0AC\uAC00 \uC2E4\uD328\uD588\uC744 \uB54C \uBC29\uC7A5\uC774 \uC791\uC5C5\uC774
   // \uC2E4\uD328\uD55C \uC904 \uC548\uB2E4 \u2014 \uB77C\uC774\uBE0C\uC5D0\uC11C \uC2E4\uC81C\uB85C \uADF8\uB807\uAC8C \uC77D\uD614\uB2E4(\uC791\uC5C5\uC740 \uC131\uACF5, \uAC10\uC0AC\uB9CC \uD55C\uB3C4\uB85C \uC8FD\uC74C).
   const isAudit = input.request.reportBotRole === "auditor";
+  // \uBC29\uC7A5\uC774 \uC2E4\uC81C\uB85C \uC5B4\uB290 \uC5D4\uC9C4\uC774 \uC77C\uD588\uB294\uC9C0 \uBA54\uC2DC\uC9C0 \uC790\uCCB4\uC5D0\uC11C \uC54C \uC218 \uC788\uC5B4\uC57C \uD55C\uB2E4. \uBC1C\uC2E0 \uBD07
+  // \uC774\uB984(ClaudeBot/CodexBot)\uB9CC\uC73C\uB85C\uB294 \uC548\uD2F0\uADF8\uB798\uBE44\uD2F0 \uD3F4\uBC31\uC744 \uAD6C\uBD84\uD560 \uC218 \uC5C6\uB2E4 \u2014 \uC548\uD2F0\uADF8\uB798\uBE44\uD2F0\uB294
+  // \uC544\uC9C1 \uC790\uAE30 \uBD07\uC774 \uC5C6\uC5B4 ClaudeBot \uC774\uB984\uC744 \uBE4C\uB824 \uBCF4\uB0B4\uBBC0\uB85C(engineActorName\u00B7reportBotRoleForAdapter
+  // \uCC38\uACE0), \uC2E4\uC81C \uC2E4\uD589 \uC5D4\uC9C4\uC744 \uBCF8\uBB38\uC5D0 \uC9C1\uC811 \uBC1D\uD78C\uB2E4(\uB77C\uC774\uBE0C \uD655\uC778 \uD6C4 PO \uC9C0\uC801, 2026-08-23).
+  const engineLabel = "(" + engineActorName(input.request.adapterType) + ")";
   const subject = isAudit ? "\uAC10\uC0AC \uC2E4\uD589" : "\uC791\uC5C5 \uC2E4\uD589";
 
   if (input.status === "completed") {
     const summary = summarizeGatewayOutput(input.events);
     const lines = summary
-      ? [subject + " \uC644\uB8CC", "\uACB0\uACFC:", summary]
-      : [subject + " \uC644\uB8CC."];
+      ? [subject + " \uC644\uB8CC " + engineLabel, "\uACB0\uACFC:", summary]
+      : [subject + " \uC644\uB8CC " + engineLabel + "."];
     const collectionFailure = input.events.find(
       (event): event is Extract<GatewayEvent, { type: "artifact_collection_failed" }> =>
         event.type === "artifact_collection_failed"
@@ -1741,7 +1746,7 @@ export function renderGatewayReportText(input: {
   const outputSummary = summarizeGatewayOutput(input.events);
   const reason = humanReadableGatewayError(input.errorKind ?? outputSummary ?? "failed", gatewayFailureEvidence(input.events) || outputSummary, input.request.adapterType);
   return [
-    subject + " \uC2E4\uD328",
+    subject + " \uC2E4\uD328 " + engineLabel,
     "\uC6D0\uC778: " + reason,
     isAudit
       // \uAC10\uC0AC\uAC00 \uC8FD\uC5C8\uC5B4\uB3C4 \uC791\uC5C5 \uACB0\uACFC\uB294 \uADF8\uB300\uB85C \uC788\uB2E4. \uBC29\uC7A5\uC774 \uBB34\uC5C7\uC744 \uC783\uC5C8\uB294\uC9C0 \uC54C\uC544\uC57C \uC2B9\uC778 \uC5EC\uBD80\uB97C

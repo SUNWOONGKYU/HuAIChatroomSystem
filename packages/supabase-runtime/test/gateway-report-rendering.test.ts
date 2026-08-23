@@ -31,6 +31,37 @@ test("gateway report hides internal json and hook output from Telegram text", ()
   assert.equal(text.includes("OUTPUT:"), false);
 });
 
+// 라이브 확인(2026-08-23): 안티그래비티가 코덱스 폴백으로 대신 일했는데, 방에 나간
+// 보고는 발신 봇(ClaudeBot 이름을 빌림) 하나로만 보여서 방장이 실제 실행 엔진을 알 수
+// 없었다 — PO 지적. 이제 완료/실패 문구 자체에 엔진 이름을 밝힌다.
+test("완료 보고에 실제 실행 엔진이 명시된다 (안티그래비티 폴백도 구분 가능)", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "antigravity" },
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "파일을 만들었습니다." }]
+  });
+  assert.match(text, /AntigravityBot/, "안티그래비티가 실제로 일했다는 사실이 문구에 있어야 한다");
+});
+
+test("실패 보고에도 실제 실행 엔진이 명시된다", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "codex" },
+    status: "failed",
+    errorKind: "exit-code-1",
+    events: []
+  });
+  assert.match(text, /^작업 실행 실패 \(CodexBot\)/);
+});
+
+test("claude_code 로 실행된 완료 보고는 ClaudeBot 으로 표시된다", () => {
+  const text = renderGatewayReportText({
+    request: { ...makeRequest(), adapterType: "claude_code" },
+    status: "completed",
+    events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "완료." }]
+  });
+  assert.match(text, /ClaudeBot/);
+});
+
 // claude 어댑터를 --output-format text 에서 json 으로 바꿨다(session_id 를 stdout 에
 // 실으려면 그래야 한다 — text 모드엔 아예 안 실렸다). 그 JSON 통짜 덩어리가 방에 그대로
 // 뜨면 안 되고, 안의 result 필드(사람이 볼 답)만 나가야 한다. 아래 JSON은
