@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HuAI Collab Chatroom System — 설치 및 사용 설명서</title>
+<meta name="description" content="HuAI Collab Chatroom System 설치부터 사용까지, 비개발자도 그대로 따라 할 수 있는 안내서">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
+<style>
+  :root{
+    --c-bg:#FAFAF7; --c-surface:#FFFFFF; --c-border:#E6E2D6;
+    --c-dark:#0A1F14; --c-forest:#2D6A4F; --c-sage:#9FC7AF;
+    --c-gold:#C9A961; --c-gold-soft:#E3CB8C; --c-gold-deep:#A88A4A; --c-gold-text:#7A6231;
+    --c-text:#1a2332; --c-body:#3a4558; --c-muted:#5f6b7a; --c-alert:#8B2635;
+    --gds-font:"Pretendard Variable","Pretendard","Segoe UI","Malgun Gothic",sans-serif;
+    --radius-s:8px; --radius-m:12px; --radius-l:16px;
+    --shadow-card:0 2px 6px rgba(10,31,20,.06);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; font-family:var(--gds-font); background:var(--c-bg); color:var(--c-body);
+    line-height:1.7; -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,h4{color:var(--c-text); line-height:1.4; font-family:var(--gds-font)}
+  a{color:var(--c-gold-text)}
+  code{
+    font-family:"Cascadia Code","Consolas",monospace; background:#F1EFE8; color:#5a4a20;
+    padding:.15em .4em; border-radius:5px; font-size:.92em;
+  }
+  pre{
+    background:var(--c-dark); color:#E9F5EE; padding:16px 18px; border-radius:var(--radius-m);
+    overflow-x:auto; font-size:14px; line-height:1.6;
+  }
+  pre code{background:none; color:inherit; padding:0}
+
+  /* ---------- header ---------- */
+  .hero{
+    background:linear-gradient(120deg,#0A1F14 0%,#173B29 55%,#2D6A4F 130%);
+    color:#fff; padding:56px 24px 40px;
+  }
+  .hero-inner{max-width:980px; margin:0 auto}
+  .hero-kicker{
+    display:inline-block; font-size:13px; font-weight:700; letter-spacing:.08em;
+    color:var(--c-gold-soft); background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.18);
+    padding:5px 12px; border-radius:999px; margin-bottom:16px;
+  }
+  .hero h1{color:#fff; font-size:clamp(26px,4vw,38px); margin:0 0 12px; font-weight:800}
+  .hero h1 .accent{color:var(--c-gold-soft)}
+  .hero p{color:#D9E6DE; font-size:16px; max-width:680px; margin:0}
+
+  /* ---------- tabs ---------- */
+  .tabbar-wrap{position:sticky; top:0; z-index:40; background:var(--c-bg); border-bottom:1px solid var(--c-border)}
+  .tabbar{
+    max-width:980px; margin:0 auto; display:flex; gap:8px; padding:14px 24px;
+    overflow-x:auto; -ms-overflow-style:none; scrollbar-width:none;
+  }
+  .tabbar::-webkit-scrollbar{display:none}
+  .tab-btn{
+    flex:0 0 auto; font-family:var(--gds-font); font-weight:600; font-size:14.5px;
+    color:var(--c-text); background:#fff; border:1px solid var(--c-border);
+    border-radius:10px; padding:9px 15px; cursor:pointer; white-space:nowrap; transition:.15s;
+  }
+  .tab-btn:hover{border-color:var(--c-gold)}
+  .tab-btn.active{background:var(--c-dark); border-color:var(--c-dark); color:#fff; font-weight:700}
+  .tab-num{opacity:.6; margin-right:5px; font-variant-numeric:tabular-nums}
+
+  /* ---------- content ---------- */
+  main{max-width:980px; margin:0 auto; padding:40px 24px 100px}
+  .panel{display:none; animation:fade .25s ease}
+  .panel.active{display:block}
+  @keyframes fade{from{opacity:0; transform:translateY(4px)} to{opacity:1; transform:translateY(0)}}
+
+  .panel-head{margin-bottom:28px}
+  .panel-badge{
+    display:inline-flex; align-items:center; gap:8px; background:var(--c-dark); color:#fff;
+    font-weight:700; font-size:13px; padding:7px 14px 7px 10px; border-radius:999px; margin-bottom:14px;
+  }
+  .panel-badge .n{background:var(--c-gold-soft); color:#3a2f10; width:22px; height:22px; border-radius:50%;
+    display:inline-flex; align-items:center; justify-content:center; font-size:12px}
+  .panel-head h2{font-size:26px; margin:0 0 8px}
+  .panel-head .lead{color:var(--c-muted); font-size:15.5px; margin:0}
+
+  h3.section{font-size:18px; color:var(--c-forest); margin:34px 0 10px; font-weight:800}
+  h3.section:first-of-type{margin-top:0}
+
+  .card{
+    background:var(--c-surface); border:1px solid var(--c-border); border-radius:var(--radius-l);
+    padding:22px 24px; margin:16px 0; box-shadow:var(--shadow-card);
+  }
+  .card h4{margin:0 0 8px; font-size:16px}
+
+  .def-box{
+    border:1px solid var(--c-gold-soft); background:#FBF6E8; border-radius:var(--radius-m);
+    padding:20px 22px; margin:18px 0; font-weight:600; color:#3a2f10; font-size:15.5px;
+  }
+  .tip-box{
+    border-left:4px solid var(--c-forest); background:#EFF6F1; border-radius:0 var(--radius-m) var(--radius-m) 0;
+    padding:16px 20px; margin:18px 0; font-size:15px;
+  }
+  .warn-box{
+    border-left:4px solid var(--c-alert); background:#FBEEEF; border-radius:0 var(--radius-m) var(--radius-m) 0;
+    padding:16px 20px; margin:18px 0; font-size:15px; color:#5a1e26;
+  }
+
+  .step-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; margin:18px 0}
+  .step-card{background:#fff; border:1px solid var(--c-border); border-radius:var(--radius-l); padding:18px; box-shadow:var(--shadow-card)}
+  .step-badge{
+    width:30px; height:30px; border-radius:50%; background:var(--c-gold-soft); color:#3a2f10;
+    font-weight:800; font-size:14px; display:inline-flex; align-items:center; justify-content:center; margin-bottom:10px;
+  }
+  .step-card h5{margin:0 0 6px; font-size:15px; color:var(--c-text)}
+  .step-card p{margin:0; font-size:13.8px; color:var(--c-muted)}
+
+  table{width:100%; border-collapse:collapse; margin:16px 0; font-size:14.5px}
+  th,td{border:1px solid var(--c-border); padding:10px 12px; text-align:left; vertical-align:top}
+  th{background:#F3F1E9; color:var(--c-text); font-weight:700}
+  tr:nth-child(even) td{background:#FCFCFA}
+
+  .btn-row{display:flex; gap:10px; flex-wrap:wrap; margin:14px 0}
+  .pill{
+    display:inline-block; border:1px solid var(--c-border); border-radius:999px; background:#fff;
+    padding:7px 14px; font-size:13.5px; font-weight:600; color:var(--c-text);
+  }
+  .pill.accent{background:var(--c-forest); border-color:var(--c-forest); color:#fff}
+
+  .checklist{list-style:none; margin:16px 0; padding:0; display:grid; gap:8px}
+  .checklist li{
+    display:flex; gap:10px; align-items:flex-start; background:#fff; border:1px solid var(--c-border);
+    border-radius:var(--radius-m); padding:12px 14px; font-size:14.5px;
+  }
+  .checklist li b{color:var(--c-text)}
+  .checklist .mark{
+    flex:0 0 auto; width:20px; height:20px; border-radius:50%; background:var(--c-forest); color:#fff;
+    font-size:12px; display:flex; align-items:center; justify-content:center; margin-top:1px;
+  }
+
+  .appendix-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; margin:16px 0}
+  .appendix-card{
+    background:#fff; border:1px solid var(--c-border); border-radius:var(--radius-l); padding:18px;
+    box-shadow:var(--shadow-card); display:flex; flex-direction:column; gap:8px; text-decoration:none;
+  }
+  .appendix-card:hover{border-color:var(--c-gold)}
+  .appendix-card .kicker{font-size:12px; font-weight:700; color:var(--c-gold-text); letter-spacing:.03em}
+  .appendix-card h5{margin:0; font-size:15.5px; color:var(--c-text)}
+  .appendix-card p{margin:0; font-size:13.5px; color:var(--c-muted)}
+  .diagram-block{
+    background:#fff; border:1px solid var(--c-border); border-radius:var(--radius-l); padding:18px;
+    box-shadow:var(--shadow-card); margin:16px 0;
+  }
+  .diagram-block img{width:100%; height:auto; border-radius:var(--radius-s); display:block; border:1px solid var(--c-border)}
+  .diagram-block .cap{font-size:13.5px; color:var(--c-muted); margin-top:10px}
+
+  footer{max-width:980px; margin:0 auto; padding:20px 24px 60px; color:var(--c-muted); font-size:13px; border-top:1px solid var(--c-border)}
+
+  @media (max-width:640px){
+    .hero{padding:40px 18px 28px}
+    main{padding:28px 18px 80px}
+    .panel-head h2{font-size:22px}
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-inner">
+    <span class="hero-kicker">HuAI COLLAB CHATROOM SYSTEM</span>
+    <h1>설치 및 <span class="accent">사용 설명서</span></h1>
+    <p>텔레그램 방 하나를 AI 업무 지휘소로 만드는 시스템입니다. 기술을 몰라도 이 문서 순서대로
+    따라 하면 설치부터 실제 사용까지 끝납니다. 최신 갱신일 2026-08-23.</p>
+  </div>
+</div>
+
+<div class="tabbar-wrap">
+  <nav class="tabbar" id="tabbar">
+    <button class="tab-btn active" data-tab="0"><span class="tab-num">00</span>시작하기</button>
+    <button class="tab-btn" data-tab="1"><span class="tab-num">01</span>설치 · PC 준비</button>
+    <button class="tab-btn" data-tab="2"><span class="tab-num">02</span>설치 · Supabase</button>
+    <button class="tab-btn" data-tab="3"><span class="tab-num">03</span>설치 · 텔레그램·실행</button>
+    <button class="tab-btn" data-tab="4"><span class="tab-num">04</span>사용법</button>
+    <button class="tab-btn" data-tab="5"><span class="tab-num">05</span>문제 해결</button>
+    <button class="tab-btn" data-tab="6"><span class="tab-num">06</span>부록</button>
+  </nav>
+</div>
+
+<main>
+
+  <!-- ============ 00. 시작하기 ============ -->
+  <section class="panel active" id="panel-0">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">00</span> 개요</span>
+      <h2>이 시스템이 뭔가요</h2>
+      <p class="lead">텔레그램 비공개 그룹방 하나가 "AI 업무 지휘소"가 됩니다. 방에서 사람 말투로
+      지시하면 AI(Claude·Codex)가 실제로 파일을 만들고 고치고, 결과를 방에 보고하고, 방장이
+      승인 버튼을 눌러야 최종 확정됩니다.</p>
+    </div>
+
+    <div class="def-box">
+      HuAI = 텔레그램 방(사람) + LeaderBot(요청 정리·승인 라우팅) + ClaudeBot·CodexBot(실행) +
+      AuditBot(독립 검증) + Supabase(공식 기록) + local-gateway(내 PC에서 실제 실행)가 함께
+      돌아가는 Human-AI 협업 운영 시스템입니다.
+    </div>
+
+    <h3 class="section">시작 전 체크리스트</h3>
+    <p>아래 5가지가 필요합니다. 전부 무료로 시작할 수 있습니다.</p>
+    <ul class="checklist">
+      <li><span class="mark">✓</span><div><b>Windows PC 1대</b> — AI가 실제로 코드를 실행하는 곳. 설치 후에는 이 PC가 켜져 있어야 시스템이 돌아갑니다.</div></li>
+      <li><span class="mark">✓</span><div><b>Node.js</b> — 이 시스템 자체가 Node.js로 만들어져 있습니다.</div></li>
+      <li><span class="mark">✓</span><div><b>Supabase 계정</b> — 작업 기록·승인 이력·산출물 주소를 저장하는 DB. 무료 플랜으로 충분합니다.</div></li>
+      <li><span class="mark">✓</span><div><b>Telegram 계정 + 봇 4개</b> — 사람이 지시하고 결과를 받는 화면.</div></li>
+      <li><span class="mark">✓</span><div><b>Vercel 계정</b> — AI가 만든 웹 결과물을 인터넷에 올려 폰에서 열어보는 용도. 무료 플랜으로 충분합니다.</div></li>
+    </ul>
+
+    <div class="tip-box">예상 소요 시간: 처음이면 30~50분 정도 걸립니다. 대부분 "계정 만들고 값 복사해서 붙여넣기"입니다. 탭 01 → 02 → 03 순서로 그대로 따라가면 됩니다.</div>
+  </section>
+
+  <!-- ============ 01. 설치 · PC 준비 ============ -->
+  <section class="panel" id="panel-1">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">01</span> 설치</span>
+      <h2>PC 준비 — Node.js와 시스템 파일</h2>
+      <p class="lead">이 PC에 시스템이 돌아갈 재료를 받는 단계입니다.</p>
+    </div>
+
+    <h3 class="section">1단계 — Node.js 설치</h3>
+    <ol>
+      <li><a href="https://nodejs.org" target="_blank" rel="noopener">nodejs.org</a>에 접속합니다.</li>
+      <li>"LTS"라고 적힌 버전을 다운로드합니다(권장 버전).</li>
+      <li>설치 파일을 실행하고 나오는 화면에서 전부 "Next"만 눌러 설치를 끝냅니다.</li>
+    </ol>
+    <p>확인: <code>Win</code> 키 → <code>PowerShell</code> 입력 → 엔터로 엽니다. 그 창에 아래를 치고 엔터:</p>
+    <pre><code>node --version</code></pre>
+    <p><code>v24</code>로 시작하는 숫자가 나오면 성공입니다.</p>
+
+    <h3 class="section">2단계 — 시스템 파일 받기</h3>
+    <p><b>git을 쓸 줄 알면:</b></p>
+    <pre><code>git clone https://github.com/SUNWOONGKYU/HuAIChatroomSystem.git C:\Dev\HuAIChatroomSystem</code></pre>
+    <p><b>git을 모르면(ZIP으로):</b></p>
+    <ol>
+      <li>GitHub 저장소 페이지 접속 → 초록색 <code>Code</code> 버튼 → <code>Download ZIP</code></li>
+      <li>다운로드된 zip을 오른쪽 클릭 → "압축 풀기" → <code>C:\Dev\HuAIChatroomSystem</code> 같은 기억하기 쉬운 경로에 풀기 (한글·공백 없는 경로 권장)</li>
+    </ol>
+
+    <h3 class="section">3단계 — 필요한 부품 설치 + 빌드</h3>
+    <p>PowerShell에서 방금 그 폴더로 이동한 뒤 아래 3줄을 순서대로 칩니다.</p>
+    <pre><code>cd C:\Dev\HuAIChatroomSystem
+npm install
+npm run build</code></pre>
+    <div class="tip-box"><code>npm install</code>은 1~3분 걸립니다. 중간에 빨간 글씨가 좀 보여도 마지막에 에러 없이 끝나면 괜찮습니다.</div>
+  </section>
+
+  <!-- ============ 02. 설치 · Supabase ============ -->
+  <section class="panel" id="panel-2">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">02</span> 설치</span>
+      <h2>Supabase 프로젝트 만들기</h2>
+      <p class="lead">이 시스템은 "누가 뭘 시켰고, 누가 승인했고, 결과물이 뭔지"를 전부 DB에 기록합니다. 텔레그램 메시지는 화면일 뿐이고, 공식 기록은 여기(Supabase)입니다.</p>
+    </div>
+
+    <div class="step-grid">
+      <div class="step-card"><div class="step-badge">1</div><h5>가입 · 프로젝트 생성</h5><p><a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a> 접속 → 회원가입(구글 계정 가능) → New Project → 이름·비밀번호(꼭 메모)·지역 입력 → Create</p></div>
+      <div class="step-card"><div class="step-badge">2</div><h5>URL·키 복사</h5><p>왼쪽 톱니바퀴(Project Settings) → API → <b>Project URL</b>과 <b>service_role 키</b>를 메모장에 복사</p></div>
+      <div class="step-card"><div class="step-badge">3</div><h5>DB 스키마 적용</h5><p>왼쪽 메뉴 SQL Editor → New query → <code>supabase/schema.sql</code> 전체 내용을 복사해 붙여넣고 Run</p></div>
+    </div>
+
+    <div class="warn-box">⚠️ service_role 키는 이 시스템 전체를 조작할 수 있는 열쇠입니다. 남에게 보여주거나 인터넷(GitHub 등)에 올리면 안 됩니다.</div>
+  </section>
+
+  <!-- ============ 03. 설치 · 텔레그램·실행 ============ -->
+  <section class="panel" id="panel-3">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">03</span> 설치</span>
+      <h2>텔레그램 연결, 설정 채우기, 실행</h2>
+      <p class="lead">봇 4개를 만들고, 값을 한 파일에 모으고, 서비스를 켜는 마지막 구간입니다.</p>
+    </div>
+
+    <h3 class="section">4단계 — 텔레그램 봇 4개 만들기</h3>
+    <p>이 시스템은 봇 1개가 아니라 4개(소대장·클로드·코덱스·감사관 역할)를 씁니다.</p>
+    <ol>
+      <li>텔레그램에서 <code>BotFather</code>(공식 파란 체크 봇)를 검색해 대화를 엽니다.</li>
+      <li><code>/newbot</code> 전송 → 봇 이름(아무거나) → 봇 username(반드시 <code>bot</code>으로 끝나야 함) 순서로 입력합니다.</li>
+      <li>성공하면 긴 토큰 문자열을 줍니다 — 메모장에 복사하고 어느 역할인지 표시해둡니다.</li>
+      <li>이 과정을 <b>4번 반복</b>: LeaderBot(소대장) · ClaudeBot · CodexBot · AuditBot(감사)</li>
+    </ol>
+    <div class="warn-box">⚠️ 4개는 반드시 서로 다른 봇(다른 토큰)이어야 합니다. 봇 1개로 4역할을 흉내내는 방식이 아닙니다.</div>
+
+    <h3 class="section">5단계 — 비공개 그룹 만들고 봇 초대</h3>
+    <ol>
+      <li>텔레그램에서 새 그룹(비공개)을 만들고 봇 4개를 전부 초대합니다.</li>
+      <li><b>그룹 chat_id 알아내기</b>: 그룹에 아무 메시지("테스트")를 보낸 뒤, 브라우저에서
+        <code>https://api.telegram.org/bot&lt;봇토큰&gt;/getUpdates</code> 를 엽니다.
+        <code>"chat":{"id":</code> 뒤에 나오는 숫자(보통 <code>-</code>로 시작)가 chat_id입니다.</li>
+      <li><b>내 user_id 알아내기</b>: 텔레그램에서 <code>@userinfobot</code>을 검색해 아무 메시지나 보내면 숫자 id를 알려줍니다. 이 값이 "방장 권한"의 기준입니다 — 승인 버튼은 이 id를 가진 사람만 누를 수 있습니다.</li>
+    </ol>
+
+    <h3 class="section">6단계 — 설정 파일 채우기</h3>
+    <ol>
+      <li><code>.env.operation.example</code> 파일을 복사해 이름을 <code>.env.operation.local</code>로 바꿉니다.</li>
+      <li>메모장으로 열어 아래 표의 값을 채웁니다.</li>
+    </ol>
+    <table>
+      <tr><th>항목</th><th>어디서 가져오는 값</th></tr>
+      <tr><td><code>SUPABASE_URL</code></td><td>탭 02의 Project URL</td></tr>
+      <tr><td><code>SUPABASE_SERVICE_ROLE_KEY</code></td><td>탭 02의 service_role 키</td></tr>
+      <tr><td><code>BOT_SERVICE_TELEGRAM_CHAT_ID</code></td><td>위 그룹 chat_id</td></tr>
+      <tr><td><code>BOT_SERVICE_OWNER_TELEGRAM_USER_ID</code></td><td>위 내 user_id</td></tr>
+      <tr><td><code>BOT_SERVICE_PLATOON/CLAUDE/CODEX/AUDITOR_BOT_TOKEN</code></td><td>봇 4개 토큰 (각각)</td></tr>
+    </table>
+    <p><code>BOT_SERVICE_RECEIVE_MODE=polling</code> 인지 확인합니다(없으면 추가) — 공개 인터넷 주소·터널 설정 없이 이 PC에서 텔레그램으로 직접 연결됩니다, 가장 간단한 방식입니다. <code>LOCAL_GATEWAY_ALLOWED_ROOTS</code>도 2단계에서 받은 폴더 경로로 맞춥니다.</p>
+    <div class="warn-box">⚠️ <code>.env.operation.local</code>은 절대 GitHub에 올리거나 남에게 보내면 안 됩니다. 비밀번호나 다름없는 값들이 들어있습니다.</div>
+
+    <h3 class="section">7단계 — 이 방을 시스템에 등록하기</h3>
+    <p>방 고유 번호(UUID)를 만듭니다:</p>
+    <pre><code>node -e "console.log(crypto.randomUUID())"</code></pre>
+    <p>아래 명령을 실제 값으로 바꿔 실행합니다:</p>
+    <pre><code>node scripts/generate-supabase-room-seed.mjs --room-id &lt;room-id&gt; --chat-id &lt;chat-id&gt; --owner-id &lt;owner-id&gt; --project-path "C:\Dev\HuAIChatroomSystem"</code></pre>
+    <p>출력된 SQL 전체를 복사해 Supabase SQL Editor에 붙여넣고 Run 합니다.</p>
+
+    <h3 class="section">8단계 — 서비스 실행</h3>
+    <p>PowerShell 창을 <b>2개</b> 엽니다(각각 계속 띄워둡니다).</p>
+    <div class="step-grid">
+      <div class="step-card"><div class="step-badge">창1</div><h5>bot-service</h5><pre style="margin-top:8px"><code>cd C:\Dev\HuAIChatroomSystem
+node dist/apps/bot-service/src/cli.js</code></pre></div>
+      <div class="step-card"><div class="step-badge">창2</div><h5>local-gateway</h5><pre style="margin-top:8px"><code>cd C:\Dev\HuAIChatroomSystem
+node dist/apps/local-gateway/src/cli.js</code></pre></div>
+    </div>
+    <p>두 창 모두 멈추지 않고 계속 떠 있는 상태면 정상입니다. <b>PC가 켜져 있는 동안 계속 열려 있어야</b> 시스템이 작동합니다.</p>
+
+    <h3 class="section">9단계 — 설치 확인</h3>
+    <p>텔레그램 그룹방에서:</p>
+    <pre><code>@my_leader_chatroom_bot 안녕</code></pre>
+    <p>LeaderBot이 몇 초 안에 반응하면 설치 성공입니다. 반응이 없으면 탭 05 "문제 해결"을 봅니다.</p>
+  </section>
+
+  <!-- ============ 04. 사용법 ============ -->
+  <section class="panel" id="panel-4">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">04</span> 사용</span>
+      <h2>실제로 이렇게 씁니다</h2>
+      <p class="lead">설치가 끝난 뒤, 방에서 AI에게 일을 시키고 승인하는 흐름입니다.</p>
+    </div>
+
+    <h3 class="section">AI에게 일 시키기</h3>
+    <p>봇을 지목해서 말하면 접수됩니다(그냥 하는 말에는 시스템이 관여하지 않습니다 — 사람끼리 대화하는 공간이기도 합니다).</p>
+    <pre><code>@my_leader_chatroom_bot 버튼 오류 원인을 찾아 수정해줘</code></pre>
+    <p>LeaderBot이 이걸 목적·범위·완료 조건을 갖춘 "작업 제안"으로 정리해 방에 올립니다.</p>
+
+    <h3 class="section">승인하기</h3>
+    <div class="btn-row">
+      <span class="pill accent">실행</span><span class="pill">수정</span><span class="pill">반려</span>
+      <span class="pill accent">검증</span><span class="pill">보완</span><span class="pill accent">완료</span>
+    </div>
+    <table>
+      <tr><th>버튼</th><th>의미</th></tr>
+      <tr><td><b>실행</b></td><td>제안을 승인하고 실제 작업을 시작합니다</td></tr>
+      <tr><td><b>수정</b></td><td>제안 내용을 다시 다듬어달라고 요청합니다</td></tr>
+      <tr><td><b>반려</b></td><td>이 제안은 진행하지 않습니다</td></tr>
+      <tr><td><b>검증</b></td><td>AuditBot 재검증을 요청합니다</td></tr>
+      <tr><td><b>보완</b></td><td>작업자에게 보완을 요청합니다</td></tr>
+      <tr><td><b>완료</b></td><td>방장이 최종 완료 승인합니다(현황판에서)</td></tr>
+    </table>
+
+    <div class="def-box">자동허용 — 파일을 전혀 안 바꾸는 조회·분석·설명성 지시는 "실행" 버튼 자체가 뜨지 않고 바로 시작됩니다(방에 "🟢 자동 시작" 안내만 뜹니다). 판단이 애매하면 시스템은 항상 안전한 쪽(승인 필요)으로 처리합니다.</div>
+
+    <h3 class="section">결과 확인하기</h3>
+    <p>작업이 끝나면 방에 결과가 옵니다. 300자가 넘는 긴 보고는 앞부분만 방에 오고 <b>[전문 보기]</b> 버튼이 붙습니다 — 눌러서 현황판에서 전체를 봅니다. 현황판은 방에 고정된 링크나 <code>/tasks</code> 명령으로 엽니다.</p>
+
+    <h3 class="section">완료 승인하기</h3>
+    <p>작업이 끝나면 <b>현황판에서</b> 완료 승인을 합니다(방 안에는 완료 승인 버튼이 따로 없습니다).</p>
+    <div class="tip-box"><b>퀴즈가 뜰 수 있습니다</b> — 파일을 실제로 바꾼 작업은 완료 승인 전에 "뭐가 바뀌었는지 이해했는지" 확인하는 객관식 3문항이 먼저 나옵니다(인지부채 방지 장치). 통과해야 완료 승인 버튼이 나옵니다.</div>
+    <div class="tip-box"><b>웹 페이지를 만든 작업이라면</b> — 완료 승인 전에는 산출물 링크가 "프리뷰"(아직 정식 주소 아님) 상태입니다. 완료 승인을 누르는 순간 그 링크가 정식(프로덕션) 주소로 바뀝니다 — 승인 전에 결과물이 먼저 공개돼버리는 걸 막기 위한 설계입니다.</div>
+
+    <h3 class="section">그 밖의 명령어</h3>
+    <pre><code>/tasks                작업 목록
+/task &lt;task_id&gt;       작업 하나 상세
+/search &lt;단어&gt;         작업 검색
+/trace &lt;task_id&gt;      이벤트·산출물·검증 이력
+@audit_chatroom_bot 이 작업을 보안 검토해줘   (감사관에게 직접 요청)</code></pre>
+  </section>
+
+  <!-- ============ 05. 문제 해결 ============ -->
+  <section class="panel" id="panel-5">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">05</span> FAQ</span>
+      <h2>문제가 생기면</h2>
+      <p class="lead">처음 설치할 때 가장 자주 걸리는 것부터 정리했습니다.</p>
+    </div>
+    <table>
+      <tr><th>증상</th><th>원인 · 해결</th></tr>
+      <tr><td>봇이 아무 반응이 없다</td><td>탭 03의 두 PowerShell 창이 열려 있는지 확인. 닫혀 있으면 다시 실행</td></tr>
+      <tr><td><code>npm install</code>에서 멈추거나 에러</td><td>인터넷 연결 확인 후 다시 실행. 안 되면 Node.js를 v24 LTS로 재설치</td></tr>
+      <tr><td>창을 열자마자 바로 꺼진다(에러)</td><td><code>.env.operation.local</code>에 빈 값이 없는지 확인(특히 봇 토큰 4개, Supabase URL/키)</td></tr>
+      <tr><td>"봇 여러 개가 같은 토큰" 비슷한 에러</td><td>봇 4개가 진짜 서로 다른 토큰인지 확인</td></tr>
+      <tr><td>승인 버튼을 눌러도 반응이 늦다</td><td>정상입니다 — 실제 AI 실행은 몇 초~몇 분 걸립니다. 방에 "⏳ 작업 중" 표시가 주기적으로 올라옵니다</td></tr>
+      <tr><td>Supabase SQL 실행에서 에러</td><td><code>supabase/schema.sql</code> 전체를 빠짐없이 붙여넣었는지 확인(일부만 붙여넣으면 실패)</td></tr>
+    </table>
+    <div class="tip-box">이 표에 없는 문제는 탭 06 부록의 <code>GITHUB_QUICKSTART.md</code>(더 기술적인 버전)와 <code>OPERATION_STATUS.md</code>(현재 알려진 이슈 목록)를 참고하세요.</div>
+  </section>
+
+  <!-- ============ 06. 부록 ============ -->
+  <section class="panel" id="panel-6">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">06</span> 부록</span>
+      <h2>도해와 관련 문서</h2>
+      <p class="lead">시스템 구조를 그림으로 보고 싶거나, 더 기술적인 문서·운영 기록을 찾을 때 씁니다.</p>
+    </div>
+
+    <h3 class="section">시스템 관계도</h3>
+    <div class="diagram-block">
+      <img src="2026_08_23__HuAI_System_관계도.svg" alt="HuAI Collab Chatroom System 관계도 — 무엇이 무엇에 기대는지">
+      <p class="cap">무엇이 무엇에 기대는지(텔레그램·bot-service·local-gateway·Supabase·Vercel의 관계). 원본: <a href="2026_08_23__HuAI_System_관계도.svg" target="_blank" rel="noopener">SVG</a> · <a href="docs/시스템_관계도.md" target="_blank" rel="noopener">글로 된 설명</a></p>
+    </div>
+
+    <h3 class="section">작업 흐름도</h3>
+    <div class="diagram-block">
+      <img src="2026_08_23__HuAI_System_작업흐름도.svg" alt="HuAI Collab Chatroom System 작업 흐름도 — 지시 한 줄이 결과물이 되기까지">
+      <p class="cap">지시 한 줄이 결과물이 되기까지, 승인 카테고리 분리, 엔진이 막혔을 때의 인계 규칙. 원본: <a href="2026_08_23__HuAI_System_작업흐름도.svg" target="_blank" rel="noopener">SVG</a> · <a href="docs/작업_흐름도.md" target="_blank" rel="noopener">글로 된 설명</a></p>
+    </div>
+
+    <h3 class="section">관련 문서</h3>
+    <div class="appendix-grid">
+      <a class="appendix-card" href="README.md" target="_blank" rel="noopener">
+        <span class="kicker">개요</span><h5>README.md</h5><p>시스템 전체 소개, 운영 원칙, 검증 명령어</p>
+      </a>
+      <a class="appendix-card" href="GITHUB_QUICKSTART.md" target="_blank" rel="noopener">
+        <span class="kicker">기술 버전</span><h5>GITHUB_QUICKSTART.md</h5><p>이 설명서와 같은 절차를 개발자 눈높이로 압축한 버전</p>
+      </a>
+      <a class="appendix-card" href="OPERATION_STATUS.md" target="_blank" rel="noopener">
+        <span class="kicker">운영 기록</span><h5>OPERATION_STATUS.md</h5><p>현재 라이브에서 확인된 것, 알려진 이슈, 최근 변경 이력</p>
+      </a>
+      <a class="appendix-card" href="GITHUB_RELEASE_CHECKLIST.md" target="_blank" rel="noopener">
+        <span class="kicker">배포 전</span><h5>GITHUB_RELEASE_CHECKLIST.md</h5><p>GitHub에 올리기 전 보안·문서 점검 목록</p>
+      </a>
+      <a class="appendix-card" href="SYSTEM_DOCUMENTATION_SYNC.md" target="_blank" rel="noopener">
+        <span class="kicker">문서 정책</span><h5>SYSTEM_DOCUMENTATION_SYNC.md</h5><p>시스템이 바뀔 때 어느 문서를 같이 고쳐야 하는지</p>
+      </a>
+      <a class="appendix-card" href="HuAI_설치_및_사용_설명서.md" target="_blank" rel="noopener">
+        <span class="kicker">텍스트 버전</span><h5>HuAI_설치_및_사용_설명서.md</h5><p>이 페이지와 같은 내용의 마크다운 버전(GitHub에서 바로 읽기 좋음)</p>
+      </a>
+      <a class="appendix-card" href="2026_08_11__HuAI_Collab_Chatroom_System_페이스북_소개글.md" target="_blank" rel="noopener">
+        <span class="kicker">소개글</span><h5>페이스북 소개글</h5><p>비개발자에게 이 시스템을 한 문단으로 설명할 때</p>
+      </a>
+    </div>
+  </section>
+
+</main>
+
+<footer>HuAI Collab Chatroom System · 설치 및 사용 설명서 · 최신 갱신일 2026-08-23</footer>
+
+<script>
+  var buttons = document.querySelectorAll('.tab-btn');
+  var panels = document.querySelectorAll('.panel');
+  function activate(idx){
+    buttons.forEach(function(b){ b.classList.toggle('active', b.dataset.tab === idx); });
+    panels.forEach(function(p){ p.classList.toggle('active', p.id === 'panel-' + idx); });
+    history.replaceState(null, '', '#t' + idx);
+  }
+  buttons.forEach(function(b){
+    b.addEventListener('click', function(){
+      activate(b.dataset.tab);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  });
+  var initial = (location.hash || '').replace('#t', '');
+  if (initial && document.getElementById('panel-' + initial)) activate(initial);
+</script>
+</body>
+</html>
