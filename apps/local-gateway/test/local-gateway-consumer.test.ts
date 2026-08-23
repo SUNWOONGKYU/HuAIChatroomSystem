@@ -239,6 +239,46 @@ test("classifies Claude weekly limit reported on stdout", async () => {
 });
 
 
+// 실측 사고(2026-08-23): codex 가 자기 CLI 프로토콜로 한도를 통보했는데(모델이 쓴 보고서
+// 본문이 아니라 CLI 자신이 낸 {"type":"error",...} 이벤트) adapterType 제한에 걸려
+// "exit-code-1"로만 남았다. 폴백 자체는 다른 층(shouldFallbackToOtherEngine)이 원문을
+// 직접 봐서 정상 작동했지만, huai_outbox.last_error 가 원인을 못 담아 운영 상태판에
+// "조사 필요"로 잘못 떴다. 위 "does not classify Codex stdout fixture text..." 테스트가
+// 지키는 것(모델이 쓴 자유 텍스트 안의 우연한 "한도" 단어 오탐 방지)과는 다른 경로다 —
+// 여긴 CLI 자체의 최상위 프로토콜 이벤트라 오탐 위험이 없다.
+test("classifies Codex's own protocol-level usage-limit notice, not just Claude's", async () => {
+  const store = new FakeBotServiceStore();
+  const request = makeExecutionRequest({ projectPath: process.cwd(), adapterType: "codex" });
+  await seedLocalGatewayOutbox(store, request);
+  const events: GatewayEvent[] = [];
+
+  await runLocalGatewayConsumerOnce({
+    store,
+    policy: makePolicy(),
+    runner: {
+      async run() {
+        return {
+          exitCode: 1,
+          stdout: [
+            '{"type":"thread.started","thread_id":"01a02cc9-4d25-7c51-9da1-bd539e277074"}',
+            '{"type":"turn.started"}',
+            '{"type":"error","message":"You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2026 12:50 PM."}',
+            '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2026 12:50 PM."}}'
+          ].join("\n"),
+          stderr: "Reading additional input from stdin...\n"
+        };
+      }
+    },
+    sink: { async publish(event) { events.push(event); } },
+    limit: 10,
+    leaseUntil: "2026-08-10T00:01:00.000Z",
+    maxAttempts: 3
+  });
+
+  const last = events.at(-1);
+  assert.equal(last?.type === "failed" ? last.errorKind : "", "agent-usage-limit");
+});
+
 test("does not classify Codex stdout fixture text as Claude usage limit", async () => {
   const store = new FakeBotServiceStore();
   const request = makeExecutionRequest({ projectPath: process.cwd(), adapterType: "codex" });

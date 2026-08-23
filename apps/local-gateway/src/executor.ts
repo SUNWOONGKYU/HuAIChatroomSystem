@@ -277,6 +277,25 @@ export function classifyAgentFailure(result: ProcessRunResult, adapterType: stri
       const event = JSON.parse(trimmed) as AgentJsonEvent;
       const item = event.item;
       if (event.type === "item.completed" && item?.type === "error") return "agent-reported-error";
+
+      // Codex CLI 자체 프로토콜 신호(모델이 만든 item.text 가 아니라 CLI가 직접 내는 최상위
+      // 에러 이벤트) — looksLikeUsageLimitNotice 주석이 경계하는 사고(작업 산출물 안에 "한도"
+      // 단어가 우연히 들어간 것을 오탐)는 item.text/item.message 처럼 모델이 자유롭게 쓰는
+      // 필드에서만 일어난다. 여기는 CLI가 직접 보내는 통제 이벤트라 성격이 다르므로
+      // adapterType 제한(allowUsageLimit) 없이 항상 본다.
+      // 실측 사고(2026-08-23): codex 가 이 형태로 한도를 통보했는데 adapterType 제한에 걸려
+      // 못 잡고 "exit-code-1"로만 남았다 — 폴백 자체는 (다른 층인 shouldFallbackToOtherEngine
+      // 이 원문 텍스트를 직접 정규식으로 봐서) 정상 작동했지만, huai_outbox.last_error 가
+      // 원인을 못 담아 운영 상태판에 "조사 필요"로 잘못 떴다.
+      if (event.type === "error" && typeof event.message === "string") {
+        const protocolFailure = classifyFailureText(event.message, { allowUsageLimit: true });
+        if (protocolFailure) return protocolFailure;
+      }
+      if (event.type === "turn.failed" && typeof event.error?.message === "string") {
+        const protocolFailure = classifyFailureText(event.error.message, { allowUsageLimit: true });
+        if (protocolFailure) return protocolFailure;
+      }
+
       const textFailure = classifyFailureText(typeof item?.text === "string" ? item.text : "", { allowUsageLimit });
       if (textFailure) return textFailure;
       const messageFailure = classifyFailureText(typeof item?.message === "string" ? item.message : "", { allowUsageLimit });
@@ -325,6 +344,8 @@ function isAgentToolError(text: string): boolean {
 
 type AgentJsonEvent = {
   type?: string;
+  message?: string;
+  error?: { message?: string };
   item?: {
     type?: string;
     text?: string;
