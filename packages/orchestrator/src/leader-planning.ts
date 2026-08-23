@@ -23,6 +23,12 @@ export type LeaderPlan = {
   // "버전 3개 만들어줘" 처럼 명시적으로 여러 변형을 요청했을 때만 2 이상. 기본 1(=변형 없음).
   // 2~4 로 강제 제한한다 — 그 이상은 비용·리소스가 과해서 방장이 정말 원하는지 다시 확인해야 한다.
   variantCount: number;
+  // Grok Bot 벤치마크의 "승인 카테고리 분리(필수승인/자동허용)" 반영 — 2026-08-23.
+  // 파일을 만들거나 바꾸는 작업(true)만 방장의 시작 승인을 기다린다. 조회·분석·설명처럼
+  // 읽기만 하는 작업(false)은 emitLeaderProposal 이 승인 절차 없이 바로 큐에 올린다.
+  // LLM 출력이 없거나 해석 불가면 항상 true(승인 필요 쪽)로 떨어뜨린다 — 안전한 기본값은
+  // "승인을 놓치는 쪽"이 아니라 "덜 자동화되는 쪽"이다.
+  mutatesFiles: boolean;
 };
 
 export type LeaderDecision =
@@ -161,6 +167,9 @@ ${entry.summary}`),
     "ASSIGNEE: claude_leader 또는 codex_leader 또는 both",
     "REASON: <그 담당을 고른 이유>",
     "VARIANTS: <병렬로 만들 변형 개수, 기본 1, 최대 4>",
+    "MUTATES: <이 작업이 파일을 새로 만들거나 고치거나 지우면 yes, 코드·문서를 읽고 조회·분석·설명만",
+    "  하면(아무것도 안 바꾸면) no. 조금이라도 애매하면 반드시 yes 로 써라 — no 라고 쓰면",
+    "  방장 승인 없이 바로 실행된다.>",
     "",
     "질문이거나 설명을 구하는 것이면:",
     "DECISION: answer",
@@ -186,7 +195,7 @@ function parseLineFormat(raw: string): LeaderDecision | undefined {
   const fields = new Map<string, string>();
   let currentKey: string | undefined;
   for (const line of raw.split(/\r?\n/)) {
-    const match = /^\s*(DECISION|TITLE|PURPOSE|SCOPE|DONE|ASSIGNEE|REASON|ANSWER|VARIANTS)\s*:\s*(.*)$/i.exec(line);
+    const match = /^\s*(DECISION|TITLE|PURPOSE|SCOPE|DONE|ASSIGNEE|REASON|ANSWER|VARIANTS|MUTATES)\s*:\s*(.*)$/i.exec(line);
     if (match) {
       currentKey = match[1].toUpperCase();
       fields.set(currentKey, match[2].trim());
@@ -224,9 +233,16 @@ function parseLineFormat(raw: string): LeaderDecision | undefined {
       completionCriteria,
       assignee,
       reason: fields.get("REASON") ?? "",
-      variantCount: clampVariantCount(fields.get("VARIANTS"))
+      variantCount: clampVariantCount(fields.get("VARIANTS")),
+      mutatesFiles: parseMutatesFiles(fields.get("MUTATES"))
     }
   };
+}
+
+// "no" 라고 명시적으로 쓴 경우만 false — 그 외(비어있음, "yes", 오타, 다른 언어 응답 등)는
+// 전부 true. 승인 스킵은 모델이 확신을 갖고 명시했을 때만 일어나야 한다.
+function parseMutatesFiles(raw: string | undefined): boolean {
+  return (raw ?? "").trim().toLowerCase() !== "no";
 }
 
 // LLM 이 안 쓰거나(기본 1), 숫자가 아니거나, 범위를 벗어나면 안전한 쪽(1=변형 없음)으로
@@ -263,6 +279,7 @@ function parseJsonFormat(raw: string): LeaderDecision | undefined {
 
   const assignee = ASSIGNEES.find((candidate) => candidate === parsed.assignee) ?? "codex_leader";
   const variantCountRaw = typeof parsed.variantCount === "number" ? String(parsed.variantCount) : undefined;
+  const mutatesRaw = typeof parsed.mutatesFiles === "boolean" ? (parsed.mutatesFiles ? "yes" : "no") : text(parsed.mutates);
   return {
     kind: "plan",
     plan: {
@@ -272,7 +289,8 @@ function parseJsonFormat(raw: string): LeaderDecision | undefined {
       completionCriteria,
       assignee,
       reason: text(parsed.reason) ?? "",
-      variantCount: clampVariantCount(variantCountRaw)
+      variantCount: clampVariantCount(variantCountRaw),
+      mutatesFiles: parseMutatesFiles(mutatesRaw)
     }
   };
 }

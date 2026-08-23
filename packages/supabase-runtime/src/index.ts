@@ -635,6 +635,47 @@ export class SupabaseOutboxStore {
       },
       room_id: input.request.roomId
     });
+
+    // === false 엄격 비교 — 위 렌더 문구와 같은 이유(undefined 를 자동허용으로 착각 금지).
+    if (plan.mutatesFiles === false) await this.autoAllowProposal(proposalId, input.request);
+  }
+
+  // Grok Bot 벤치마크 "승인 카테고리 분리(필수승인/자동허용)" 반영 — 2026-08-23.
+  //
+  // 방장의 실행 버튼 클릭 없이 시작을 승인한 것으로 기록만 남긴다. 실제 실행 큐잉은
+  // 새로 만들지 않는다 — miniapp-decision-poller.ts 가 huai_approvals 를 이미 채널
+  // 구분 없이(텔레그램 버튼이든 미니앱이든) 감시하다가 정확히 이 모양의 행을 만나면
+  // applyOwnerCallback 을 그대로 재생해 기존 승인 경로와 100% 같은 실행을 큐에 올린다.
+  // 그 재생이 권한 검사(requiresOwner)도 그대로 통과해야 하므로, 요청자가 실제로
+  // 시작 승인 권한이 없으면 이 행은 조용히 무시된다(skipped_unauthorized) — 승인 카테고리
+  // 분리가 새 권한 상승 경로가 되지 않는다. 승인 버튼은 그대로 살려 둔다: 판단이
+  // 틀렸거나(실제로는 파일을 바꿈) 권한이 없어 재생이 스킵된 경우의 유일한 대체 경로다.
+  private async autoAllowProposal(proposalId: string, request: ExecutionRequest): Promise<void> {
+    if (!request.requestedBy || request.requestedBy === "unknown") return;
+    try {
+      const response = await this.client.request("POST", "/huai_approvals", {
+        body: {
+          room_id: request.roomId,
+          task_id: null,
+          entity_ref: proposalId,
+          stage: "task_approval",
+          decision: "approved",
+          decider_telegram_user_id: request.requestedBy,
+          reason: "auto-allowed: 조회·분석·설명 등 파일을 바꾸지 않는 작업으로 판단됨",
+          idempotency_key: "auto-allow:task_approval:" + proposalId
+        },
+        prefer: "return=minimal"
+      });
+      if (response.status !== 409) await response.expectOk();
+    } catch (error) {
+      // 자동허용은 부가 기능이다 — 실패해도 방금 올라간 제안 카드와 승인 버튼은 그대로
+      // 살아있으니 방장이 평소처럼 눌러 시작할 수 있다. (saveTaskQuiz 와 같은 원칙.)
+      console.error(JSON.stringify({
+        type: "auto_allow_proposal_failed",
+        proposalId,
+        reason: maskSensitiveText(error instanceof Error ? error.message : String(error))
+      }));
+    }
   }
 
   // 다음 호출에서 --resume 으로 이어받도록 세션을 기억한다.
@@ -1163,7 +1204,14 @@ export function renderLeaderPlanMessage(plan: LeaderPlan): string {
   return [
     // 📥 접수 → 📋 제안 → ⚙️ 작업 중. 같은 자리에 같은 아이콘이 오면 방장이 흐름의
     // 어디쯤인지 문장을 읽지 않고도 안다.
-    "📋 작업 제안입니다. 승인하시면 바로 시작합니다.",
+    // Grok Bot 벤치마크 "승인 카테고리 분리" 반영 — 파일을 안 바꾸는 조회성 작업은
+    // 승인 버튼을 기다리지 않고 바로 큐에 올라간다(emitLeaderProposal 참고). 방장이
+    // "왜 안 눌렀는데 시작됐지" 하고 당황하지 않도록 그 사실을 여기서 먼저 알린다.
+    // === false 로 엄격 비교한다 — undefined(예: 이 필드를 아직 안 채워 넘기는 옛 호출부)를
+    // 자동허용으로 잘못 읽으면 안 되므로, 명시적으로 false 일 때만 자동허용 문구를 쓴다.
+    plan.mutatesFiles === false
+      ? "🟢 조회성 작업(파일 변경 없음)으로 판단해 승인 없이 자동 시작합니다. 막거나 고칠 게 있으면 아래 버튼을 쓰세요."
+      : "📋 작업 제안입니다. 승인하시면 바로 시작합니다.",
     "",
     plan.title,
     "",

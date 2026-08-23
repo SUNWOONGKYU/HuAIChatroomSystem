@@ -145,6 +145,48 @@ test("VARIANTS 가 숫자가 아니거나 1 이하면 변형 없음으로 취급
   }
 });
 
+// Grok Bot 벤치마크 "승인 카테고리 분리" 반영 — 2026-08-23. 기본은 항상 승인 필요(true) —
+// 모델이 "no"라고 명시할 때만 자동허용으로 떨어진다(emitLeaderProposal 이 소비).
+test("MUTATES 를 안 쓰면 승인 필요(true)로 떨어진다", () => {
+  const decision = parseLeaderDecision(
+    ["DECISION: plan", "TITLE: t", "SCOPE: s", "DONE: d", "ASSIGNEE: codex_leader"].join("\n")
+  );
+  assert.equal(decision?.kind, "plan");
+  if (decision?.kind !== "plan") return;
+  assert.equal(decision.plan.mutatesFiles, true);
+});
+
+test("MUTATES: no 라고 명시해야만 자동허용 대상(false)이 된다", () => {
+  const decision = parseLeaderDecision(
+    ["DECISION: plan", "TITLE: t", "SCOPE: s", "DONE: d", "ASSIGNEE: codex_leader", "MUTATES: no"].join("\n")
+  );
+  assert.equal(decision?.kind, "plan");
+  if (decision?.kind !== "plan") return;
+  assert.equal(decision.plan.mutatesFiles, false);
+});
+
+test("MUTATES 는 대소문자·공백과 무관하게 'no' 일 때만 자동허용이다", () => {
+  for (const noish of ["no", "No", "NO", " no "]) {
+    const decision = parseLeaderDecision(
+      ["DECISION: plan", "TITLE: t", "SCOPE: s", "DONE: d", "ASSIGNEE: codex_leader", `MUTATES: ${noish}`].join("\n")
+    );
+    assert.equal(decision?.kind, "plan");
+    if (decision?.kind !== "plan") continue;
+    assert.equal(decision.plan.mutatesFiles, false, `MUTATES: "${noish}"`);
+  }
+});
+
+test("MUTATES 에 애매하거나 엉뚱한 값이 오면 안전한 쪽(true, 승인 필요)으로 떨어진다", () => {
+  for (const bad of ["yes", "아니오", "확실하지않음", ""]) {
+    const decision = parseLeaderDecision(
+      ["DECISION: plan", "TITLE: t", "SCOPE: s", "DONE: d", "ASSIGNEE: codex_leader", `MUTATES: ${bad}`].join("\n")
+    );
+    assert.equal(decision?.kind, "plan");
+    if (decision?.kind !== "plan") continue;
+    assert.equal(decision.plan.mutatesFiles, true, `MUTATES: "${bad}"`);
+  }
+});
+
 test("여러 줄에 걸친 값을 이어 붙인다", () => {
   const decision = parseLeaderDecision([
     "DECISION: plan",

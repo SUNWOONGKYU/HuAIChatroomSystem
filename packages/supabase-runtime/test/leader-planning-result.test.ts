@@ -49,6 +49,61 @@ test("소대장 판단이 제안 이벤트와 승인 버튼으로 올라간다",
   assert.match(message?.body.payload.text, /완료 조건:/);
 });
 
+// Grok Bot 벤치마크 "승인 카테고리 분리(필수승인/자동허용)" 반영 — 2026-08-23.
+// 소대장이 MUTATES: no(파일 변경 없음)로 판단하면, 제안 카드·승인 버튼은 그대로 나가되
+// huai_approvals 에 자동승인 행도 함께 기록된다(miniapp-decision-poller.ts 가 그 행을
+// 집어 기존 승인 경로 그대로 실행을 큐에 올린다 — 이 파일은 그 재생까지는 검증하지 않는다,
+// miniapp-decision-poller.test.ts 의 몫이다. 여기선 "행이 올바른 모양으로 남는가"만 본다).
+test("파일을 안 바꾸는 작업은 승인 카드와 함께 자동승인 행도 남긴다", async () => {
+  const readOnlyPlan = { ...PLAN, mutatesFiles: false };
+  const calls = makeFetchSequence([
+    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
+    jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
+    jsonResponse(201, [eventRow("leader-proposal:" + ATTEMPT)]),
+    jsonResponse(201, []),                                  // 제안 outbox
+    jsonResponse(201, [])                                   // 자동승인 huai_approvals
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  await store.recordGatewayExecutionResult({
+    request: makeRequest(),
+    status: "completed",
+    events: [stdout(JSON.stringify(readOnlyPlan))],
+    occurredAt: "2026-08-15T00:00:00.000Z"
+  });
+
+  const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
+  assert.match(message?.body.payload.text, /🟢 조회성 작업/);
+  assert.ok(message?.body.payload.keyboard, "판단이 틀렸을 때 대비용 버튼은 그대로 남아야 한다");
+
+  const approvalCall = calls.requests.find((request) => request.url.includes("/huai_approvals"));
+  assert.ok(approvalCall, "자동승인 행이 huai_approvals 에 남아야 한다");
+  assert.equal(approvalCall.body.stage, "task_approval");
+  assert.equal(approvalCall.body.decision, "approved");
+  assert.equal(approvalCall.body.decider_telegram_user_id, makeRequest().requestedBy);
+  assert.match(approvalCall.body.reason, /auto-allowed/);
+  assert.equal(approvalCall.body.idempotency_key, "auto-allow:task_approval:" + approvalCall.body.entity_ref);
+});
+
+test("파일을 바꾸는 작업(기본값)은 자동승인 행을 남기지 않는다", async () => {
+  const calls = makeFetchSequence([
+    jsonResponse(200, [{ telegram_chat_id: "1001" }]),
+    jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
+    jsonResponse(201, [eventRow("leader-proposal:" + ATTEMPT)]),
+    jsonResponse(201, [])                                   // 제안 outbox — huai_approvals 호출이 없어야 이 시퀀스로 끝난다
+  ]);
+  const store = makeStore(calls.fetchImpl);
+
+  await store.recordGatewayExecutionResult({
+    request: makeRequest(),
+    status: "completed",
+    events: [stdout(JSON.stringify({ ...PLAN, mutatesFiles: true }))],
+    occurredAt: "2026-08-15T00:00:00.000Z"
+  });
+
+  assert.equal(calls.requests.some((request) => request.url.includes("/huai_approvals")), false);
+});
+
 // "버전 3개 만들어줘" — 소대장 판단 1번이 제안 3개로 나뉜다. 각 제안은 독립적으로
 // 승인받는 기존 방식 그대로다(1제안=1작업 불변식 안 건드림) — 유일한 차이는 제목에
 // 변형 표시가 붙고 useIsolatedWorktree 가 true 라는 것뿐이다.
