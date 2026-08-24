@@ -23,7 +23,7 @@ GitHub 배포 전 아래 항목을 확인합니다.
 - [ ] Supabase 마이그레이션이 적용돼 있다(`supabase db push`).
 - [ ] Edge Function 은 `--no-verify-jwt` 로 배포돼 있다. 빼면 텔레그램 인증 헤더가 게이트웨이에
       막혀 현황판이 통째로 "인증 실패"가 된다.
-- [ ] Edge Function 시크릿에 `TELEGRAM_PLATOON_BOT_TOKEN` 이 있다.
+- [ ] Edge Function 시크릿에 `TELEGRAM_LEADER_BOT_TOKEN` 이 있다.
 - [ ] 현황판 페이지가 `huai-board` 프로젝트로 배포됐다(빌드가 `.vercel` 링크를 다시 박는다).
 - [ ] 산출물 프로젝트(`huai-artifacts`)의 배포 보호가 꺼져 있다. 켜져 있으면 방장이 결과물을
       열 때 Vercel 로그인 화면으로 튕긴다.

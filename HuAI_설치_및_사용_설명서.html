@@ -67,17 +67,12 @@
     background:rgba(255,255,255,.94); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
     border-bottom:1px solid var(--c-border); box-shadow:var(--shadow-sm);
   }
-  .tabbar{max-width:980px; margin:0 auto; padding:12px 24px; display:grid; gap:6px}
-  .nav-row{display:grid; grid-template-columns:96px 1fr; align-items:center; gap:14px}
+  .tabbar{max-width:980px; margin:0 auto; padding:10px 24px; display:grid; gap:2px}
+  .nav-row{display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px}
   .nav-label{
     font-size:12.5px; font-weight:800; color:var(--c-gold-text);
-    letter-spacing:.04em; text-align:right; white-space:nowrap;
+    letter-spacing:.04em; white-space:nowrap;
   }
-  .nav-chips{
-    display:flex; gap:8px; overflow-x:auto; padding:3px 0;
-    -ms-overflow-style:none; scrollbar-width:none;
-  }
-  .nav-chips::-webkit-scrollbar{display:none}
   .tab-btn{
     flex:0 0 auto; font-family:var(--gds-font); font-weight:600; font-size:14.5px;
     color:var(--c-muted); background:transparent; border:1px solid transparent;
@@ -230,11 +225,10 @@
     .hero{padding:44px 18px 32px}
     main{padding:28px 18px 80px}
     .tabbar-wrap{position:static}
-    .tabbar{padding:10px 14px}
-    .nav-row{display:block}
-    .nav-label{display:block; text-align:left; font-size:11px; margin:6px 0 4px}
-    .nav-chips{flex-wrap:wrap; overflow-x:visible}
-    .tab-btn{font-size:13px; padding:7px 11px}
+    .tabbar{padding:8px 10px}
+    .nav-row{gap:3px 5px}
+    .nav-label{font-size:10.5px}
+    .tab-btn{font-size:12px; padding:5px 8px}
     .pull{padding:22px 20px}
     th,td{padding:10px 12px}
   }
@@ -255,25 +249,23 @@
   <nav class="tabbar" id="tabbar" aria-label="목차" role="tablist">
     <div class="nav-row">
       <span class="nav-label">시작</span>
-      <div class="nav-chips">
-        <button class="tab-btn active" data-tab="0" id="tab-0" role="tab" aria-selected="true" aria-controls="panel-0"><span class="tab-num">00</span>시작하기 · 시스템 소개</button>
-      </div>
+      <button class="tab-btn active" data-tab="0" id="tab-0" role="tab" aria-selected="true" aria-controls="panel-0"><span class="tab-num">00</span>시스템 개요</button>
     </div>
     <div class="nav-row">
       <span class="nav-label">설치</span>
-      <div class="nav-chips">
-        <button class="tab-btn" data-tab="1" id="tab-1" role="tab" aria-selected="false" aria-controls="panel-1"><span class="tab-num">01</span>PC 준비</button>
-        <button class="tab-btn" data-tab="2" id="tab-2" role="tab" aria-selected="false" aria-controls="panel-2"><span class="tab-num">02</span>Supabase 데이터베이스</button>
-        <button class="tab-btn" data-tab="3" id="tab-3" role="tab" aria-selected="false" aria-controls="panel-3"><span class="tab-num">03</span>텔레그램 봇과 실행</button>
-      </div>
+      <button class="tab-btn" data-tab="1" id="tab-1" role="tab" aria-selected="false" aria-controls="panel-1"><span class="tab-num">01</span>개발 도구 설치</button>
+      <button class="tab-btn" data-tab="2" id="tab-2" role="tab" aria-selected="false" aria-controls="panel-2"><span class="tab-num">02</span>DB 준비</button>
+      <button class="tab-btn" data-tab="3" id="tab-3" role="tab" aria-selected="false" aria-controls="panel-3"><span class="tab-num">03</span>텔레그램봇 만들기</button>
     </div>
     <div class="nav-row">
       <span class="nav-label">운영</span>
-      <div class="nav-chips">
-        <button class="tab-btn" data-tab="4" id="tab-4" role="tab" aria-selected="false" aria-controls="panel-4"><span class="tab-num">04</span>사용법 · 지시와 승인</button>
-        <button class="tab-btn" data-tab="5" id="tab-5" role="tab" aria-selected="false" aria-controls="panel-5"><span class="tab-num">05</span>문제 해결 · 자주 걸리는 오류</button>
-        <button class="tab-btn" data-tab="6" id="tab-6" role="tab" aria-selected="false" aria-controls="panel-6"><span class="tab-num">06</span>참고자료 · 도해와 문서</button>
-      </div>
+      <button class="tab-btn" data-tab="4" id="tab-4" role="tab" aria-selected="false" aria-controls="panel-4"><span class="tab-num">04</span>AI 작업 시키기</button>
+      <button class="tab-btn" data-tab="5" id="tab-5" role="tab" aria-selected="false" aria-controls="panel-5"><span class="tab-num">05</span>자주 발생하는 오류 해결</button>
+    </div>
+    <div class="nav-row">
+      <span class="nav-label">참고</span>
+      <button class="tab-btn" data-tab="6" id="tab-6" role="tab" aria-selected="false" aria-controls="panel-6"><span class="tab-num">06</span>관계도 · 흐름도</button>
+      <button class="tab-btn" data-tab="7" id="tab-7" role="tab" aria-selected="false" aria-controls="panel-7"><span class="tab-num">07</span>참고자료</button>
     </div>
   </nav>
 </div>
@@ -283,40 +275,55 @@
   <!-- ============ 00. 시작하기 ============ -->
   <section class="panel active" id="panel-0" role="tabpanel" aria-labelledby="tab-0" tabindex="0">
     <div class="panel-head">
-      <span class="panel-badge"><span class="n">00</span> 시작하기 · 시스템 소개</span>
+      <span class="panel-badge"><span class="n">00</span> 시스템 개요</span>
       <h2>이 시스템이 뭔가요</h2>
       <p class="lead">텔레그램 비공개 그룹방 하나가 "AI 업무 지휘소"가 됩니다. 방에서 사람 말투로
-      지시하면 AI(Claude·Codex)가 실제로 파일을 만들고 고치고, 결과를 방에 보고하고, 방장이
-      승인 버튼을 눌러야 최종 확정됩니다.</p>
+      지시하면 AI(Claude·Codex·Antigravity)가 실제로 파일을 만들고 고치고, 결과를 방에 보고하고,
+      방장이 승인 버튼을 누르면 최종 확정됩니다.</p>
     </div>
 
-    <div class="pull">
-      텔레그램 방에서 사람이 말하듯 시키면, <span class="accent">AI 여러 명이 각자 맡은 역할대로</span>
-      실제 일을 하고, <span class="accent">방장이 승인 도장을 찍어야</span> 끝나는 구조입니다.
-      <div style="margin-top:14px; font-size:14.5px; font-weight:600">
-        <a href="#t6" onclick="activate('6')">이 안에 뭐가 들어있는지 자세히 →</a>
-      </div>
+    <a class="diagram-block" style="max-width:420px; margin:16px auto; display:block; text-decoration:none" href="#t6" onclick="activate('6')">
+      <img src="2026_08_24__HuAI_System_관계도_미니.svg" alt="관계도 요약 — 사람·텔레그램, 작업 PC, 클라우드(Supabase·Vercel) 세 덩어리의 관계">
+      <p class="cap">관계도 요약 — 누가 무엇에 기대는지</p>
+    </a>
+    <a class="diagram-block" style="max-width:420px; margin:8px auto 16px; display:block; text-decoration:none" href="#t6" onclick="activate('6')">
+      <img src="2026_08_24__HuAI_System_흐름도_미니.svg" alt="흐름도 요약 — 텔레그램 방에서 지시하면 LeaderBot이 정리하고 AI들이 실행하고 방장이 현황판에서 승인한다">
+      <p class="cap">흐름도 요약 — 지시가 결과가 되기까지</p>
+    </a>
+    <p style="text-align:center; margin:-4px 0 16px; font-size:13.5px; color:var(--c-muted)">자세한 원본은 탭 06에서 →</p>
+
+    <h3 class="section" id="components">구성 요소 자세히 보기</h3>
+    <p>이 시스템을 이루는 조각들이 정확히 뭘 하는지입니다.</p>
+    <div class="step-grid">
+      <div class="step-card"><div class="step-badge">방</div><h5>텔레그램 방</h5><p>사람이 지시하고 결과를 받는 화면. 이 시스템의 유일한 사용자 인터페이스입니다.</p></div>
+      <div class="step-card"><div class="step-badge">L</div><h5>LeaderBot(리더)</h5><p>사람 말을 읽고 "이건 질문인지 작업인지" 먼저 판단합니다. 작업이면 목적·범위·완료조건을 갖춘 제안으로 정리해 방에 올립니다.</p></div>
+      <div class="step-card"><div class="step-badge">C</div><h5>ClaudeBot · CodexBot</h5><p>실제로 코드를 읽고 파일을 만들거나 고치는 실행자입니다. 내부적으로 Claude Code·Codex·Antigravity 세 실행 엔진을 쓰고, 하나가 사용 한도에 걸리면 다른 엔진이 이어받습니다(세 엔진을 한 바퀴 돌고도 막히면 처음 엔진으로 한 번 더, 최대 3번 인계).</p></div>
+      <div class="step-card"><div class="step-badge">A</div><h5>AuditBot(감사)</h5><p>실행자와 다른 엔진이 결과물을 독립적으로 다시 검토합니다 — 만든 사람이 자기 결과를 자기가 검사하지 않게 하기 위해서입니다.</p></div>
+      <div class="step-card"><div class="step-badge">B</div><h5>bot-service</h5><p>텔레그램과 이 시스템을 연결하는 통로. 누가 말했는지 확인하고, 권한을 검사하고, 답을 다시 텔레그램으로 보냅니다.</p></div>
+      <div class="step-card"><div class="step-badge">G</div><h5>local-gateway</h5><p>내 PC 안에서 실제로 명령을 실행하는 부분. 방마다 등록된 프로젝트 폴더인지 먼저 확인한 뒤에만 실행을 넘깁니다 — 등록 안 된 경로면 아예 실행을 거부합니다. 다만 <b>OS 수준 격리(샌드박스)까지는 아니고</b>, 그 폴더 안에서 AI가 실제로 뭘 바꾸는지는 되돌리는 기능이 따로 없습니다 — 중요한 폴더라면 직접 git으로 버전 관리해두는 걸 권장합니다.</p></div>
+      <div class="step-card"><div class="step-badge">D</div><h5>Supabase</h5><p>"누가 뭘 시켰고 누가 승인했는지"를 남기는 공식 기록 창고. 텔레그램 메시지가 지워져도 여기 기록은 남습니다.</p></div>
+      <div class="step-card"><div class="step-badge">V</div><h5>Vercel</h5><p>AI가 만든 웹페이지를 인터넷 주소로 올려 폰에서 바로 열어볼 수 있게 하는 곳.</p></div>
     </div>
 
     <h3 class="section">시작 전 체크리스트</h3>
-    <p>아래 6가지가 필요합니다. 전부 무료로 시작할 수 있습니다.</p>
+    <p>아래 6가지가 필요합니다. Windows PC·Supabase·Telegram·Vercel은 무료로 시작할 수 있습니다. <b>Claude Code·Codex는 별도 유료 구독이 필요</b>합니다 — 다만 호출 한 번마다 요금이 붙는 API 방식이 아니라 <b>월 정액 구독</b>이고, 이 시스템은 그 구독을 화면 없이 뒤에서 돌리는 <b>헤드리스 모드</b>로 씁니다.</p>
     <ul class="checklist">
       <li><span class="mark">✓</span><div><b>Windows PC 1대</b> — AI가 실제로 코드를 실행하는 곳. 설치 후에는 이 PC가 켜져 있어야 시스템이 돌아갑니다.</div></li>
       <li><span class="mark">✓</span><div><b>Node.js</b> — 이 시스템 자체가 Node.js로 만들어져 있습니다.</div></li>
       <li><span class="mark">✓</span><div><b>Supabase 계정</b> — 작업 기록·승인 이력·산출물 주소를 저장하는 DB. 무료 플랜으로 충분합니다.</div></li>
       <li><span class="mark">✓</span><div><b>Telegram 계정 + 봇 4개</b> — 사람이 지시하고 결과를 받는 화면.</div></li>
       <li><span class="mark">✓</span><div><b>Vercel 계정 + Vercel CLI</b> — AI가 만든 웹 결과물을 인터넷에 올려 폰에서 열어보는 용도. 무료 플랜으로 충분하고, CLI 설치·로그인은 탭 03의 8단계에서 합니다.</div></li>
-      <li><span class="mark">✓</span><div><b>Claude Code · Codex CLI 로그인</b> — 실제로 파일을 읽고 고치는 실행 엔진입니다. 이 PC에 설치하고 로그인까지 해둬야 작업이 실행됩니다(이미 설치돼 있다면 넘어가도 됩니다).</div></li>
+      <li><span class="mark">✓</span><div><b>Claude Code · Codex · Antigravity CLI 로그인</b> — 실제로 파일을 읽고 고치는 실행 엔진 3종입니다. Claude Code·Codex는 각각 월 정액 구독이 필요하고, 이 PC에 설치·로그인해두면 시스템이 화면 없이(헤드리스) 그 구독으로 대신 실행합니다. 셋 다 설치하는 걸 권장합니다 — 하나가 한도에 걸렸을 때 나머지가 이어받는 구조라, 하나라도 빠지면 그 자리에서 멈출 수 있습니다(이미 설치돼 있다면 넘어가도 됩니다).</div></li>
     </ul>
 
     <div class="tip-box">예상 소요 시간: 처음이면 30~50분 정도 걸립니다. 대부분 "계정 만들고 값 복사해서 붙여넣기"입니다. 탭 01 → 02 → 03 순서로 그대로 따라가면 됩니다.</div>
   </section>
 
-  <!-- ============ 01. 설치 · PC 준비 ============ -->
+  <!-- ============ 01. 설치 · 개발 도구 ============ -->
   <section class="panel" id="panel-1" role="tabpanel" aria-labelledby="tab-1" tabindex="0">
     <div class="panel-head">
-      <span class="panel-badge"><span class="n">01</span> PC 준비</span>
-      <h2>PC 준비 — Node.js와 시스템 파일</h2>
+      <span class="panel-badge"><span class="n">01</span> 개발 도구 설치</span>
+      <h2>개발 도구 설치 — Node.js와 시스템 파일 받기</h2>
       <p class="lead">이 PC에 시스템이 돌아갈 재료를 받는 단계입니다.</p>
     </div>
 
@@ -350,7 +357,7 @@ npm run build</code></pre>
   <!-- ============ 02. 설치 · Supabase ============ -->
   <section class="panel" id="panel-2" role="tabpanel" aria-labelledby="tab-2" tabindex="0">
     <div class="panel-head">
-      <span class="panel-badge"><span class="n">02</span> Supabase 데이터베이스</span>
+      <span class="panel-badge"><span class="n">02</span> DB 준비</span>
       <h2>Supabase 프로젝트 만들기</h2>
       <p class="lead">이 시스템은 "누가 뭘 시켰고, 누가 승인했고, 결과물이 뭔지"를 전부 DB에 기록합니다. 텔레그램 메시지는 화면일 뿐이고, 공식 기록은 여기(Supabase)입니다.</p>
     </div>
@@ -358,7 +365,7 @@ npm run build</code></pre>
     <div class="step-grid">
       <div class="step-card"><div class="step-badge">1</div><h5>가입 · 프로젝트 생성</h5><p><a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a> 접속 → 회원가입(구글 계정 가능) → New Project → 이름·비밀번호(꼭 메모)·지역 입력 → Create</p></div>
       <div class="step-card"><div class="step-badge">2</div><h5>URL·키 복사</h5><p>왼쪽 톱니바퀴(Project Settings) → API → <b>Project URL</b>과 <b>service_role 키</b>를 메모장에 복사</p></div>
-      <div class="step-card"><div class="step-badge">3</div><h5>DB 스키마 적용</h5><p>왼쪽 메뉴 SQL Editor → New query → <code>supabase/schema.sql</code> 전체 내용을 복사해 붙여넣고 Run</p></div>
+      <div class="step-card"><div class="step-badge">3</div><h5>DB 스키마 적용</h5><p>탭 01에서 받은 내 PC 폴더(<code>C:\Dev\HuAIChatroomSystem</code>) 안의 <code>supabase\schema.sql</code> 파일을 메모장으로 열어 전체 선택(Ctrl+A)·복사 → Supabase 왼쪽 메뉴 SQL Editor → New query → 붙여넣고 Run</p></div>
     </div>
 
     <div class="warn-box">⚠️ service_role 키는 이 시스템 전체를 조작할 수 있는 열쇠입니다. 남에게 보여주거나 인터넷(GitHub 등)에 올리면 안 됩니다.</div>
@@ -367,29 +374,29 @@ npm run build</code></pre>
   <!-- ============ 03. 설치 · 텔레그램·실행 ============ -->
   <section class="panel" id="panel-3" role="tabpanel" aria-labelledby="tab-3" tabindex="0">
     <div class="panel-head">
-      <span class="panel-badge"><span class="n">03</span> 텔레그램 봇과 실행</span>
+      <span class="panel-badge"><span class="n">03</span> 텔레그램봇 만들기</span>
       <h2>텔레그램 연결, 설정 채우기, 실행</h2>
       <p class="lead">봇 4개를 만들고, 값을 한 파일에 모으고, 서비스를 켜는 마지막 구간입니다.</p>
     </div>
 
     <h3 class="section">4단계 — 텔레그램 봇 4개 만들기</h3>
-    <p>이 시스템은 봇 1개가 아니라 4개(소대장·클로드·코덱스·감사관 역할)를 씁니다.</p>
+    <p>이 시스템은 봇 1개가 아니라 4개(리더·클로드·코덱스·감사관 역할)를 씁니다.</p>
     <ol>
       <li>텔레그램에서 <code>BotFather</code>(공식 파란 체크 봇)를 검색해 대화를 엽니다.</li>
       <li><code>/newbot</code> 전송 → 봇 이름(아무거나) → 봇 username(반드시 <code>bot</code>으로 끝나야 함) 순서로 입력합니다.</li>
       <li>성공하면 긴 토큰 문자열을 줍니다 — 메모장에 복사하고 어느 역할인지 표시해둡니다.</li>
-      <li>이 과정을 <b>4번 반복</b>: LeaderBot(소대장) · ClaudeBot · CodexBot · AuditBot(감사)</li>
+      <li>이 과정을 <b>4번 반복</b>: LeaderBot(리더) · ClaudeBot · CodexBot · AuditBot(감사)</li>
     </ol>
-    <div class="warn-box">⚠️ 4개는 반드시 서로 다른 봇(다른 토큰)이어야 합니다. 봇 1개로 4역할을 흉내내는 방식이 아닙니다.</div>
+    <div class="warn-box">⚠️ 4개는 반드시 서로 다른 봇(다른 토큰)이어야 합니다. 봇 1개로 4역할을 흉내 내는 방식이 아닙니다.</div>
 
     <h3 class="section">5단계 — 비공개 그룹 만들고 봇 초대</h3>
     <p>쉽게 말하면: 방을 만들고, 그 "방 번호"와 "내 번호"를 시스템에 알려주는 단계입니다 — 시스템이 "어느 방에서, 누가" 말했는지 구별하는 데 씁니다.</p>
     <ol>
       <li>텔레그램에서 새 그룹(비공개)을 만들고 봇 4개를 전부 초대합니다.</li>
-      <li><b>그룹 chat_id(방 번호) 알아내기</b>: 그룹에 아무 메시지("테스트")를 보낸 뒤, 브라우저에서
+      <li><b>그룹 chat_id(방 번호) 알아내기</b>: 그룹에서 <b>봇을 지목해</b> <code>@내봇이름 테스트</code>처럼 메시지를 보냅니다 — 텔레그램 봇은 기본적으로 그룹의 일반 대화를 못 읽기 때문에(개인정보 보호 설정), 그냥 "테스트"라고만 보내면 <code>getUpdates</code>에 잡히지 않습니다. 보낸 뒤 브라우저에서
         <code>https://api.telegram.org/bot&lt;봇토큰&gt;/getUpdates</code> 를 엽니다.
         <code>&lt;봇토큰&gt;</code> 자리에는 <b>4개 중 아무 봇의 토큰이나</b> 넣으면 됩니다(같은 방이라 어느 봇으로 봐도 chat_id는 같습니다). 헷갈리면 LeaderBot 토큰을 쓰세요.
-        <b>이때 그냥 “테스트”라고만 보내면 안 됩니다</b> — 텔레그램 봇은 기본적으로 그룹의 일반 대화를 못 읽습니다(개인정보 보호 설정). <code>@내봇이름 테스트</code>처럼 <b>봇을 지목해서</b> 보내야 <code>getUpdates</code>에 잡힙니다. 그래도 <code>"result":[]</code>처럼 비어 있으면 봇을 한 번 더 지목해 보내고 새로고침하세요. <code>"chat":{"id":</code> 뒤에 나오는 숫자(보통 <code>-</code>로 시작)가 chat_id입니다.</li>
+        <code>"result":[]</code>처럼 비어 있으면 봇을 한 번 더 지목해 보내고 새로고침하세요. <code>"chat":{"id":</code> 뒤에 나오는 숫자(보통 <code>-</code>로 시작)가 chat_id입니다.</li>
       <li><b>내 user_id(내 번호) 알아내기</b>: 텔레그램에서 <code>@userinfobot</code>을 검색해 아무 메시지나 보내면 숫자 id를 알려줍니다. 이 값이 "방장 권한"의 기준입니다 — 승인 버튼은 이 id를 가진 사람만 누를 수 있습니다.</li>
     </ol>
 
@@ -405,11 +412,11 @@ npm run build</code></pre>
       <tr><td><code>SUPABASE_SERVICE_ROLE_KEY</code></td><td>탭 02의 service_role 키</td></tr>
       <tr><td><code>BOT_SERVICE_TELEGRAM_CHAT_ID</code></td><td>위 그룹 chat_id(방 번호)</td></tr>
       <tr><td><code>BOT_SERVICE_OWNER_TELEGRAM_USER_ID</code></td><td>위 내 user_id(내 번호)</td></tr>
-      <tr><td><code>BOT_SERVICE_PLATOON/CLAUDE/CODEX/AUDITOR_BOT_TOKEN</code></td><td>봇 4개 토큰 (각각)</td></tr>
-      <tr><td><code>BOT_SERVICE_PLATOON/CLAUDE/CODEX/AUDITOR_BOT_USERNAME</code></td><td>봇 4개의 사용자명 (각각) — 5단계에서 지은 이름에서 <b>앞의 <code>@</code>를 뺀</b> 것. 예: <code>@my_leader_chatroom_bot</code> → <code>my_leader_chatroom_bot</code></td></tr>
+      <tr><td><code>BOT_SERVICE_LEADER/CLAUDE/CODEX/AUDITOR_BOT_TOKEN</code></td><td>봇 4개 토큰 (각각) — <code>LEADER</code>=LeaderBot(리더) · <code>CLAUDE</code>=ClaudeBot · <code>CODEX</code>=CodexBot · <code>AUDITOR</code>=AuditBot(감사)</td></tr>
+      <tr><td><code>BOT_SERVICE_LEADER/CLAUDE/CODEX/AUDITOR_BOT_USERNAME</code></td><td>봇 4개의 사용자명 (각각, 매핑은 위 행과 동일) — 5단계에서 지은 이름에서 <b>앞의 <code>@</code>를 뺀</b> 것. 예: LeaderBot을 <code>@bloom_leader_bot</code>으로 지었다면 <code>bloom_leader_bot</code></td></tr>
     </table></div>
-    <div class="warn-box">⚠️ <code>..._BOT_USERNAME</code> 4개는 <b>반드시 채워야 합니다.</b> 비워두면 7단계에서 <code>missing-env:BOT_SERVICE_PLATOON_BOT_USERNAME</code> 같은 영어 오류로 멈추고, 예시값(<code>your_platoon_bot</code>)을 그대로 두면 오류 없이 <b>잘못된 이름이 그대로 등록</b>됩니다.</div>
-    <p><code>BOT_SERVICE_RECEIVE_MODE=polling</code> 인지 확인합니다(없으면 추가) — 이렇게만 해두면 별도 인터넷 주소 설정 없이 이 PC가 텔레그램과 알아서 연결됩니다, 가장 간단한 방식입니다. <code>LOCAL_GATEWAY_ALLOWED_ROOTS</code>도 2단계에서 받은 폴더 경로로 맞춥니다(이 시스템이 손댈 수 있는 폴더를 정해두는 항목입니다).</p>
+    <div class="warn-box">⚠️ <code>..._BOT_USERNAME</code> 4개는 <b>반드시 채워야 합니다.</b> 비워두면 7단계에서 <code>missing-env:BOT_SERVICE_LEADER_BOT_USERNAME</code> 같은 영어 오류로 멈추고, 예시값(<code>your_leader_bot</code>)을 그대로 두면 오류 없이 <b>잘못된 이름이 그대로 등록</b>됩니다.</div>
+    <p><code>BOT_SERVICE_RECEIVE_MODE=polling</code> 인지 확인합니다(없으면 추가) — 이렇게만 해두면 별도 인터넷 주소 설정 없이 이 PC가 텔레그램과 알아서 연결됩니다 — 가장 간단한 방식입니다. <code>LOCAL_GATEWAY_ALLOWED_ROOTS</code>도 2단계에서 받은 폴더 경로로 맞춥니다(이 시스템이 손댈 수 있는 폴더를 정해두는 항목입니다).</p>
     <div class="warn-box">⚠️ <code>.env.operation.local</code>은 절대 GitHub에 올리거나 남에게 보내면 안 됩니다. 비밀번호나 다름없는 값들이 들어있습니다.</div>
 
     <h3 class="section">7단계 — 이 방을 시스템에 등록하기</h3>
@@ -425,24 +432,27 @@ npm run build</code></pre>
       <tr><td><code>&lt;owner-id&gt;</code></td><td>5단계에서 알아낸 내 user_id 숫자</td></tr>
     </table></div>
     <pre><code>node --env-file=.env.operation.local scripts/generate-supabase-room-seed.mjs --room-id &lt;room-id&gt; --chat-id &lt;chat-id&gt; --owner-id &lt;owner-id&gt; --project-path "C:\Dev\HuAIChatroomSystem"</code></pre>
-    <div class="warn-box">⚠️ 맨 앞의 <code>--env-file=.env.operation.local</code>을 빼면 안 됩니다. 이게 없으면 6단계에서 채운 값을 못 읽어 <code>missing-env:BOT_SERVICE_PLATOON_BOT_USERNAME</code> 오류로 멈춥니다.</div>
+    <div class="warn-box">⚠️ 맨 앞의 <code>--env-file=.env.operation.local</code>을 빼면 안 됩니다. 이게 없으면 6단계에서 채운 값을 못 읽어 <code>missing-env:BOT_SERVICE_LEADER_BOT_USERNAME</code> 오류로 멈춥니다.</div>
     <p>출력된 SQL 전체를 복사해 Supabase SQL Editor에 붙여넣고 Run 합니다.</p>
 
-    <h3 class="section">8단계 — Claude Code / Codex / Vercel 로그인 확인</h3>
-    <p>이 PC에 Claude Code와 Codex CLI가 설치되고 로그인돼 있어야 실제 작업 실행이 됩니다 — 방에서 승인을 눌러도 이 둘이 없으면 실행이 실패합니다. 웹 페이지를 만드는 작업을 쓸 거라면 <b>Vercel CLI</b>도 필요합니다(시스템이 배포할 때 이 PC의 <code>vercel</code> 명령을 그대로 호출합니다).</p>
+    <h3 class="section">8단계 — Claude Code / Codex / Antigravity / Vercel 로그인 확인</h3>
+    <p>이 PC에 Claude Code·Codex·Antigravity CLI가 <b>셋 다</b> 설치되고 로그인돼 있어야 합니다 — 셋이 서로의 대타 역할을 하는 구조라, 하나라도 빠지면 그 엔진 차례에서 실행이 멈출 수 있습니다. 웹 페이지를 만드는 작업을 쓸 거라면 <b>Vercel CLI</b>도 필요합니다(시스템이 배포할 때 이 PC의 <code>vercel</code> 명령을 그대로 호출합니다).</p>
     <p><b>먼저 이미 깔려 있는지 확인합니다.</b> PowerShell에서:</p>
     <pre><code>claude --version
 codex --version
+agy --version
 vercel --version</code></pre>
-    <p>셋 다 버전 숫자가 나오면 설치는 끝난 것이니 <b>로그인 여부만</b> 확인하고 넘어갑니다. <code>인식할 수 없는 명령</code> 류의 오류가 나오는 쪽만 아래대로 설치합니다.</p>
+    <p>버전 숫자가 나오면 설치는 끝난 것이니 <b>로그인 여부만</b> 확인하고 넘어갑니다. <code>인식할 수 없는 명령</code> 류의 오류가 나오는 쪽만 아래대로 설치합니다.</p>
     <div class="table-wrap"><table>
       <tr><th>도구</th><th>설치</th><th>로그인</th></tr>
       <tr><td>Claude Code</td><td><code>npm install -g @anthropic-ai/claude-code</code></td><td><code>claude</code> 를 실행하면 브라우저가 열리며 로그인 안내가 나옵니다</td></tr>
       <tr><td>Codex CLI</td><td><code>npm install -g @openai/codex</code></td><td><code>codex login</code> 실행 후 브라우저에서 ChatGPT 계정으로 로그인</td></tr>
+      <tr><td>Antigravity (<code>agy</code>)</td><td><code>winget install --id Google.AntigravityCLI -e</code> (Google 제품, npm 패키지 아님)</td><td><code>agy</code> 실행 시 나오는 안내를 따라 Google 계정으로 로그인</td></tr>
       <tr><td>Vercel CLI</td><td><code>npm install -g vercel</code></td><td><code>vercel login</code> 실행 후 브라우저에서 로그인</td></tr>
     </table></div>
-    <p>공식 안내: <a href="https://code.claude.com/docs/en/overview" target="_blank" rel="noopener">Claude Code 문서</a> · <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex CLI 저장소</a>. 설치 방법은 각 도구 쪽에서 바뀔 수 있으니, 위 명령이 안 되면 공식 안내를 따르세요.</p>
-    <div class="tip-box">이 시스템은 실행 엔진을 <b>3종</b>(Claude Code · Codex · Antigravity)까지 쓸 수 있지만, <b>2종만 있어도 정상 작동</b>합니다. Antigravity는 앞의 둘이 동시에 한도에 걸린 드문 경우에만 쓰이는 예비 엔진이라 설치하지 않아도 되고, 없으면 시스템이 "실행 프로그램을 찾지 못했습니다"라고 방에 알리고 멈춥니다.</div>
+    <p>공식 안내: <a href="https://code.claude.com/docs/en/overview" target="_blank" rel="noopener">Claude Code 문서</a> · <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex CLI 저장소</a> · <a href="https://antigravity.google/docs" target="_blank" rel="noopener">Antigravity 문서</a>. 설치 방법은 각 도구 쪽에서 바뀔 수 있으니, 위 명령이 안 되면 공식 안내를 따르세요.</p>
+    <div class="tip-box">방금 설치했는데도 <code>인식할 수 없는 명령</code> 오류가 그대로 나오면, <b>지금 열려 있는 PowerShell 창을 닫고 새로 여세요</b> — 설치 직후엔 이미 열려 있던 창이 새로 생긴 명령어 경로를 못 읽는 경우가 흔합니다.</div>
+    <div class="tip-box">엔진 하나가 사용 한도에 걸리면 <b>바로 다음 엔진</b>이 이어받습니다 — 순서는 Claude Code → Codex → Antigravity → (다시) Claude Code입니다. 예를 들어 Codex가 막히면 Claude가 아니라 <b>Antigravity가 곧바로</b> 이어받습니다. 셋 중 하나라도 설치가 안 돼 있으면, 그 엔진 차례가 왔을 때 다음 엔진으로 넘어가지 않고 그 자리에서 "실행 프로그램을 찾지 못했습니다" 오류로 멈춥니다 — 그래서 셋 다 설치를 권장합니다. 세 엔진이 한 바퀴 다 돌고도 막히면, 방에 마지막 실패 사유가 오고 작업은 현황판 "중단" 탭에 <b>「막힘」</b> 상태로 남습니다(자동 재시도 없음 — 한도가 풀린 뒤 다시 지시해야 합니다).</div>
 
     <h3 class="section">9단계 — 서비스 실행</h3>
     <p>PowerShell 창을 <b>1개</b> 열고 아래를 실행합니다. 이 명령 하나가 <code>.env.operation.local</code>을 읽어들이고 bot-service와 local-gateway 둘 다 띄워주며, 하나가 죽으면 자동으로 다시 올립니다.</p>
@@ -450,25 +460,26 @@ vercel --version</code></pre>
 node scripts/start-services.mjs</code></pre>
     <p>창에 두 서비스가 떴다는 로그가 나오고 멈추지 않고 계속 떠 있으면 정상입니다. <b>PC가 켜져 있는 동안 이 창이 계속 열려 있어야</b> 시스템이 작동합니다.</p>
     <div class="warn-box">⚠️ <code>node dist/apps/bot-service/src/cli.js</code>처럼 서비스를 <b>직접</b> 실행하지 마세요. 그렇게 하면 <code>.env.operation.local</code>이 읽히지 않아서, 파일을 아무리 정확히 채웠어도 창이 열리자마자 <code>missing-env:SUPABASE_URL</code> 같은 오류를 내고 꺼집니다. 반드시 위의 <code>scripts/start-services.mjs</code>로 켜세요.</div>
+    <div class="tip-box">PC를 재부팅했거나 이 창을 실수로 닫았다면, 시스템이 저절로 다시 켜지지 않습니다. PowerShell을 새로 열고 위 두 줄(<code>cd C:\Dev\HuAIChatroomSystem</code> → <code>node scripts/start-services.mjs</code>)을 다시 실행해야 합니다.</div>
 
     <h3 class="section">10단계 — 설치 확인</h3>
     <p>텔레그램 그룹방에서:</p>
-    <pre><code>@my_leader_chatroom_bot 안녕</code></pre>
-    <div class="tip-box"><code>my_leader_chatroom_bot</code>은 <b>예시</b>입니다. 5단계에서 본인이 지은 LeaderBot 사용자명으로 바꿔서 쓰세요 — 텔레그램 봇 이름은 전 세계에서 하나뿐이라, 다른 문서에 나오는 이름을 그대로 쓸 수 없습니다. 이 설명서에서 <code>@my_...</code>로 시작하는 이름은 모두 같은 뜻의 예시입니다.</div>
+    <pre><code>@&lt;LeaderBot_이름&gt; 안녕</code></pre>
+    <div class="tip-box"><code>&lt;LeaderBot_이름&gt;</code>은 <b>그대로 치는 게 아니라 자리표시자</b>입니다. 5단계에서 본인이 BotFather로 지은 LeaderBot 사용자명으로 바꿔 쓰세요 — 텔레그램 봇 이름은 전 세계에서 하나뿐이라 남의 문서에 있는 이름을 그대로 쓸 수 없습니다. 이 설명서에서 <code>&lt;…_이름&gt;</code> 꼴은 전부 같은 뜻입니다.</div>
     <p>LeaderBot이 몇 초 안에 반응하면 설치 성공입니다. 반응이 없으면 탭 05 "문제 해결"을 봅니다.</p>
   </section>
 
   <!-- ============ 04. 사용법 ============ -->
   <section class="panel" id="panel-4" role="tabpanel" aria-labelledby="tab-4" tabindex="0">
     <div class="panel-head">
-      <span class="panel-badge"><span class="n">04</span> 사용법 · 지시와 승인</span>
+      <span class="panel-badge"><span class="n">04</span> AI 작업 시키기</span>
       <h2>실제로 이렇게 씁니다</h2>
       <p class="lead">설치가 끝난 뒤, 방에서 AI에게 일을 시키고 승인하는 흐름입니다.</p>
     </div>
 
     <h3 class="section">AI에게 일 시키기</h3>
     <p>봇을 지목해서 말하면 접수됩니다(그냥 하는 말에는 시스템이 관여하지 않습니다 — 사람끼리 대화하는 공간이기도 합니다).</p>
-    <pre><code>@my_leader_chatroom_bot 버튼 오류 원인을 찾아 수정해줘</code></pre>
+    <pre><code>@&lt;LeaderBot_이름&gt; 버튼 오류 원인을 찾아 수정해줘</code></pre>
     <p>LeaderBot이 이걸 목적·범위·완료 조건을 갖춘 "작업 제안"으로 정리해 방에 올립니다.</p>
 
     <h3 class="section">승인하기</h3>
@@ -490,12 +501,10 @@ node scripts/start-services.mjs</code></pre>
     <div class="tip-box"><b>방에는 완료를 승인하는 버튼이 없습니다.</b> 작업을 <b>시작</b>시키는 결정(실행·수정·반려)만 방에서 하고, 끝난 뒤의 결정(승인·보완 요청)은 전부 현황판에서 합니다. 방에서 아무리 찾아도 없는 게 정상입니다. 현황판의 완료 버튼 이름은 <b>「완료 승인」이 아니라 그냥 「승인」</b>입니다.</div>
 
     <div class="def-box">자동허용 — 파일을 전혀 안 바꾸는 조회·분석·설명성 지시는 "실행" 버튼 자체가 뜨지 않고 바로 시작됩니다(방에 "🟢 자동 시작" 안내만 뜹니다). 판단이 애매하면 시스템은 항상 안전한 쪽(승인 필요)으로 처리합니다.</div>
+    <div class="tip-box">현황판을 열면 <b>승인 필요 · 진행 중 · 대기 · 중단 · 완료</b> 5개 탭으로 작업이 나뉘어 있습니다. 작업 카드를 누르면 상세 화면이 열리고, 결과물이 있으면 「결과물」 항목에 링크로 뜹니다.</div>
 
-    <h3 class="section">결과 확인하기</h3>
-    <p>작업이 끝나면 방에 결과가 옵니다. 300자가 넘는 긴 보고는 앞부분만 방에 오고 <b>[전문 보기]</b> 버튼이 붙습니다 — 눌러서 현황판에서 전체를 봅니다. 현황판은 방에 고정된 링크나 <code>/tasks</code> 명령으로 엽니다.</p>
-
-    <h3 class="section">완료 승인하기</h3>
-    <p>작업이 끝나면 <b>현황판에서</b> [승인] 버튼을 누릅니다(방 안에는 이 버튼이 없습니다). 결과물이 있으면 현황판 상세의 「결과물」 목록에 링크로 표시되니, 승인 전에 눌러서 먼저 확인하세요.</p>
+    <h3 class="section">결과 확인 · 완료 승인하기</h3>
+    <p>작업이 끝나면 방에 결과가 옵니다. 300자가 넘는 긴 보고는 앞부분만 방에 오고 <b>[전문 보기]</b> 버튼이 붙습니다 — 눌러서 현황판에서 전체를 봅니다. 결과물이 있으면 현황판 상세의 「결과물」 목록에 링크로 표시되니, 먼저 확인한 뒤 [승인]을 누르세요.</p>
     <div class="tip-box"><b>퀴즈가 뜰 수 있습니다</b> — 파일을 실제로 바꾼 작업은 완료 승인 전에 "뭐가 바뀌었는지 이해했는지" 확인하는 객관식 3문항이 먼저 나옵니다(인지부채 방지 장치). 통과해야 완료 승인 버튼이 나옵니다.</div>
     <div class="tip-box"><b>웹 페이지를 만든 작업이라면</b> — 완료 승인 전에는 산출물 링크가 "프리뷰"(아직 정식 주소 아님) 상태입니다. 완료 승인을 누르는 순간 그 링크가 정식(프로덕션) 주소로 바뀝니다 — 승인 전에 결과물이 먼저 공개돼버리는 걸 막기 위한 설계입니다.</div>
 
@@ -504,13 +513,13 @@ node scripts/start-services.mjs</code></pre>
 /task &lt;task_id&gt;       작업 하나 상세
 /search &lt;단어&gt;         작업 검색
 /trace &lt;task_id&gt;      이벤트·산출물·검증 이력
-@my_audit_chatroom_bot 이 작업을 보안 검토해줘   (감사관에게 직접 요청)</code></pre>
+@&lt;AuditBot_이름&gt; 이 작업을 보안 검토해줘   (감사관에게 직접 요청)</code></pre>
   </section>
 
   <!-- ============ 05. 문제 해결 ============ -->
   <section class="panel" id="panel-5" role="tabpanel" aria-labelledby="tab-5" tabindex="0">
     <div class="panel-head">
-      <span class="panel-badge"><span class="n">05</span> 문제 해결 · 자주 걸리는 오류</span>
+      <span class="panel-badge"><span class="n">05</span> 자주 발생하는 오류 해결</span>
       <h2>문제가 생기면</h2>
       <p class="lead">처음 설치할 때 가장 자주 걸리는 것부터 정리했습니다.</p>
     </div>
@@ -518,22 +527,22 @@ node scripts/start-services.mjs</code></pre>
       <tr><th>증상</th><th>원인 · 해결</th></tr>
       <tr><td>봇이 아무 반응이 없다</td><td>탭 03의 9단계 PowerShell 창이 열려 있는지 확인. 닫혀 있으면 <code>node scripts/start-services.mjs</code>로 다시 실행</td></tr>
       <tr><td><code>npm install</code>에서 멈추거나 에러</td><td>인터넷 연결 확인 후 다시 실행. 안 되면 Node.js를 v24 LTS로 재설치</td></tr>
-      <tr><td>창을 열자마자 바로 꺼진다 — <code>missing-env:...</code></td><td>① 서비스를 <code>node dist/...cli.js</code>로 <b>직접</b> 켜지 않았는지 확인 — 반드시 <code>node scripts/start-services.mjs</code>로 켜야 <code>.env.operation.local</code>이 읽힙니다. ② 그래도 같으면 오류에 찍힌 이름(예: <code>BOT_SERVICE_PLATOON_BOT_USERNAME</code>)이 <code>.env.operation.local</code>에 채워져 있는지 확인 — 봇 토큰 4개·사용자명 4개·Supabase URL/키가 자주 빠집니다</td></tr>
+      <tr><td>창을 열자마자 바로 꺼진다 — <code>missing-env:...</code></td><td>① 서비스를 <code>node dist/...cli.js</code>로 <b>직접</b> 켜지 않았는지 확인 — 반드시 <code>node scripts/start-services.mjs</code>로 켜야 <code>.env.operation.local</code>이 읽힙니다. ② 그래도 같으면 오류에 찍힌 이름(예: <code>BOT_SERVICE_LEADER_BOT_USERNAME</code>)이 <code>.env.operation.local</code>에 채워져 있는지 확인 — 봇 토큰 4개·사용자명 4개·Supabase URL/키가 자주 빠집니다</td></tr>
       <tr><td>"봇 여러 개가 같은 토큰" 비슷한 에러</td><td>봇 4개가 진짜 서로 다른 토큰인지 확인</td></tr>
       <tr><td>승인 버튼을 눌러도 반응이 늦다</td><td>정상입니다 — 실제 AI 실행은 몇 초~몇 분 걸립니다. 방에 "⏳ 작업 중" 표시가 주기적으로 올라옵니다</td></tr>
       <tr><td>Supabase SQL 실행에서 에러</td><td><code>supabase/schema.sql</code> 전체를 빠짐없이 붙여넣었는지 확인(일부만 붙여넣으면 실패)</td></tr>
       <tr><td>방에서 완료 승인·보완 요청 버튼을 못 찾겠다</td><td>정상입니다 — 그 두 버튼은 방이 아니라 <b>현황판</b>에 있고, 이름도 <code>승인</code>·<code>보완 요청</code>입니다. 방에 고정된 [작업 현황판 열기] 버튼이나 <code>/tasks</code> 명령으로 현황판을 여세요(탭 04 참고)</td></tr>
-      <tr><td>승인은 됐는데 실행이 안 되거나 이상한 에러가 난다</td><td>이 PC에 Claude Code·Codex CLI가 로그인돼 있는지 확인(탭 03의 8단계). 로그인 세션이 끊기면 실행이 실패합니다</td></tr>
+      <tr><td>승인은 됐는데 실행이 안 되거나 이상한 에러가 난다</td><td>이 PC에 Claude Code·Codex·Antigravity CLI가 로그인돼 있는지 확인(탭 03의 8단계). 로그인 세션이 끊기면 실행이 실패합니다</td></tr>
     </table></div>
-    <div class="tip-box">이 표에 없는 문제는 탭 06 참고자료의 <code>GITHUB_QUICKSTART.md</code>(더 기술적인 버전)와 <code>OPERATION_STATUS.md</code>(현재 알려진 이슈 목록)를 참고하세요.</div>
+    <div class="tip-box">이 표에 없는 문제는 탭 07 참고자료의 <code>GITHUB_QUICKSTART.md</code>(더 기술적인 버전)와 <code>OPERATION_STATUS.md</code>(현재 알려진 이슈 목록)를 참고하세요.</div>
   </section>
 
   <!-- ============ 06. 참고자료 ============ -->
   <section class="panel" id="panel-6" role="tabpanel" aria-labelledby="tab-6" tabindex="0">
     <div class="panel-head">
-      <span class="panel-badge"><span class="n">06</span> 참고자료 · 도해와 문서</span>
-      <h2>도해와 관련 문서</h2>
-      <p class="lead">시스템 구조를 그림으로 보고 싶거나, 더 기술적인 문서·운영 기록을 찾을 때 씁니다.</p>
+      <span class="panel-badge"><span class="n">06</span> 관계도 · 흐름도</span>
+      <h2>시스템 구조를 그림으로</h2>
+      <p class="lead">텔레그램 메시지 한 줄이 결과물이 되기까지, 조각들이 어떻게 얽혀 있는지 그림으로 봅니다.</p>
     </div>
 
     <h3 class="section">시스템 관계도</h3>
@@ -548,17 +557,14 @@ node scripts/start-services.mjs</code></pre>
       <p class="cap">지시 한 줄이 결과물이 되기까지, 승인 카테고리 분리, 엔진이 막혔을 때의 인계 규칙. 원본: <a href="2026_08_23__HuAI_System_작업흐름도.svg" target="_blank" rel="noopener">SVG</a> · <a href="docs/작업_흐름도.md" target="_blank" rel="noopener">글로 된 설명</a></p>
     </div>
 
-    <h3 class="section" id="components">구성 요소 자세히 보기</h3>
-    <p>탭 00에서 "AI 여러 명이 각자 맡은 역할대로 일한다"고 뭉뚱그려 말한 그 안쪽입니다 — 이 시스템을 이루는 조각들이 정확히 뭘 하는지입니다.</p>
-    <div class="step-grid">
-      <div class="step-card"><div class="step-badge">방</div><h5>텔레그램 방</h5><p>사람이 지시하고 결과를 받는 화면. 이 시스템의 유일한 사용자 인터페이스입니다.</p></div>
-      <div class="step-card"><div class="step-badge">L</div><h5>LeaderBot(소대장)</h5><p>사람 말을 읽고 "이건 질문인지 작업인지" 먼저 판단합니다. 작업이면 목적·범위·완료조건을 갖춘 제안으로 정리해 방에 올립니다.</p></div>
-      <div class="step-card"><div class="step-badge">C</div><h5>ClaudeBot · CodexBot</h5><p>실제로 코드를 읽고 파일을 만들거나 고치는 실행자입니다. 내부적으로 Claude Code·Codex·Antigravity 세 실행 엔진을 쓰고, 하나가 사용 한도에 걸리면 다른 엔진이 이어받습니다(최대 2번 인계).</p></div>
-      <div class="step-card"><div class="step-badge">A</div><h5>AuditBot(감사)</h5><p>실행자와 다른 엔진이 결과물을 독립적으로 다시 검토합니다 — 만든 사람이 자기 결과를 자기가 검사하지 않게 하기 위해서입니다.</p></div>
-      <div class="step-card"><div class="step-badge">B</div><h5>bot-service</h5><p>텔레그램과 이 시스템을 연결하는 통로. 누가 말했는지 확인하고, 권한을 검사하고, 답을 다시 텔레그램으로 보냅니다.</p></div>
-      <div class="step-card"><div class="step-badge">G</div><h5>local-gateway</h5><p>내 PC 안에서 실제로 명령을 실행하는 부분. 허락된 폴더 밖은 절대 건드리지 않습니다.</p></div>
-      <div class="step-card"><div class="step-badge">D</div><h5>Supabase</h5><p>"누가 뭘 시켰고 누가 승인했는지"를 남기는 공식 기록 창고. 텔레그램 메시지가 지워져도 여기 기록은 남습니다.</p></div>
-      <div class="step-card"><div class="step-badge">V</div><h5>Vercel</h5><p>AI가 만든 웹페이지를 인터넷 주소로 올려 폰에서 바로 열어볼 수 있게 하는 곳.</p></div>
+  </section>
+
+  <!-- ============ 07. 참고자료 ============ -->
+  <section class="panel" id="panel-7" role="tabpanel" aria-labelledby="tab-7" tabindex="0">
+    <div class="panel-head">
+      <span class="panel-badge"><span class="n">07</span> 참고자료</span>
+      <h2>용어·주소·문서</h2>
+      <p class="lead">낯선 단어가 궁금하거나, 배포 주소·소스를 다시 찾거나, 더 기술적인 문서를 볼 때 씁니다.</p>
     </div>
 
     <h3 class="section" id="glossary">기술 용어 풀이</h3>
@@ -580,7 +586,7 @@ node scripts/start-services.mjs</code></pre>
     <h3 class="section">배포 주소와 소스 저장소</h3>
     <div class="table-wrap"><table>
       <tr><th>무엇</th><th>주소</th></tr>
-      <tr><td>이 설명서(배포본)</td><td><a href="https://huai-guide.vercel.app" target="_blank" rel="noopener">https://huai-guide.vercel.app</a></td></tr>
+      <tr><td>이 설명서(배포본)</td><td><a href="https://huai-collab-system.vercel.app" target="_blank" rel="noopener">https://huai-collab-system.vercel.app</a></td></tr>
       <tr><td>GitHub 소스 저장소</td><td><a href="https://github.com/SUNWOONGKYU/HuAIChatroomSystem" target="_blank" rel="noopener">https://github.com/SUNWOONGKYU/HuAIChatroomSystem</a></td></tr>
       <tr><td>작업 현황판 (Mini App)</td><td>Vercel 프로젝트 <code>huai-board</code></td></tr>
       <tr><td>웹 산출물 배포처</td><td>Vercel 프로젝트 <code>huai-artifacts</code></td></tr>
@@ -614,7 +620,7 @@ node scripts/start-services.mjs</code></pre>
 
 </main>
 
-<footer>HuAI Collab Chatroom System · 설치 및 사용 설명서 · 최신 갱신일 2026-08-23</footer>
+<footer>HuAI Collab Chatroom System<br>설치 및 사용 설명서<br>최신 갱신일 2026-08-24</footer>
 
 <script>
   var buttons = document.querySelectorAll('.tab-btn');

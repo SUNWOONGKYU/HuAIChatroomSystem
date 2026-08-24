@@ -52,7 +52,7 @@ SUPABASE_SERVICE_ROLE_KEY=
 BOT_SERVICE_TELEGRAM_CHAT_ID=
 BOT_SERVICE_OWNER_TELEGRAM_USER_ID=
 BOT_SERVICE_RECEIVE_MODE=polling
-BOT_SERVICE_PLATOON_BOT_TOKEN=
+BOT_SERVICE_LEADER_BOT_TOKEN=
 BOT_SERVICE_CLAUDE_BOT_TOKEN=
 BOT_SERVICE_CODEX_BOT_TOKEN=
 BOT_SERVICE_AUDITOR_BOT_TOKEN=
@@ -194,7 +194,7 @@ Telegram 그룹에서 다음처럼 입력합니다.
 직접 감사:
 
 ```text
-@my_audit_chatroom_bot 이 작업을 보안 검토해줘
+@audit_chatroom_bot 이 작업을 보안 검토해줘
 ```
 
 버튼 — 방과 현황판에 나뉘어 있습니다.

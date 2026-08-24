@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="260" viewBox="0 0 900 260" role="img" aria-labelledby="t d">
+  <title id="t">HuAI Collab Chatroom System 관계도 요약</title>
+  <desc id="d">사람·텔레그램, 작업 PC, 클라우드(Supabase·Vercel) 세 덩어리가 무엇을 주고받는지 요약한 그림</desc>
+
+  <style>
+    .bg{fill:#fafaf7}
+    .card{fill:#ffffff;stroke:#5f6b7a;stroke-width:2.5}
+    .cardGreen{fill:#eaf2ed;stroke:#2d6a4f;stroke-width:3}
+    .cardDark{fill:#0a1f14;stroke:#0a1f14}
+    .head{font:700 21px 'Malgun Gothic',Arial,sans-serif;fill:#0a1f14}
+    .headLight{font:700 21px 'Malgun Gothic',Arial,sans-serif;fill:#fafaf7}
+    .sub{font:15px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a}
+    .subLight{font:15px 'Malgun Gothic',Arial,sans-serif;fill:#cfd8d3}
+    .flow{stroke:#2d6a4f;stroke-width:3;fill:none;marker-end:url(#a)}
+    .edgeLabel{font:15px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2d6a4f"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="900" height="260"/>
+
+  <rect class="card" x="30" y="70" width="230" height="120" rx="10"/>
+  <text class="head" x="145" y="122" text-anchor="middle">사람 · 텔레그램</text>
+  <text class="sub" x="145" y="150" text-anchor="middle">지시하고 승인한다</text>
+
+  <rect class="cardGreen" x="335" y="70" width="230" height="120" rx="10"/>
+  <text class="head" x="450" y="122" text-anchor="middle">작업 PC</text>
+  <text class="sub" x="450" y="150" text-anchor="middle">bot-service · 실행 엔진</text>
+
+  <rect class="cardDark" x="640" y="70" width="230" height="120" rx="10"/>
+  <text class="headLight" x="755" y="122" text-anchor="middle">클라우드</text>
+  <text class="subLight" x="755" y="150" text-anchor="middle">Supabase · Vercel</text>
+
+  <path class="flow" d="M 260 130 L 331 130"/>
+  <text class="edgeLabel" x="296" y="115" text-anchor="middle">지시·승인</text>
+
+  <path class="flow" d="M 565 130 L 636 130"/>
+  <text class="edgeLabel" x="600" y="115" text-anchor="middle">기록·배포</text>
+</svg>

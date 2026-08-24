@@ -80,7 +80,7 @@
   <rect class="card" x="630" y="594" width="440" height="130" rx="8"/>
   <text class="cardHead" x="654" y="628">실행 엔진 3종</text>
   <text class="body" x="654" y="662">Claude Code · Codex · Antigravity</text>
-  <text class="body" x="654" y="694">한도에 걸리면 최대 2회 인계</text>
+  <text class="body" x="654" y="694">한도에 걸리면 최대 3회 인계</text>
 
   <rect class="card" x="630" y="748" width="440" height="200" rx="8"/>
   <text class="cardHead" x="654" y="782">디스크</text>

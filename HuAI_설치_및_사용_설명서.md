@@ -97,7 +97,7 @@ npm run build
 
 ## 5단계 — 텔레그램 봇 4개 만들기
 
-왜: 이 시스템은 봇 1개가 아니라 4개(소대장·클로드·코덱스·감사관 역할)를 씁니다. 역할별로
+왜: 이 시스템은 봇 1개가 아니라 4개(리더·클로드·코덱스·감사관 역할)를 씁니다. 역할별로
 누가 무슨 말을 하는지 구분하기 위해서입니다.
 
 1. 텔레그램 앱에서 `BotFather`를 검색해서 대화를 엽니다(파란 체크마크 있는 공식 봇).
@@ -108,7 +108,7 @@ npm run build
 5. 성공하면 긴 토큰 문자열(`123456:AAxxxxx...` 형태)을 줍니다 — **메모장에 복사**해두고
    어느 역할인지 표시해둡니다.
 6. 이 과정(`/newbot`부터)을 **4번 반복**해서 아래 4개를 전부 만듭니다:
-   - LeaderBot (소대장 — 지시 접수, 제안, 승인 흐름 담당)
+   - LeaderBot (리더 — 지시 접수, 제안, 승인 흐름 담당)
    - ClaudeBot (Claude Code 실행 담당)
    - CodexBot (Codex 실행 담당)
    - AuditBot (독립 검증 담당)
@@ -151,7 +151,7 @@ npm run build
    | `SUPABASE_SERVICE_ROLE_KEY` | 4단계의 service_role 키 |
    | `BOT_SERVICE_TELEGRAM_CHAT_ID` | 6단계의 그룹 chat_id |
    | `BOT_SERVICE_OWNER_TELEGRAM_USER_ID` | 6단계의 내 user_id |
-   | `BOT_SERVICE_PLATOON_BOT_TOKEN` | LeaderBot 토큰 |
+   | `BOT_SERVICE_LEADER_BOT_TOKEN` | LeaderBot 토큰 |
    | `BOT_SERVICE_CLAUDE_BOT_TOKEN` | ClaudeBot 토큰 |
    | `BOT_SERVICE_CODEX_BOT_TOKEN` | CodexBot 토큰 |
    | `BOT_SERVICE_AUDITOR_BOT_TOKEN` | AuditBot 토큰 |

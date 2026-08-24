@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="260" viewBox="0 0 900 260" role="img" aria-labelledby="t d">
+  <title id="t">HuAI Collab Chatroom System 흐름도 요약</title>
+  <desc id="d">사람이 텔레그램에서 말하면 LeaderBot이 정리하고, AI들이 실행하고, 방장이 현황판에서 승인한다는 4단계 요약도</desc>
+
+  <style>
+    .bg{fill:#fafaf7}
+    .card{fill:#ffffff;stroke:#2d6a4f;stroke-width:2.5}
+    .cardGold{fill:#fff8e7;stroke:#c9a961;stroke-width:3}
+    .head{font:700 22px 'Malgun Gothic',Arial,sans-serif;fill:#0a1f14}
+    .sub{font:16px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a}
+    .flow{stroke:#2d6a4f;stroke-width:3;fill:none;marker-end:url(#a)}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2d6a4f"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="900" height="260"/>
+
+  <rect class="card" x="20" y="80" width="190" height="100" rx="10"/>
+  <text class="head" x="115" y="122" text-anchor="middle">텔레그램 방</text>
+  <text class="sub" x="115" y="150" text-anchor="middle">사람이 말로 지시</text>
+
+  <rect class="card" x="240" y="80" width="190" height="100" rx="10"/>
+  <text class="head" x="335" y="122" text-anchor="middle">LeaderBot</text>
+  <text class="sub" x="335" y="150" text-anchor="middle">작업 제안으로 정리</text>
+
+  <rect class="card" x="460" y="80" width="190" height="100" rx="10"/>
+  <text class="head" x="555" y="122" text-anchor="middle">AI들이 실행</text>
+  <text class="sub" x="555" y="150" text-anchor="middle">Claude · Codex</text>
+
+  <rect class="cardGold" x="680" y="80" width="200" height="100" rx="10"/>
+  <text class="head" x="780" y="122" text-anchor="middle">방장 승인</text>
+  <text class="sub" x="780" y="150" text-anchor="middle">현황판에서 확인</text>
+
+  <path class="flow" d="M 210 130 L 236 130"/>
+  <path class="flow" d="M 430 130 L 456 130"/>
+  <path class="flow" d="M 650 130 L 676 130"/>
+</svg>

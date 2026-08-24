@@ -267,6 +267,28 @@
     margin-top: 16px;
   }
   .action-row .btn { flex: 1 1 auto; }
+  .reason-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .reason-count {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: var(--hint);
+    text-align: right;
+  }
+  #reason-hint {
+    color: var(--danger);
+  }
   #decision-note {
     margin-top: 10px;
     font-size: 12px;
@@ -457,6 +479,19 @@
         </div>
       </div>
       <div class="action-row" id="action-row" hidden></div>
+      <!-- 보완 요청 사유. [보완 요청] 버튼을 누르면 바로 전송하지 않고 여기를 먼저 연다 —
+           사유는 필수다(공백만으로는 보내기가 비활성 상태로 남는다). 서버(miniapp-approve
+           handler.ts)가 2000자로 자르므로 여기서도 같은 상한을 맞춘다. -->
+      <div class="field" id="reason-section" hidden>
+        <label for="reason-input">보완 사유 (필수)</label>
+        <textarea id="reason-input" class="reason-textarea" rows="4" maxlength="2000" placeholder="무엇을 고쳐야 하는지 적어주세요"></textarea>
+        <p id="reason-count" class="reason-count">0 / 2000</p>
+        <p id="reason-hint" class="hint" hidden>무엇을 고쳐야 하는지 적어주세요</p>
+        <div class="action-row">
+          <button type="button" class="btn btn-accent" id="reason-send-btn" disabled>보내기</button>
+          <button type="button" class="btn btn-ghost" id="reason-cancel-btn">취소</button>
+        </div>
+      </div>
       <div id="decision-note"></div>
       <div class="action-row">
         <button type="button" class="btn btn-ghost" id="close-detail-btn" style="flex:1 1 100%;">닫기</button>
@@ -776,11 +811,12 @@
     noteEl.className = "proposal-note show";
     noteEl.textContent = "처리 중…";
 
-    // "이유" 입력란은 일부러 안 둔다 — huai_approvals.reason 을 지금 소비하는 코드가
-    // 어디에도 없어서(팀장님이 Alpha 조사로 확인: owner_supplement_requested 이벤트 payload에
-    // reason 필드 자체가 없고, Telegram 콜백도 64바이트 제한상 자유 텍스트를 못 싣는다),
-    // 입력란을 두면 "적었으니 전달됐겠지"라는 거짓 안심만 준다. 대신 성공 메시지에서
-    // Telegram 방에 직접 알려야 한다고 명시적으로 안내한다(decisionSuccessNote).
+    // 제안 단계의 "수정"(action=request_revision, 레이블은 "수정")은 이번 작업 범위 밖이다
+    // (팀장님 지시로 보류) — 완료 단계 [보완 요청]과 달리 여기는 아직 사유 입력란을 두지
+    // 않았다. huai_approvals.reason 은 저장은 되지만 이 제안 경로에서는 아무도 읽지 않으므로
+    // (task 경로만 orchestrator 까지 연결됐다 — buildSupplementRequestedText 참고), 입력란을
+    // 두면 여전히 "적었으니 전달됐겠지"라는 거짓 안심을 준다. 그래서 성공 메시지도 그대로
+    // "Telegram 방에 직접 알려야 한다"는 안내를 유지한다(decisionSuccessNote 의 kind="proposal" 분기).
 
     // task 결정과 동일한 패턴: 세션 내 고정된 idempotency 키로 중복 클릭을 막는다.
     // proposalId 와 taskId 는 서로 다른 채번 체계라 이 키 공간에서 충돌하지 않는다.
@@ -797,7 +833,7 @@
       body: JSON.stringify(body)
     })
       .then(function (res) {
-        noteEl.textContent = decisionSuccessNote(action, res);
+        noteEl.textContent = decisionSuccessNote(action, res, "proposal");
         tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
         // 결정된 제안은 서버에서 목록 조인이 바뀌며 곧 사라진다 — 그대로 두고 목록만 새로고침한다.
         setTimeout(function () { loadProposals(true); }, 900);
@@ -957,6 +993,13 @@
   var actionRow = document.getElementById("action-row");
   var decisionNote = document.getElementById("decision-note");
   var detailHint = document.getElementById("detail-hint");
+  var reasonSection = document.getElementById("reason-section");
+  var reasonInput = document.getElementById("reason-input");
+  var reasonCount = document.getElementById("reason-count");
+  var reasonHint = document.getElementById("reason-hint");
+  var reasonSendBtn = document.getElementById("reason-send-btn");
+  var reasonCancelBtn = document.getElementById("reason-cancel-btn");
+  var REASON_MAX_LENGTH = 2000; // miniapp-approve handler.ts 가 자르는 상한과 맞춘다.
   var detailArtifactsField = document.getElementById("detail-artifacts-field");
   var detailArtifacts = document.getElementById("detail-artifacts");
   var quizSection = document.getElementById("quiz-section");
@@ -980,39 +1023,25 @@
     renderArtifacts(task.artifacts || []);
     decisionNote.className = "";
     decisionNote.textContent = "";
+    reasonSection.hidden = true;
+    reasonTask = null;
     resolveQuizThenActions(task);
     overlayEl.classList.add("open");
   }
 
-  // 완료 승인 가능한 작업만 퀴즈 여부를 물어본다 — 그 외 상태는 애초에 최종승인
-  // 버튼이 없으니 퀴즈도 의미가 없다(renderActions 의 task.decidable 판정과 동일 전제).
+  // 퀴즈는 "완료 승인"에만 건다 — 서버(miniapp-approve/handler.ts)도
+  // action === "final_approve" 일 때만 퀴즈를 강제하고, 보완 요청은 애초에 검사하지
+  // 않는다. 예전엔 여기서 퀴즈 여부부터 물어보고 통과해야만 버튼 자체를 그려서,
+  // 결과가 마음에 안 들어 보완을 요청하려는 사람도 퀴즈부터 통과해야 하는
+  // 앞뒤가 안 맞는 상태였다(반려하려는 사람에게 "뭐가 바뀌었는지 이해했냐"를
+  // 먼저 묻는 셈이었다) — 방장 실사용 중 발견. 이제 버튼은 바로 그리고,
+  // 퀴즈는 승인 버튼을 눌렀을 때만 확인한다(checkQuizThenApprove).
   function resolveQuizThenActions(task) {
     quizSection.hidden = true;
     quizFeedback.hidden = true;
     quizFeedback.textContent = "";
     currentQuizTaskId = task.taskId;
-
-    if (!task.decidable) {
-      renderActions(task);
-      return;
-    }
-
-    actionRow.hidden = true;
-    detailHint.hidden = true;
-    apiFetch("/miniapp-quiz?taskId=" + encodeURIComponent(task.taskId), { method: "GET" })
-      .then(function (res) {
-        if (currentQuizTaskId !== task.taskId) return; // 그 사이 다른 작업을 열었다.
-        if (!res.hasQuiz || res.passed) {
-          renderActions(task);
-          return;
-        }
-        renderQuiz(task, res.questions);
-      })
-      .catch(function () {
-        // 퀴즈 조회 실패는 승인 자체를 막을 이유가 아니다 — 어차피 miniapp-approve 가
-        // 서버에서 다시 한 번 강제하므로, 여기서는 평소대로 버튼을 보여준다.
-        if (currentQuizTaskId === task.taskId) renderActions(task);
-      });
+    renderActions(task);
   }
 
   function renderQuiz(task, questions) {
@@ -1086,6 +1115,8 @@
   function closeDetail() {
     overlayEl.classList.remove("open");
     currentQuizTaskId = "";
+    reasonSection.hidden = true;
+    reasonTask = null;
   }
   closeDetailBtn.addEventListener("click", closeDetail);
   overlayEl.addEventListener("click", function (e) {
@@ -1124,15 +1155,102 @@
       btn.type = "button";
       btn.className = "btn " + a.cls;
       btn.textContent = a.label;
-      btn.addEventListener("click", function () { submitDecision(task, a.action, btn); });
+      btn.addEventListener("click", function () {
+        // 보완 요청은 사유가 필수라 즉시 전송하지 않는다 — 먼저 사유 입력 UI를 연다.
+        // 퀴즈와도 무관하다(서버가 request_revision 에는 퀴즈를 안 건다).
+        if (a.action === "request_revision") {
+          openReasonInput(task);
+          return;
+        }
+        // 승인(final_approve)만 퀴즈를 먼저 확인한다.
+        checkQuizThenApprove(task, Array.prototype.slice.call(actionRow.querySelectorAll("button")));
+      });
       actionRow.appendChild(btn);
     });
   }
 
+  // 승인 버튼을 눌렀을 때만 퀴즈 통과 여부를 확인한다 — 퀴즈가 없거나 이미
+  // 통과했으면 바로 제출하고, 안 통과했으면 퀴즈부터 보여준다(통과 후
+  // renderActions 가 다시 불려 액션 줄이 재생성되고, 다시 승인을 누르면
+  // 이번엔 passed:true 로 응답이 와서 그대로 제출된다).
+  function checkQuizThenApprove(task, buttons) {
+    buttons.forEach(function (b) { b.disabled = true; });
+    apiFetch("/miniapp-quiz?taskId=" + encodeURIComponent(task.taskId), { method: "GET" })
+      .then(function (res) {
+        if (currentQuizTaskId !== task.taskId) return; // 그 사이 다른 작업을 열었다.
+        if (res.hasQuiz && !res.passed) {
+          actionRow.hidden = true;
+          detailHint.hidden = true;
+          renderQuiz(task, res.questions);
+          return;
+        }
+        submitDecision(task, "final_approve", buttons);
+      })
+      .catch(function () {
+        // 퀴즈 조회 실패는 승인 자체를 막을 이유가 아니다 — 서버가 다시 강제한다.
+        // 단, 조회가 실패하는 동안 사용자가 다른 작업을 열었다면 이 콜백은 이미
+        // 화면에서 사라진 작업을 향한 것이다 — 여기서도 currentQuizTaskId 로
+        // 걸러야 한다(V2 검증에서 지적됨: 이 가드가 없으면 엉뚱한 작업이 승인될 수 있다).
+        if (currentQuizTaskId !== task.taskId) return;
+        submitDecision(task, "final_approve", buttons);
+      });
+  }
+
+  // ── 보완 요청 사유 입력 ──
+  // action-row 를 감춘 자리에 이 UI를 대신 띄운다(같은 시트, 같은 위치) — action-row의
+  // DOM 은 지우지 않고 hidden 만 토글하므로 취소 시 다시 렌더링할 필요 없이 그대로 되돌릴
+  // 수 있다.
+  var reasonTask = null;
+
+  function openReasonInput(task) {
+    reasonTask = task;
+    actionRow.hidden = true;
+    detailHint.hidden = true;
+    reasonInput.value = "";
+    reasonHint.hidden = true;
+    updateReasonCount();
+    reasonSection.hidden = false;
+    reasonInput.focus();
+  }
+
+  function closeReasonInput() {
+    reasonSection.hidden = true;
+    reasonTask = null;
+    actionRow.hidden = false;
+  }
+
+  function updateReasonCount() {
+    var len = reasonInput.value.length;
+    reasonCount.textContent = len + " / " + REASON_MAX_LENGTH;
+    reasonSendBtn.disabled = reasonInput.value.trim().length === 0;
+  }
+
+  reasonInput.addEventListener("input", function () {
+    reasonHint.hidden = true;
+    updateReasonCount();
+  });
+
+  reasonCancelBtn.addEventListener("click", closeReasonInput);
+
+  reasonSendBtn.addEventListener("click", function () {
+    var reason = reasonInput.value.trim();
+    if (!reason) {
+      reasonHint.hidden = false;
+      reasonHint.textContent = "무엇을 고쳐야 하는지 적어주세요";
+      return;
+    }
+    if (!reasonTask) return;
+    submitDecision(reasonTask, "request_revision", [reasonSendBtn, reasonCancelBtn], reason);
+  });
+
   var submittedKeys = {};
   var submitting = false;
 
-  function submitDecision(task, action, triggerBtn) {
+  // buttons: 제출 중 비활성화했다가 실패 시 다시 활성화할 버튼 목록. 승인/거부는
+  // action-row 버튼 전체, 보완 요청은 사유 입력 UI의 보내기/취소 버튼이다 —
+  // action-row 는 그때 감춰져 있어 그 버튼들을 건드릴 이유도 방법도 없다.
+  // reason: 보완 요청일 때만 있다(선택). 있으면 요청 body 에 그대로 실어 보낸다.
+  function submitDecision(task, action, buttons, reason) {
     // 버튼 disabled 만으로는 못 막는 경우가 있다 — 모바일에서 빠른 두 번 탭은 두 click
     // 이벤트가 이미 큐에 들어간 뒤에야 아래 disabled=true 가 실행돼, 두 번째 탭이 그 사이를
     // 비집고 들어간다(실측: 방장이 승인을 눌렀는데 "이미 결정된 건"이라는 에러가 떴다 —
@@ -1141,7 +1259,6 @@
     if (submitting) return;
     submitting = true;
 
-    var buttons = actionRow.querySelectorAll("button");
     for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
     decisionNote.className = "show";
     decisionNote.textContent = "처리 중…";
@@ -1153,14 +1270,18 @@
       submittedKeys[key] = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
     }
 
+    var body = { taskId: task.taskId, action: action, idempotencyKey: submittedKeys[key] };
+    if (reason) body.reason = reason;
+
     apiFetch("/miniapp-approve", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ taskId: task.taskId, action: action, idempotencyKey: submittedKeys[key] })
+      body: JSON.stringify(body)
     })
       .then(function (res) {
         submitting = false;
-        decisionNote.textContent = decisionSuccessNote(action, res);
+        if (!reasonSection.hidden) closeReasonInput();
+        decisionNote.textContent = decisionSuccessNote(action, res, "task");
         tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
         loadTasks(true);
         setTimeout(closeDetail, 900);
@@ -1193,14 +1314,19 @@
       });
   }
 
-  // 보완 요청은 버튼을 누르는 것만으로는 아무것도 반영되지 않는다 — huai_approvals.reason 을
-  // 지금 소비하는 코드가 없어서(팀장님 확인: orchestrator 어디에도 이 값을 읽는 곳이 없다),
-  // "무엇을 고칠지"는 Telegram 방에서 사람이 직접 다시 말해야만 실제로 반영된다. 입력란을
-  // 없앤 대신(입력란이 있으면 "적었으니 전달됐겠지"라는 거짓 안심을 준다) 성공 메시지에서
-  // 다음 행동을 명시적으로 안내한다.
-  function decisionSuccessNote(action, res) {
-    if (action === "request_revision") {
-      return "보완 요청이 기록되었습니다. 무엇을 고쳐야 하는지는 Telegram 방에 직접 남겨주세요 — 버튼만으로는 반영되지 않습니다.";
+  // task(완료 단계 [보완 요청])와 proposal(제안 단계 "수정") 둘 다 이 함수를 부른다 —
+  // kind 로 갈라야 하는 이유: task 쪽 사유는 이제 실제로 담당자에게 닿지만(여기서 입력 →
+  // miniapp-approve 핸들러가 huai_approvals.reason 에 저장 → Mini App 결정 폴러가 그 값을
+  // 읽어 합성 콜백에 싣고 → orchestrator(buildSupplementRequestedText)가 방 알림 본문에
+  // 그대로 포함시킨다), proposal 쪽 "수정"은 이번 범위 밖이라 여전히 사유 입력란도 없고
+  // 아무도 그 값을 읽지 않는다(위 submitProposalDecision 주석 참고). 두 경로에 같은 문구를
+  // 쓰면 proposal 쪽에서 "사유가 전달됩니다"라는 거짓 안심을 준다.
+  function decisionSuccessNote(action, res, kind) {
+    if (action === "request_revision" && kind === "task") {
+      return "보완 요청을 전달했습니다. 적어주신 사유가 방과 담당자에게 함께 전달됩니다.";
+    }
+    if (action === "request_revision" && kind === "proposal") {
+      return "수정 요청이 기록되었습니다. 무엇을 고쳐야 하는지는 Telegram 방에 직접 남겨주세요 — 버튼만으로는 반영되지 않습니다.";
     }
     return (res && res.note) || "결정이 기록되었습니다.";
   }

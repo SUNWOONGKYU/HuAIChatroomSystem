@@ -132,7 +132,7 @@
   <rect class="stepAuto" x="1280" y="576" width="330" height="118" rx="8"/>
   <text class="stepHead" x="1302" y="610">2. 요약</text>
   <text class="body" x="1302" y="644">하루치를 위키 한 장으로</text>
-  <text class="body" x="1302" y="676">소대장·감사가 이걸 읽는다</text>
+  <text class="body" x="1302" y="676">리더·감사가 이걸 읽는다</text>
 
   <rect class="step" x="900" y="726" width="710" height="118" rx="8"/>
   <text class="stepHead" x="922" y="760">3. 정리 점검 — 지우지는 않는다</text>
