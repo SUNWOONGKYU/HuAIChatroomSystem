@@ -80,7 +80,7 @@ function fakeSupabase(options: {
   const originalFetch = globalThis.fetch;
   const originalEnv = (globalThis as { Deno?: { env: { get(key: string): string | undefined } } }).Deno;
 
-  (globalThis as { Deno?: unknown }).Deno = { env: { get: (key: string) => (key === "TELEGRAM_PLATOON_BOT_TOKEN" ? "test-token" : undefined) } };
+  (globalThis as { Deno?: unknown }).Deno = { env: { get: (key: string) => (key === "TELEGRAM_LEADER_BOT_TOKEN" ? "test-token" : undefined) } };
   globalThis.fetch = (async () => {
     if (options.telegramThrows) throw new Error("network-down");
     return new Response(JSON.stringify({

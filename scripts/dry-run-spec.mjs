@@ -59,7 +59,7 @@ const authorization = {
 const botConfig = {
   allowedChatIds: [CHAT_ID],
   botsByUsername: new Map([[BOT_USERNAME, {
-    telegramBotId: BOT_ID, botUsername: BOT_USERNAME, botRole: "platoon_leader", webhookSecret: SECRET
+    telegramBotId: BOT_ID, botUsername: BOT_USERNAME, botRole: "leader", webhookSecret: SECRET
   }]])
 };
 
@@ -153,7 +153,7 @@ let proposalId;
   const result = handleTelegramInput(decision.input, authorization, ports);
   const gateway = result.accepted ? result.outbox.find((item) => item.target.kind === "local_gateway") : undefined;
   const planning = gateway ? isLeaderPlanningAttempt(gateway.payload.executionRequest.attemptId) : false;
-  record("S08", "FR-003 / FR-007", "소대장 호출 → 정규식이 아니라 판단 실행을 요청",
+  record("S08", "FR-003 / FR-007", "리더 호출 → 정규식이 아니라 판단 실행을 요청",
     planning ? "PASS" : "FAIL",
     planning ? "게이트웨이로 판단 실행 요청. 대화 맥락을 읽고 재구성한 뒤 제안이 올라간다" : "판단 실행이 나가지 않았다");
 
@@ -333,8 +333,8 @@ const ownerContext = { actorRole: "human_owner", isOwner: true, isAssignee: fals
 
 {
   const byOwner = transitionTaskStatus("commander_completion_pending", "commander_completion_approved", ownerContext);
-  const byLeader = transitionTaskStatus("commander_completion_pending", "commander_completion_approved", { ...ownerContext, actorRole: "platoon_leader" });
-  record("S21", "FR-015", "소대장 완료 결정은 소대장 역할만 가능",
+  const byLeader = transitionTaskStatus("commander_completion_pending", "commander_completion_approved", { ...ownerContext, actorRole: "leader" });
+  record("S21", "FR-015", "리더 완료 결정은 리더 역할만 가능",
     byOwner.allowed === false && byLeader.allowed === true ? "PASS" : "FAIL",
     `owner=${byOwner.allowed} leader=${byLeader.allowed}`);
 }

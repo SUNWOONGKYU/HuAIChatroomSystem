@@ -207,7 +207,7 @@ function bots(): TelegramPollingBot[] {
 function config(): BotServiceConfig {
   return {
     allowedChatIds: [CHAT],
-    botsByUsername: new Map([[BOT, { telegramBotId: "b1", botUsername: BOT, botRole: "platoon_leader", webhookSecret: "s" }]])
+    botsByUsername: new Map([[BOT, { telegramBotId: "b1", botUsername: BOT, botRole: "leader", webhookSecret: "s" }]])
   };
 }
 

@@ -8,7 +8,7 @@ import {
   type RoomTurn
 } from "../src/leader-planning.js";
 
-// 소대장 판단 계층. 지금까지 이 자리에는 정규식이 앉아 있었다.
+// 리더 판단 계층. 지금까지 이 자리에는 정규식이 앉아 있었다.
 
 const TURNS: RoomTurn[] = [
   { speaker: "박", text: "결제 실패율이 어제부터 올라간 것 같아", isOwner: false },
@@ -31,7 +31,7 @@ test("직전 논의가 없어도 프롬프트가 성립한다", () => {
   assert.match(prompt, /\[요청\] 로그인 버그 고쳐줘/);
 });
 
-test("소대장 계획을 파싱한다", () => {
+test("리더 계획을 파싱한다", () => {
   const decision = parseLeaderDecision(JSON.stringify({
     title: "결제 실패율 진단 및 수정",
     purpose: "실패율 원인 규명 후 재발 방지",
@@ -58,7 +58,7 @@ test("코드펜스와 앞뒤 설명이 붙어도 살려낸다", () => {
   assert.equal(decision?.kind, "plan");
 });
 
-test("소대장이 나설 자리가 아니라고 판단하면 작업을 만들지 않는다", () => {
+test("리더가 나설 자리가 아니라고 판단하면 작업을 만들지 않는다", () => {
   const decision = parseLeaderDecision(JSON.stringify({ noAction: "사람끼리 상의 중이라 개입할 단계가 아님" }));
   assert.equal(decision?.kind, "no_action");
   if (decision?.kind !== "no_action") return;
@@ -81,7 +81,7 @@ test("담당이 이상하면 실행 가능한 기본값으로 떨어진다", () 
   assert.equal(decision.plan.assignee, "codex_leader");
 });
 
-test("both 는 두 분대장에게 각각 배분된다", () => {
+test("both 는 두 팀원에게 각각 배분된다", () => {
   assert.deepEqual(executionRolesForAssignee("both"), ["claude_leader", "codex_leader"]);
   assert.deepEqual(executionRolesForAssignee("codex_leader"), ["codex_leader"]);
   assert.deepEqual(executionRolesForAssignee("claude_leader"), ["claude_leader"]);
@@ -220,7 +220,7 @@ test("완료 조건 없는 줄 형식은 무효다", () => {
   assert.equal(parseLeaderDecision("DECISION: plan\nTITLE: 제목\nSCOPE: 범위"), undefined);
 });
 
-// 방장·Fable 5 지적 — 소대장은 최근 40턴만 본다. 그 창 밖은 아예 몰라서 "3주 전에 왜
+// 방장·Fable 5 지적 — 리더는 최근 40턴만 본다. 그 창 밖은 아예 몰라서 "3주 전에 왜
 // 그렇게 정했지"에 답을 못 하고, 이미 끝난 작업을 새로 제안한다(라이브에서 달걀 게임).
 test("지난 기록이 있으면 프롬프트에 실린다", () => {
   const prompt = buildLeaderPlanningPrompt({

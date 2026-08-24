@@ -7,7 +7,7 @@ test("serves token-free bot-service health response", async () => {
     config: {
       allowedChatIds: ["1001", "1002"],
       botsByUsername: new Map([
-        ["platoon_bot", { telegramBotId: "bot-1", botUsername: "platoon_bot", botRole: "platoon_leader", webhookSecret: "secret-1" }],
+        ["leader_bot", { telegramBotId: "bot-1", botUsername: "leader_bot", botRole: "leader", webhookSecret: "secret-1" }],
         ["claude_bot", { telegramBotId: "bot-2", botUsername: "claude_bot", botRole: "claude_leader", webhookSecret: "secret-2" }],
         ["codex_bot", { telegramBotId: "bot-3", botUsername: "codex_bot", botRole: "codex_leader", webhookSecret: "secret-3" }],
         ["auditor_bot", { telegramBotId: "bot-4", botUsername: "auditor_bot", botRole: "auditor", webhookSecret: "secret-4" }]

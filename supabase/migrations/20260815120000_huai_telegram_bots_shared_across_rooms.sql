@@ -39,7 +39,7 @@ alter table huai_telegram_bots
 
 alter table huai_telegram_bots
   add constraint huai_telegram_bots_role_check
-  check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor'));
+  check (role in ('leader', 'claude_leader', 'codex_leader', 'auditor'));
 
 alter table huai_telegram_bots
   alter column actor_id drop not null;

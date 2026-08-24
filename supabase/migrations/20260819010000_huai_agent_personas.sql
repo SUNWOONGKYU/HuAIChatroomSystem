@@ -10,7 +10,7 @@ create table if not exists huai_agent_personas (
   persona_id uuid primary key default gen_random_uuid(),
   room_id uuid not null references huai_rooms(room_id) on delete cascade,
   persona_name text not null,
-  -- 어느 실행 담당 봇 위에 얹히는가. platoon_leader(판단)·auditor(중립 검증)는
+  -- 어느 실행 담당 봇 위에 얹히는가. leader(판단)·auditor(중립 검증)는
   -- 페르소나로 치우치면 안 되는 역할이라 대상에서 뺀다.
   base_role text not null,
   instructions text not null,

@@ -54,7 +54,7 @@ export function buildBoardMessagePayload(chatId, roomId, directLinkBaseUrl) {
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
-  const token = requireEnv("BOT_SERVICE_PLATOON_BOT_TOKEN");
+  const token = requireEnv("BOT_SERVICE_LEADER_BOT_TOKEN");
   const directLinkBaseUrl = requireEnv("BOT_SERVICE_MINIAPP_DIRECT_LINK");
   const base = requireEnv("SUPABASE_URL").replace(/\/+$/, "");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");

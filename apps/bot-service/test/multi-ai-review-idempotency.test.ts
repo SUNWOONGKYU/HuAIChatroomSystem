@@ -23,7 +23,7 @@ function makeStore(fake: MiniSupabaseFake): SupabaseBotServiceStore {
 }
 
 function envelope(chatId: string, updateId: string): TelegramUpdateEnvelope {
-  return new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", updateId, chatId, "10", "9001", false, undefined, undefined);
+  return new TelegramUpdateEnvelope("bot", "leader_bot", "leader", updateId, chatId, "10", "9001", false, undefined, undefined);
 }
 
 test("multi_ai_review 승인은 새 키 형식(gateway:execution:<entityId>, updateId 없음)에서도 claude/codex 2행을 만들고 둘 다 huai_outbox 에 들어간다", async () => {

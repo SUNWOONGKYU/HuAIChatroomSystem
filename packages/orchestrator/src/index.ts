@@ -29,7 +29,7 @@ export type RoomAuthorizationContext = {
 export type RoomMembership = {
   telegramChatId: string;
   telegramUserId: string;
-  role: "owner" | "human_member" | "platoon_leader" | "claude_leader" | "codex_leader" | "auditor" | "operator";
+  role: "owner" | "human_member" | "leader" | "claude_leader" | "codex_leader" | "auditor" | "operator";
   permissions: readonly RoomPermission[];
   status: "active" | "invited" | "left" | "removed" | "suspended";
 };
@@ -175,7 +175,7 @@ function routeTelegramInput(
   }
 
   // 사람끼리의 대화는 맥락으로만 보관한다. 이벤트도 아웃박스도 만들지 않는다.
-  // 소대장이 나중에 호출됐을 때 이 대화들을 읽고 작업으로 재구성한다.
+  // 리더가 나중에 호출됐을 때 이 대화들을 읽고 작업으로 재구성한다.
   if (input.kind === "observation") {
     return { accepted: true, authorization: { allowed: true }, events: [], outbox: [] };
   }
@@ -248,7 +248,7 @@ export function createProposalFromTelegram(
     events: [event],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey: `telegram:proposal:${proposalId}`,
         payload: {
           text: buildWorkProposalMessage({ kind: routed.intent, title }),
@@ -287,21 +287,21 @@ export function routeFreeformMessage(
   const freeformIntent = classifyFreeformIntent(text);
   if (freeformIntent === "acknowledgement") return renderAcknowledgementAnswer(input);
 
-  // 질문인지 작업인지는 키워드 표가 아니라 소대장이 가른다.
-  // 예전에는 "정리해줘" 같은 단어 하나로 질문으로 분류돼 작업 지시가 소대장에게 닿지 못했다.
-  // 소대장이 부름을 받으면 정규식으로 제목을 고르는 대신 실제로 판단하게 한다.
+  // 질문인지 작업인지는 키워드 표가 아니라 리더가 가른다.
+  // 예전에는 "정리해줘" 같은 단어 하나로 질문으로 분류돼 작업 지시가 리더에게 닿지 못했다.
+  // 리더가 부름을 받으면 정규식으로 제목을 고르는 대신 실제로 판단하게 한다.
   // 방의 직전 논의를 읽고 목적·범위·완료조건·담당을 재구성한다.
   // 게이트웨이 경유라 기존 Claude/Codex 구독을 그대로 쓴다.
-  if (input.envelope.telegramBotRole === "platoon_leader" && ports.executionDefaults) {
+  if (input.envelope.telegramBotRole === "leader" && ports.executionDefaults) {
     return requestLeaderPlanning(input, ports, text);
   }
 
-  // 소대장 판단 경로가 없으면(게이트웨이 미설정 등) 기존 규칙 기반으로 떨어진다.
+  // 리더 판단 경로가 없으면(게이트웨이 미설정 등) 기존 규칙 기반으로 떨어진다.
   if (freeformIntent === "informational_answer") return renderInformationalAnswer(input, text);
   return createProposalFromTelegram(input, ports);
 }
 
-// 소대장 판단 요청. 실제 프롬프트는 저장소 계층에서 방의 대화를 읽어 채운다
+// 리더 판단 요청. 실제 프롬프트는 저장소 계층에서 방의 대화를 읽어 채운다
 // (오케스트레이터는 순수 함수라 DB 를 읽지 않는다).
 export function requestLeaderPlanning(
   input: Extract<NormalizedTelegramInput, { kind: "message" }>,
@@ -343,7 +343,7 @@ export function requestLeaderPlanning(
     timeoutMs: Math.min(defaults.timeoutMs, 300000),
     idempotencyKey: `leader-planning:${planningId}`,
     createdAt: ports.now(),
-    reportBotRole: "platoon_leader"
+    reportBotRole: "leader"
   };
 
   return {
@@ -358,14 +358,14 @@ export function requestLeaderPlanning(
       },
       // 방장이 말을 걸면 바로 대답한다.
       //
-      // 소대장 판단은 CLI 를 한 번 돌리는 일이라 제안이 뜨기까지 수십 초가 걸린다. 그동안
+      // 리더 판단은 CLI 를 한 번 돌리는 일이라 제안이 뜨기까지 수십 초가 걸린다. 그동안
       // 방에는 아무 말도 나가지 않았고, 방장은 봇이 죽은 줄 알고 다시 보내거나 기다렸다.
       // "입력 중" 표시는 화면 맨 위 작은 글씨라 그 자리를 대신하지 못한다.
       {
-        target: { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: input.envelope.telegramChatId },
+        target: { kind: "telegram_bot", botRole: "leader", telegramChatId: input.envelope.telegramChatId },
         idempotencyKey: `telegram:leader-planning-ack:${planningId}`,
         payload: {
-          botRole: "platoon_leader",
+          botRole: "leader",
           telegramChatId: input.envelope.telegramChatId,
           text: "📥 접수했습니다. 할 일을 정리하고 있습니다.",
           binding: { kind: "task", taskId: planningId },
@@ -473,7 +473,7 @@ export function applyOwnerCallback(
 
   const outbox = [
     ...buildCallbackAckOutbox(input),
-    ...buildOwnerActionOutbox(action, input.callback.entityId, input, ports)
+    ...buildOwnerActionOutbox(action, input.callback.entityId, input, ports, input.callback.reason)
   ];
 
   return {
@@ -503,7 +503,12 @@ export function buildOwnerActionOutbox(
   action: WorkflowEventName,
   taskOrProposalId: string,
   input: NormalizedTelegramInput,
-  ports: TelegramInputHandlingPorts
+  ports: TelegramInputHandlingPorts,
+  // Mini App [보완 요청] 사유. 이 함수는 콜백 경로(applyOwnerCallback)와 커맨드 경로
+  // (applyOwnerTaskCommand) 양쪽에서 호출되는데, NormalizedTelegramInput 은 kind==="command"
+  // 일 땐 callback 필드 자체가 없어 input 에서 꺼낼 수 없다 — 그래서 호출자가 명시적으로
+  // 넘긴다. 커맨드 경로는 항상 undefined 를 넘긴다(사유를 실을 수 없는 창구).
+  reason?: string
 ): OrchestratorOutboxItem[] {
   if (action === "owner_task_approved") {
     // 실행 기본값이 없는 방(A-5)에서 승인이 오면 enqueueExecutionAfterApproval 이
@@ -511,18 +516,18 @@ export function buildOwnerActionOutbox(
     // 시작했습니다"조차 못 나가고 방에는 아무 반응도 없었다. 여기서 먼저 걸러
     // 사용자에게 보이는 안내로 바꾼다(검증 경로와 동일한 방식 — 아래 참고).
     if (!ports.executionDefaults) {
-      return [buildExecutionNotConfiguredOutbox({ botRole: "platoon_leader", entityId: taskOrProposalId, input })];
+      return [buildExecutionNotConfiguredOutbox({ botRole: "leader", entityId: taskOrProposalId, input })];
     }
     return [
       ...makeCallbackAcknowledgedEdit({
-        botRole: "platoon_leader",
+        botRole: "leader",
         text: "⚙️ 작업 중입니다. 작업자를 배정했습니다.",
         entityId: taskOrProposalId,
         envelope: input.envelope,
         kind: "execution-started"
       }),
       makeRoleMessageOutbox({
-        botRole: "platoon_leader",
+        botRole: "leader",
         telegramChatId: input.envelope.telegramChatId,
         idempotencyKey: `telegram:execution-started:${taskOrProposalId}:${input.envelope.updateId}`,
         text: `작업 실행을 시작했습니다: ${taskOrProposalId}\n필요한 AI 작업자를 배정했습니다. 결과가 나오면 보고하겠습니다.`,
@@ -556,7 +561,7 @@ export function buildOwnerActionOutbox(
   }  if (action === "owner_final_approved") {
     return [
       makeRoleMessageOutbox({
-        botRole: "platoon_leader",
+        botRole: "leader",
         telegramChatId: input.envelope.telegramChatId,
         idempotencyKey: `telegram:final-approved:${taskOrProposalId}:${input.envelope.updateId}`,
         text: `승인 완료: ${taskOrProposalId}`,
@@ -568,18 +573,39 @@ export function buildOwnerActionOutbox(
   if (action === "owner_supplement_requested") {
     return [
       makeRoleMessageOutbox({
-        botRole: "platoon_leader",
+        botRole: "leader",
         telegramChatId: input.envelope.telegramChatId,
         idempotencyKey: `telegram:supplement-requested:${taskOrProposalId}:${input.envelope.updateId}`,
         // 완료·보완 결정은 작업 현황판에서 한다. 방에 버튼을 다시 붙이면 결정 창구가
-        // 둘로 갈라지고, 대화 공간도 버튼 줄로 계속 잠식된다.
-        text: `보완 요청: ${taskOrProposalId}\n이후 결정은 고정된 작업 현황판에서 진행해 주세요.`,
+        // 둘로 갈라지고, 대화 공간도 버튼 줄로 계속 잠식된다. 사유는 이제 방 메시지에도
+        // 실린다(Mini App 사유 입력란 → huai_approvals.reason → 여기) — 버튼만 눌러서는
+        // 아무것도 전달되지 않던 예전 상태를 고친 것이다.
+        text: buildSupplementRequestedText(taskOrProposalId, reason),
         callbackQueryId: input.envelope.callbackQueryId,
         bindingId: `supplement-requested:${taskOrProposalId}:${input.envelope.updateId}`
       })
     ];
   }
   return [];
+}
+
+// 방 메시지 한 줄 안에 사유를 다 욱여넣지 않는다 — 텔레그램 메시지 자체 상한(4096자)엔
+// 여유가 있지만(reason 은 miniapp-approve 핸들러에서 이미 2000자로 잘려 들어온다), 방은
+// 여러 작업이 오가는 공용 대화창이라 너무 긴 사유 하나가 화면을 다 채우면 다른 알림을
+// 밀어낸다. 여기서 한 번 더, 훑어볼 수 있는 길이로 자르고 잘렸다는 사실을 명시한다.
+const SUPPLEMENT_REASON_DISPLAY_MAX = 500;
+
+function buildSupplementRequestedText(taskOrProposalId: string, reason: string | undefined): string {
+  const base = `보완 요청: ${taskOrProposalId}`;
+  const trimmedReason = reason?.trim();
+  if (!trimmedReason) {
+    // 사유 없이 들어온 결정(구버전 Mini App, 또는 사유 없이도 보낼 수 있었던 과거 호출부와의
+    // 하위호환)은 예전 문구를 그대로 유지한다.
+    return `${base}\n이후 결정은 고정된 작업 현황판에서 진행해 주세요.`;
+  }
+  const truncated = trimmedReason.length > SUPPLEMENT_REASON_DISPLAY_MAX;
+  const shown = truncated ? `${trimmedReason.slice(0, SUPPLEMENT_REASON_DISPLAY_MAX)}…` : trimmedReason;
+  return `${base}\n사유: ${shown}${truncated ? " (길어서 잘렸습니다 — 전체는 작업 현황판에서 확인하세요)" : ""}\n이후 결정은 고정된 작업 현황판에서 진행해 주세요.`;
 }
 
 export function enqueueExecutionAfterApproval(
@@ -736,7 +762,7 @@ export function renderTelegramQuery(
     events: [],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey: `telegram:query:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
         payload
       }
@@ -759,7 +785,7 @@ export function createAgentPersonaFromTelegram(
   const usage = "사용법: /newagent <이름> <claude_leader 또는 codex_leader> <이 페르소나가 할 일>";
 
   const idempotencyKey = `telegram:newagent:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
-  const target = makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId);
+  const target = makeOutboxTargetForRole("leader", input.envelope.telegramChatId);
 
   const validName = Boolean(personaName) && AGENT_PERSONA_NAME_PATTERN.test(personaName);
   const validRole = (AGENT_PERSONA_BASE_ROLES as readonly string[]).includes(baseRole ?? "");
@@ -813,7 +839,7 @@ export function listAgentPersonasFromTelegram(
     events: [],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey,
         payload: {
           text: "등록된 페르소나 조회 중…",
@@ -999,7 +1025,7 @@ function renderAcknowledgementAnswer(
     events: [],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey: `telegram:mention-router:ack:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
         payload: {
           text: buildAcknowledgementAnswerText(),
@@ -1020,7 +1046,7 @@ function renderInformationalAnswer(
     events: [],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey: `telegram:mention-router:answer:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
         payload: {
           text: buildInformationalAnswerText(text),
@@ -1040,7 +1066,7 @@ function renderContinuationClarification(
     events: [],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey: `telegram:mention-router:clarify:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
         payload: {
           text: "어느 작업을 이어갈지 확인이 필요합니다. task_id 또는 proposal_id를 붙여 다시 말하거나, 해당 작업 메시지에 답장해 주세요.",
@@ -1060,7 +1086,7 @@ function renderContextDependentFixClarification(
     events: [],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey: `telegram:mention-router:context-fix-clarify:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
         payload: {
           text: "어떤 오류인지 확인할 수 없습니다. 오류 메시지, 화면 캡처, 또는 proposal_id/task_id를 함께 보내주세요.",
@@ -1082,7 +1108,7 @@ function renderActorDelegationClarification(
     events: [],
     outbox: [
       {
-        target: makeOutboxTargetForRole("platoon_leader", input.envelope.telegramChatId),
+        target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
         idempotencyKey: `telegram:mention-router:delegate-clarify:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
         payload: {
           text: `${actorLabel}에게 넘길 작업 내용을 함께 적어주세요.\n예: @leader_chatroom_bot ${actorLabel}에게 현재 오류 원인을 찾아 수정해줘`,
@@ -1159,7 +1185,7 @@ export function chooseOutboundBotForEvent(eventType: string): TelegramBotRole {
   if (eventType.startsWith("verification")) return "auditor";
   if (eventType.includes("claude")) return "claude_leader";
   if (eventType.includes("codex")) return "codex_leader";
-  return "platoon_leader";
+  return "leader";
 }
 
 export function makeOutboxTargetForRole(

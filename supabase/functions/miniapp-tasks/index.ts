@@ -2,7 +2,7 @@
 // 있다 — 이 파일은 Deno.serve 배선과 실제 Supabase 호출 주입만 담당한다(miniapp-proposals 와
 // 동일한 분리 패턴, handler.ts 상단 주석 참고).
 //
-// 인증 모델(작업 2, 소대장 승인 대기 중): RLS 를 쓰지 않고 이 Edge Function 이
+// 인증 모델(작업 2, 리더 승인 대기 중): RLS 를 쓰지 않고 이 Edge Function 이
 // service_role 로 모든 데이터 접근을 중개한다 — 세 가지 안 중 "RLS 없이 중개" 안을
 // 이미 채택한 상태로 동작한다. 어느 안이 최종 승인되어도(RLS+JWT 안이 되더라도) 이 함수의
 // HTTP 계약은 그대로 유지할 수 있어 정적 페이지 쪽을 다시 만들 필요가 없다.

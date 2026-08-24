@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 // 들고 있으면 같은 입력에서 다른 uuid 가 나올 수 있고, 그건 재앙이다.
 
 export const BOT_ROLES = [
-  ["platoon_leader", "PLATOON"],
+  ["leader", "LEADER"],
   ["claude_leader", "CLAUDE"],
   ["codex_leader", "CODEX"],
   ["auditor", "AUDITOR"]

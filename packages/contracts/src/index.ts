@@ -1,5 +1,5 @@
 export type ActorRole =
-  | "platoon_leader"
+  | "leader"
   | "claude_leader"
   | "codex_leader"
   | "auditor"
@@ -16,7 +16,7 @@ export function isAiAdapterType(value: unknown): value is AiAdapterType {
   return typeof value === "string" && (AI_ADAPTER_TYPES as readonly string[]).includes(value);
 }
 
-export type TelegramBotRole = Extract<ActorRole, "platoon_leader" | "claude_leader" | "codex_leader" | "auditor">;
+export type TelegramBotRole = Extract<ActorRole, "leader" | "claude_leader" | "codex_leader" | "auditor">;
 
 export type TelegramCallbackAction =
   | "approve"
@@ -87,6 +87,11 @@ export type TelegramCallback = {
   entity: "proposal" | "task";
   entityId: string;
   action: TelegramCallbackAction;
+  // 방장이 Mini App 의 [보완 요청] 사유 입력란에 적은 자유 텍스트. 실제 Telegram 인라인
+  // 버튼 콜백은 64바이트 제한상 이 값을 실을 수 없어 항상 undefined 다 — Mini App 결정
+  // 폴러(apps/bot-service/src/miniapp-decision-poller.ts)가 huai_approvals.reason 을 읽어
+  // 합성 콜백을 만들 때만 채워진다. 선택 필드라 기존 호출부는 그대로 컴파일된다.
+  reason?: string;
 };
 
 export type TelegramUpdateProcessingStatus =
@@ -265,7 +270,7 @@ export type NormalizedTelegramInput =
       kind: "message";
       envelope: TelegramUpdateEnvelope;
     }
-  // 소대장에게 말을 건 것이 아니라 사람끼리 나눈 대화.
+  // 리더에게 말을 건 것이 아니라 사람끼리 나눈 대화.
   // 시스템은 이것을 듣고 맥락으로 보관하되 어떤 작업도 만들지 않는다.
   // 이 구분이 없으면 방의 모든 잡담이 승인 버튼으로 쌓인다.
   | {
@@ -290,7 +295,7 @@ export function isAddressedToBot(input: {
 
   if (text.startsWith("/")) return isCommandForThisBot(text, input.thisBotUsername, input.thisBotRole);
 
-  // 다른 봇을 지목했으면 내 일이 아니다. 소대장이라도 가로채지 않는다.
+  // 다른 봇을 지목했으면 내 일이 아니다. 리더이라도 가로채지 않는다.
   const mentionsThisBot = text.includes(`@${input.thisBotUsername}`);
   const mentionsOtherBot = input.allBotUsernames.some(
     (username) => username !== input.thisBotUsername && text.includes(`@${username}`)
@@ -301,15 +306,15 @@ export function isAddressedToBot(input: {
   // 답장은 "내가 보낸 메시지"에 대한 것일 때만 나에게 한 말이다.
   if (input.envelope.replyToBotUsername === input.thisBotUsername) return true;
 
-  // @태그 없이 이름만 부르는 것도 알아듣는다. "소대장 이거 해줘", "코덱스는 이렇게 해라".
-  // 단 소대장만 받는다 — 분대장이 직접 받으면 작업 카드·승인·검증을 우회하기 때문이다.
-  // 누구에게 시킬지는 소대장이 판단해서 배분한다.
-  return input.thisBotRole === "platoon_leader" && isNamedDirective(text);
+  // @태그 없이 이름만 부르는 것도 알아듣는다. "리더 이거 해줘", "코덱스는 이렇게 해라".
+  // 단 리더만 받는다 — 팀원이 직접 받으면 작업 카드·승인·검증을 우회하기 때문이다.
+  // 누구에게 시킬지는 리더가 판단해서 배분한다.
+  return input.thisBotRole === "leader" && isNamedDirective(text);
 }
 
 // 방에서 부르는 이름들. 사람이 실제로 쓰는 호칭을 넣는다.
 const BOT_ALIASES = [
-  "소대장", "리더", "leader",
+  "리더", "leader",
   "클로드", "claude", "클로드봇",
   "코덱스", "codex", "코덱스봇",
   "감사관", "감사", "검증자", "audit", "오딧"
@@ -320,18 +325,60 @@ const BOT_ALIASES = [
 const DIRECTIVE_ENDING =
   /(해라|해줘|해 줘|하라|해봐|해 봐|해주세요|해줄래|하자|부탁|진행해|정리해|확인해|시작해|맡아|맡아줘|처리해|알아봐|검토해|만들어|고쳐|수정해|실행해)/;
 
+const HANGUL_SYLLABLE = /[가-힣]/;
+
+// 별칭 뒤에 붙어도 "같은 낱말"로 보는 조사들. 긴 것부터 둬야 "에게서"가
+// "에게"에 먼저 먹혀 뒤의 "서"만 남는 일이 없다.
+const KOREAN_PARTICLES = [
+  "에게서", "한테서", "이라도", "에게", "한테", "까지", "부터", "조차", "마저",
+  "밖에", "처럼", "만큼", "대로", "보다", "이나", "이랑", "께서", "라도",
+  "랑", "와", "과", "도", "만", "은", "는", "이", "가", "을", "를", "의", "로", "으로", "께", "보고", "나"
+];
+
+// "리더" 가 "리더십"·"우리리더" 속에 있어도 걸리던 부분일치 오검출을 막는다.
+// 한글은 정규식 \b 가 안 통해서(음절이 전부 \W 취급돼 경계 자체가 안 생긴다)
+// 별도 판정이 필요하다: 앞은 다른 한글 음절에 안 붙어 있어야 하고, 뒤는
+// 공백·문장부호처럼 확실한 경계이거나 조사 하나만 더 붙어 있어야 한다.
+function isKoreanAliasBoundaryOk(text: string, matchIndex: number, aliasLength: number): boolean {
+  const before = matchIndex > 0 ? text[matchIndex - 1] : undefined;
+  if (before && HANGUL_SYLLABLE.test(before)) return false;
+
+  const after = text.slice(matchIndex + aliasLength);
+  if (after.length === 0 || !HANGUL_SYLLABLE.test(after[0])) return true;
+  return KOREAN_PARTICLES.some((particle) => after.startsWith(particle));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function aliasAppears(normalizedText: string, alias: string): boolean {
+  if (!HANGUL_SYLLABLE.test(alias)) {
+    // 영문 별칭은 \b 로 충분하다 — "@my_leader_chatroom_bot" 처럼 언더스코어에
+    // 붙어 있으면 \w 끼리 이어져 경계가 안 생기므로 저절로 걸러진다.
+    return new RegExp(`\\b${escapeRegExp(alias)}\\b`).test(normalizedText);
+  }
+  let from = 0;
+  for (;;) {
+    const idx = normalizedText.indexOf(alias, from);
+    if (idx === -1) return false;
+    if (isKoreanAliasBoundaryOk(normalizedText, idx, alias.length)) return true;
+    from = idx + 1;
+  }
+}
+
 export function isNamedDirective(text: string): boolean {
   const normalized = text.toLowerCase();
-  const named = BOT_ALIASES.some((alias) => normalized.includes(alias.toLowerCase()));
+  const named = BOT_ALIASES.some((alias) => aliasAppears(normalized, alias));
   return named && DIRECTIVE_ENDING.test(text);
 }
 
-// `/명령@봇이름` 은 그 봇에게. 이름 없는 `/명령` 은 기본 입력 창구인 소대장이 받는다.
+// `/명령@봇이름` 은 그 봇에게. 이름 없는 `/명령` 은 기본 입력 창구인 리더가 받는다.
 function isCommandForThisBot(text: string, thisBotUsername: string, thisBotRole: TelegramBotRole): boolean {
   const first = text.split(/\s+/)[0] ?? "";
   const [, targetUsername] = first.split("@");
   if (targetUsername) return targetUsername === thisBotUsername;
-  return thisBotRole === "platoon_leader";
+  return thisBotRole === "leader";
 }
 
 export type ExecutionRequest = {
@@ -349,9 +396,9 @@ export type ExecutionRequest = {
   reportBotRole?: TelegramBotRole;
   artifactPolicy?: ArtifactPolicy;
   gitPolicy?: GitPolicy;
-  // 이전 CLI 세션을 이어받는다. 소대장이 방의 맥락을 기억하려면 필요하다.
+  // 이전 CLI 세션을 이어받는다. 리더가 방의 맥락을 기억하려면 필요하다.
   resumeSessionId?: string;
-  // 역할별 모델 지정. 소대장 판단은 실행보다 상위 모델이 필요할 수 있다.
+  // 역할별 모델 지정. 리더 판단은 실행보다 상위 모델이 필요할 수 있다.
   model?: string;
   // 방장이 말을 건 포럼 주제. 실행 보고·감사 결과가 몇 분 뒤에 나가도 같은 주제로
   // 돌아가야 하므로, 방 정보가 아니라 이 요청을 따라다닌다.
@@ -381,7 +428,7 @@ export function assertExecutionRequestPayload(value: unknown): ExecutionRequest 
     typeof request.idempotencyKey !== "string" ||
     typeof request.createdAt !== "string" ||
     Number.isNaN(Date.parse(request.createdAt)) ||
-    (request.reportBotRole !== undefined && !["platoon_leader", "claude_leader", "codex_leader", "auditor"].includes(request.reportBotRole)) ||
+    (request.reportBotRole !== undefined && !["leader", "claude_leader", "codex_leader", "auditor"].includes(request.reportBotRole)) ||
     (request.workerAdapterType !== undefined && !isAiAdapterType(request.workerAdapterType)) ||
     (request.telegramMessageThreadId !== undefined && typeof request.telegramMessageThreadId !== "string")
   ) {

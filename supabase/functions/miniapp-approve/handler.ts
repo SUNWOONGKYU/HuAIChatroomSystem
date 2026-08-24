@@ -342,14 +342,15 @@ async function finalizeDecision(
     responseAction: ActionName;
   }
 ): Promise<Response> {
-  // reason: 컬럼은 스키마에 있고 값이 들어오면 그대로 저장한다 — 하지만 지금은 이 값을
-  // 소비하는 코드가 어디에도 없다. Alpha 가 orchestrator 전체를 확인한 결과(팀장님 전달):
-  // owner_supplement_requested 이벤트 payload 에 애초에 reason 필드가 없고(applyOwnerCallback/
-  // applyOwnerTaskCommand, packages/orchestrator/src/index.ts:344-402), Telegram 콜백은 64바이트
-  // 제한상 자유 텍스트를 실을 수도 없다. 실제로 "무엇을 고칠지"는 방장이 알림에 답장하는
-  // 완전히 별개의 자유발화 턴으로만 전달된다. 그래서 여기 값이 들어가도 지금은 아무 실행에도
-  // 영향을 주지 않는다 — 정적 페이지는 이 사실을 반영해 입력란을 두지 않는다(팀장님 지시).
-  // 나중에 orchestrator 가 이 컬럼을 소비하게 되면 그대로 쓸 수 있게 컬럼/로직은 유지한다.
+  // reason: task 경로(taskId, stage='final_approval', action='request_revision')는 이제
+  // 이 값을 실제로 소비한다 — Mini App 이 사유 입력란을 받고(supabase/miniapp-web/index.html),
+  // Mini App 결정 폴러(apps/bot-service/src/miniapp-decision-poller.ts)가 이 컬럼을 읽어
+  // 합성 콜백의 callback.reason 에 싣고, orchestrator 의 buildOwnerActionOutbox 가
+  // owner_supplement_requested 알림 본문에 그대로 포함시켜 방과 담당자에게 전달한다
+  // (packages/orchestrator/src/index.ts 의 buildSupplementRequestedText 참고).
+  // 제안 경로(proposalId, task_approval 단계의 "수정")는 여전히 이 값을 아무도 읽지 않는다
+  // — 이번 작업 범위 밖(팀장님 지시로 보류)이라 Mini App 쪽에도 그 버튼엔 입력란이 없다.
+  // 두 경로 모두 컬럼에는 그대로 저장한다 — insert 자체는 경로를 가리지 않는다.
   const insertResult = await deps.insertApproval({
     task_id: input.taskId,
     room_id: input.roomId,

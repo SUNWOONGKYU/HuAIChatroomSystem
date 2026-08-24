@@ -26,7 +26,7 @@ import { type OrchestratorPersistencePort } from "./persistence.js";
 // "처리됨" 표시를 원장에 못 쓴다. 대신:
 //   - huai_miniapp_decision_cursor: 스캔 시작점 최적화용 워터마크(싱글톤 1행)
 //   - huai_miniapp_decision_processed: 이 폴러가 이미 판단을 끝낸 승인 행의 결과
-// 두 테이블 다 마이그레이션을 여기서 쓰지 않는다(소대장 지시) — 정확한 DDL 은
+// 두 테이블 다 마이그레이션을 여기서 쓰지 않는다(리더 지시) — 정확한 DDL 은
 // 팀 보고에 첨부했다.
 
 export type MiniAppDecisionPollerRoom = {
@@ -237,7 +237,7 @@ async function resolveDecision(
   // 알려진 갭)는 이번 범위 밖이라 손대지 않았다 — 이 검사는 Mini App 쪽 창구만
   // 추가로 방어한다.
   //
-  // 재검토(소대장 지시, 2026-08-15): eventAlreadyRecorded·아웃박스 idempotency
+  // 재검토(리더 지시, 2026-08-15): eventAlreadyRecorded·아웃박스 idempotency
   // (gateway:execution:<entityId>, Delta)·processed-set 세 층이 이미 있는데 이
   // tuple dedup 이 여전히 필요한지 실측했다 — 필요하다. 이유:
   //   - final_approval/approved 는 makeRoleMessageOutbox 알림만 만들고 실행
@@ -267,7 +267,11 @@ async function resolveDecision(
     callback: {
       entity: isUuid(row.entity_ref) ? "task" : "proposal",
       entityId: row.entity_ref,
-      action
+      action,
+      // huai_approvals.reason — Mini App [보완 요청] 사유 입력란 값. Telegram 인라인 버튼
+      // 콜백에는 이 필드가 절대 채워지지 않는다(64바이트 제한). applyOwnerCallback 이 이
+      // 값을 owner_supplement_requested 알림 본문에 포함시킨다.
+      reason: row.reason ?? undefined
     }
   };
 
@@ -323,7 +327,7 @@ function buildSyntheticEnvelope(telegramChatId: string, row: ApprovalRow): Teleg
   return new TelegramUpdateEnvelope(
     MINIAPP_SYNTHETIC_BOT_ID,
     MINIAPP_SYNTHETIC_BOT_USERNAME,
-    "platoon_leader",
+    "leader",
     `miniapp-${row.approval_id}`,
     telegramChatId,
     undefined,

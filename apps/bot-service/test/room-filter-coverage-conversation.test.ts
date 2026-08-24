@@ -29,7 +29,7 @@ function makeStore(fake: MiniSupabaseFake): SupabaseBotServiceStore {
 }
 
 function envelope(chatId: string, updateId: string, text: string | undefined): TelegramUpdateEnvelope {
-  return new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", updateId, chatId, "10", "9001", false, text, undefined);
+  return new TelegramUpdateEnvelope("bot", "leader_bot", "leader", updateId, chatId, "10", "9001", false, text, undefined);
 }
 
 function seedTwoRooms(fake: MiniSupabaseFake): void {
@@ -54,12 +54,12 @@ function commandCommit(chatId: string, updateId: string, commandName: string, ar
       accepted: true as const,
       authorization: { allowed: true as const },
       events: [],
-      outbox: [{ target: { kind: "telegram_bot" as const, botRole: "platoon_leader" as const, telegramChatId: chatId }, idempotencyKey, payload: outboxPayload }]
+      outbox: [{ target: { kind: "telegram_bot" as const, botRole: "leader" as const, telegramChatId: chatId }, idempotencyKey, payload: outboxPayload }]
     }
   };
 }
 
-// 소대장 판단(leader-planning) 흐름을 트리거하는 커밋. hydrateLeaderPlanningRows 는
+// 리더 판단(leader-planning) 흐름을 트리거하는 커밋. hydrateLeaderPlanningRows 는
 // target_kind 를 가리지 않고 payload.executionRequest.attemptId 가 "leader-planning-" 로
 // 시작하는 outbox 행이면 무조건 turns 를 채워 넣는다 — 그래서 target 은 무엇이든 상관없다.
 function leaderPlanningCommit(chatId: string, updateId: string) {
@@ -192,7 +192,7 @@ test("fetchLastWorkCreatedAt 이 보내는 huai_events 쿼리에 room_id=eq. 필
 // 자기 커트라인(00:00)만 보고, 그 이후(01:00)의 대화는 포함된다. 필터가 빠지면
 // order=created_at.desc 정렬 때문에 room B 의 더 늦은 커트라인(02:00)이 뽑히고,
 // 01:00 시각 메시지는 "02:00 보다 이후"가 아니라서 huai_telegram_updates 쿼리에서
-// 통째로 사라진다 — 방장이 방금 나눈 대화를 소대장이 못 본 채로 판단하게 된다.
+// 통째로 사라진다 — 방장이 방금 나눈 대화를 리더가 못 본 채로 판단하게 된다.
 test("fetchLastWorkCreatedAt 이 room_id 로 필터되어 다른 방의(더 늦은) 커트라인이 이 방 대화창을 잘라먹지 않는다 (종단간)", async () => {
   const fake = new MiniSupabaseFake();
   seedTwoRooms(fake);

@@ -172,8 +172,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     { label: "member-invite-or-leave-write", behaviour: true, run: (p) => p.writesTable("huai_room_members") },
     { label: "membership-history-event", behaviour: true, run: (p) => p.emitsEvent("participant_changed") }
   ]);
-  add("FR-003", "소대장 상주", [
-    { label: "leader-routing", run: (p) => p.sourceMatches("platoon_leader") },
+  add("FR-003", "리더 상주", [
+    { label: "leader-routing", run: (p) => p.sourceMatches("leader") },
     { label: "freeform-intent-routing", run: (p) => p.sourceMatches("classifyFreeformIntent") },
     { label: "reply-context-carry", run: (p) => p.sourceMatches("replyToMessageText") },
     { label: "intent-router-wired", behaviour: true, run: (p) => p.calledOutsideDefinition("classifyFreeformIntent", "packages/orchestrator/src/intent-router.ts") }
@@ -312,7 +312,7 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     { label: "completion-review-outbox", run: (p) => p.sourceMatches("telegram-completion-review") },
     { label: "verification_passed-emitted", behaviour: true, run: (p) => p.emitsEvent("verification_passed") }
   ]);
-  add("H-10", "소대장 완료 결정 훅", [
+  add("H-10", "리더 완료 결정 훅", [
     { label: "completion-keyboard-3-options", run: (p) => p.sourceMatches("buildCompletionKeyboard") },
     { label: "commander_completion_requested-emitted", behaviour: true, run: (p) => p.emitsEvent("commander_completion_requested") }
   ]);

@@ -10,14 +10,14 @@
 //   1) 그 방·그 날짜가 장부(huai_archive_manifest)에 등재돼 있다 — 백업 없는 삭제를 막는다.
 //      "오늘 파일이 생겼나"로 판정하면 PC 가 꺼져 있던 날이 백업 없이 지워진다(Fable 5 지적).
 //   2) 보존 기간(기본 60일)이 지났다.
-//   3) 방별 최신 40턴이 아니다 — 소대장이 읽는 창이다. 조용한 방은 그 40턴이 전부 기간 밖일
+//   3) 방별 최신 40턴이 아니다 — 리더가 읽는 창이다. 조용한 방은 그 40턴이 전부 기간 밖일
 //      수 있는데, 그걸 비우면 방장 눈에는 텔레그램에 대화가 그대로 보이는데 봇만 기억을
 //      잃은 상태가 된다.
 //
 // 기본은 dry-run. --apply 를 붙여야 실제로 지운다.
 
 const DEFAULT_RETENTION_DAYS = 60;
-// 소대장이 판단할 때 읽는 창(supabase-store.ts fetchRecentRoomTurns 의 limit=40).
+// 리더가 판단할 때 읽는 창(supabase-store.ts fetchRecentRoomTurns 의 limit=40).
 export const PROTECTED_RECENT_TURNS = 40;
 // 한 번에 지울 수 있는 최대 행 수. 설계가 잘못돼도 한 번에 다 날아가지는 않게 한다.
 const MAX_DELETE_PER_RUN = 2_000;

@@ -149,9 +149,9 @@ function titleOf(text: string): string {
 
 function proposalEnvelope(messageText: string): TelegramUpdateEnvelope {
   return new TelegramUpdateEnvelope(
-    "bot-platoon_leader",
-    "platoon_bot",
-    "platoon_leader",
+    "bot-leader",
+    "leader_bot",
+    "leader",
     "77",
     "1001",
     "7001",

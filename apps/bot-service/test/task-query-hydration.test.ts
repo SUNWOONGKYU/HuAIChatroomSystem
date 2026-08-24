@@ -62,7 +62,7 @@ test("hydrates /task outbox from Supabase task detail", async () => {
   assert.match(calls.requests[1]?.url ?? "", /room_id=eq\./);
   assert.match(calls.requests[2]?.body[0].payload.text, /작업 상세/);
   assert.match(calls.requests[2]?.body[0].payload.text, /감사 흐름 조정/);
-  assert.match(calls.requests[2]?.body[0].payload.text, /소대장 완료 확인 대기/);
+  assert.match(calls.requests[2]?.body[0].payload.text, /리더 완료 확인 대기/);
 });
 
 function makeStore(fetchImpl: typeof fetch): SupabaseBotServiceStore {
@@ -85,13 +85,13 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 function outboxRow(payload: Record<string, unknown>) {
-  return { huai_outbox_id: "outbox-query", event_id: null, idempotency_key: "telegram:query", target_kind: "telegram_bot", target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }), payload, status: "pending", attempts: 0, created_at: "2026-08-13T00:00:00.000Z" };
+  return { huai_outbox_id: "outbox-query", event_id: null, idempotency_key: "telegram:query", target_kind: "telegram_bot", target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }), payload, status: "pending", attempts: 0, created_at: "2026-08-13T00:00:00.000Z" };
 }
 
 function makeOutboxCommit(idempotencyKey: string, payload: Record<string, unknown>) {
   return {
-    message: { input: { kind: "command" as const, envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "1", "1001", "10", "2001", false, "/tasks", undefined), command: { name: "/tasks" as const, args: [] } }, idempotencyKey: "telegram-update:bot:1", receivedAt: "2026-08-13T00:00:00.000Z" },
-    result: { accepted: true as const, authorization: { allowed: true as const }, events: [], outbox: [{ target: { kind: "telegram_bot" as const, botRole: "platoon_leader" as const, telegramChatId: "1001" }, idempotencyKey, payload }] }
+    message: { input: { kind: "command" as const, envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "1", "1001", "10", "2001", false, "/tasks", undefined), command: { name: "/tasks" as const, args: [] } }, idempotencyKey: "telegram-update:bot:1", receivedAt: "2026-08-13T00:00:00.000Z" },
+    result: { accepted: true as const, authorization: { allowed: true as const }, events: [], outbox: [{ target: { kind: "telegram_bot" as const, botRole: "leader" as const, telegramChatId: "1001" }, idempotencyKey, payload }] }
   };
 }
 

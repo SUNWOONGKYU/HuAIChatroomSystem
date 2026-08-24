@@ -175,7 +175,7 @@ function makeCommit(event: { eventType: string; idempotencyKey: string; payload:
     message: {
       input: {
         kind: "message" as const,
-        envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "1", CHAT_ID, "10", OWNER, false, undefined, undefined)
+        envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "1", CHAT_ID, "10", OWNER, false, undefined, undefined)
       },
       idempotencyKey: "update-1",
       receivedAt: "2026-08-14T21:00:00.000Z"

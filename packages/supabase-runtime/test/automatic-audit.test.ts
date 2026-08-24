@@ -222,10 +222,10 @@ test("한도가 아닌 실패는 넘기지 않는다", () => {
   assert.equal(shouldFallbackToOtherEngine(request, "exit-code-1", "설정 파일을 읽지 못했습니다."), false);
 });
 
-test("셋 다 막히면 더 넘기지 않는다", () => {
+test("한 바퀴 더 돈 것마저 막히면 더 넘기지 않는다", () => {
   // 상한이 필요한 이유는 그대로다 — 전부 막힌 상태에서 계속 넘기면 방만 시끄럽고 아무것도
-  // 안 된다. 다만 상한은 1회가 아니라 2회다(엔진이 셋이므로 각자 한 번씩).
-  const exhausted = { ...auditRequest(), attemptId: "attempt-1-fallback-fallback" };
+  // 안 된다. 상한은 3회다(엔진 셋이 각자 한 번씩 + 처음 엔진으로 한 바퀴 더).
+  const exhausted = { ...auditRequest(), attemptId: "attempt-1-fallback-fallback-fallback" };
 
   assert.equal(shouldFallbackToOtherEngine(exhausted, "agent-usage-limit", ""), false);
 });
@@ -269,7 +269,7 @@ test("방에 올리는 이름은 엔진마다 다르다", () => {
   assert.equal(engineActorName("antigravity"), "AntigravityBot");
 });
 
-test("소대장 판단은 엔진을 바꾸지 않는다", () => {
+test("리더 판단은 엔진을 바꾸지 않는다", () => {
   // 방장 지시를 해석하는 단계다. 엔진을 바꾸면 해석이 달라지므로, 실패를 그대로 알려
   // 방장이 다시 말하게 한다.
   const planning = { ...auditRequest(), attemptId: "leader-planning-abc" };
@@ -383,31 +383,36 @@ test("Antigravity 한도도 다른 엔진으로 넘긴다", () => {
 });
 
 // 라이브 결함 — Claude 가 막히고 Codex 도 막히자 Antigravity 가 멀쩡한데 작업이 끝났다.
-// 폴백이 한 번뿐이라 세 번째 엔진에 닿지 못했다.
-test("엔진이 셋이면 두 번까지 넘긴다", () => {
+// 폴백이 한 번뿐이라 세 번째 엔진에 닿지 못했다(그래서 2로 올렸고, 이후 PO 요청으로
+// 세 엔진을 한 바퀴 다 돈 뒤에도 한 번 더 처음 엔진으로 도는 3으로 다시 올렸다).
+test("엔진이 셋이면 한 바퀴 돌고 한 번 더 넘긴다(최대 세 번)", () => {
   assert.equal(fallbackHopCount("attempt_1"), 0);
   assert.equal(fallbackHopCount("attempt_1-fallback"), 1);
   assert.equal(fallbackHopCount("attempt_1-fallback-fallback"), 2);
+  assert.equal(fallbackHopCount("attempt_1-fallback-fallback-fallback"), 3);
 
   const first = { ...auditRequest(), attemptId: "attempt_1", adapterType: "claude_code" as const };
   const second = { ...auditRequest(), attemptId: "attempt_1-fallback", adapterType: "codex" as const };
   const third = { ...auditRequest(), attemptId: "attempt_1-fallback-fallback", adapterType: "antigravity" as const };
+  const fourth = { ...auditRequest(), attemptId: "attempt_1-fallback-fallback-fallback", adapterType: "claude_code" as const };
 
   assert.equal(shouldFallbackToOtherEngine(first, "agent-usage-limit", ""), true);
   assert.equal(shouldFallbackToOtherEngine(second, "agent-usage-limit", ""), true, "두 번째 엔진이 막히면 세 번째로 가야 한다");
-  // 셋 다 막혔다. 계속 넘기면 방만 시끄럽고 아무것도 안 된다.
-  assert.equal(shouldFallbackToOtherEngine(third, "agent-usage-limit", ""), false);
+  assert.equal(shouldFallbackToOtherEngine(third, "agent-usage-limit", ""), true, "세 번째까지 막히면 처음 엔진으로 한 바퀴 더 돈다");
+  // 한 바퀴 더 돈 것마저 막혔다. 계속 넘기면 방만 시끄럽고 아무것도 안 된다.
+  assert.equal(shouldFallbackToOtherEngine(fourth, "agent-usage-limit", ""), false);
 });
 
-test("이미 써 본 엔진은 다시 고르지 않는다", () => {
+test("이미 써 본 엔진은 다시 고르지 않는다 — 단, 셋 다 써 봤으면 처음부터 한 바퀴 더", () => {
   assert.equal(nextEngineAfterTried(["claude_code"]), "codex");
   assert.equal(nextEngineAfterTried(["claude_code", "codex"]), "antigravity");
   // 감사라면 작업자 엔진은 뒤로 미룬다 — 자기 일을 자기가 검사하는 것을 마지막 수단으로.
   assert.equal(nextEngineAfterTried(["codex"], "claude_code"), "antigravity");
   // 남은 것이 작업자 엔진뿐이면 그거라도 쓴다. 아무도 안 보는 것보다 낫다.
   assert.equal(nextEngineAfterTried(["codex", "antigravity"], "claude_code"), "claude_code");
-  // 전부 써 봤으면 더 넘길 곳이 없다.
-  assert.equal(nextEngineAfterTried(["claude_code", "codex", "antigravity"]), undefined);
+  // 전부 써 봤으면(한 바퀴 다 돌았으면) 처음 엔진부터 다시 돈다 — 무한은 아니고
+  // MAX_FALLBACK_HOPS 가 그다음 한 번으로 막는다.
+  assert.equal(nextEngineAfterTried(["claude_code", "codex", "antigravity"]), "claude_code");
 });
 
 // 라이브 확인(2026-08-23): ASSIGNEE=codex_leader 작업이 코덱스 한도로 막혔을 때

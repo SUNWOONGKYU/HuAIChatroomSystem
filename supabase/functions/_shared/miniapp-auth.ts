@@ -4,11 +4,11 @@
 // ("tma" 스킴은 Telegram Mini App 생태계 표준 관행 — @telegram-apps/init-data-node 등이 쓰는
 // 것과 동일한 이름을 채택해 향후 라이브러리 교체 여지를 남겼다).
 //
-// 어느 봇 토큰으로 검증하는가: 소대장(platoon_leader) 봇 하나로 고정한다.
+// 어느 봇 토큰으로 검증하는가: 리더(leader) 봇 하나로 고정한다.
 //   - packages/contracts/src/index.ts 의 isCommandForThisBot 은 봇 이름이 없는 명령을
-//     기본적으로 platoon_leader 가 받도록 되어 있고, /tasks·/approve 같은 작업 현황판 성격의
+//     기본적으로 leader 가 받도록 되어 있고, /tasks·/approve 같은 작업 현황판 성격의
 //     명령이 전부 이 기본 창구를 통한다. 작업 현황판(Mini App)도 같은 성격의 창구이므로
-//     소대장 봇 하나로 여는 것이 대화 채널과의 일관성이 가장 높다.
+//     리더 봇 하나로 여는 것이 대화 채널과의 일관성이 가장 높다.
 //   - 봇 4개 토큰을 순차로 시도하는 방식은 (a) 매 요청 최대 4배의 HMAC 연산 + 타이밍 표면을
 //     늘리고 (b) "어느 봇이 열었는지"가 모호해져 감사 로그 해석이 어려워진다.
 //   - 추후 클로드/코덱스/감사관 봇에서도 열게 하려면 이 함수에 botRole 파라미터를 추가하고
@@ -19,10 +19,10 @@ import type { MiniAppAuthResult } from "./types.ts";
 export type { MiniAppAuthResult };
 
 export async function authenticateMiniAppRequest(req: Request): Promise<MiniAppAuthResult> {
-  const botToken = Deno.env.get("TELEGRAM_PLATOON_BOT_TOKEN");
+  const botToken = Deno.env.get("TELEGRAM_LEADER_BOT_TOKEN");
   if (!botToken) {
     // 운영 설정 누락. 공격자에게 원인을 노출하지 않되 로그에는 남긴다.
-    console.error("miniapp-auth: TELEGRAM_PLATOON_BOT_TOKEN not set");
+    console.error("miniapp-auth: TELEGRAM_LEADER_BOT_TOKEN not set");
     return { ok: false, status: 500, message: "server-misconfigured" };
   }
 

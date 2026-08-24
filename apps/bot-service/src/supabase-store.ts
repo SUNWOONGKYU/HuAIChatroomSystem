@@ -51,7 +51,7 @@ export type SupabaseStoreConfig = {
 
 // 고정 메시지 본문. 목록을 싣지 않는다 — 고정해두면 만들어진 시점의 목록이 박제되고,
 // 최신 상태는 버튼을 눌러야 보인다(scripts/pin-room-board-message.mjs 와 같은 이유).
-// 소대장 프롬프트에 넣을 방 기억의 양. 최근 며칠 / 하루치 최대 글자.
+// 리더 프롬프트에 넣을 방 기억의 양. 최근 며칠 / 하루치 최대 글자.
 // 너무 넣으면 최근 지시가 밀려나고, 너무 적으면 지난 결정을 못 찾는다.
 const ROOM_MEMORY_DAYS = 5;
 const ROOM_MEMORY_MAX_CHARS = 2_000;
@@ -279,7 +279,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     });
   }
 
-  // 방장·소대장의 결정을 append-only 원장에 남긴다.
+  // 방장·리더의 결정을 append-only 원장에 남긴다.
   // 승인 시점 대상은 proposal 일 수도 task 일 수도 있으므로 받은 식별자를 entity_ref 에 그대로 보존하고,
   // task UUID 를 이미 아는 경우에만 task_id 를 채운다. 이 테이블은 이후 절대 UPDATE 하지 않는다.
   private async recordApprovals(events: readonly OrchestratorPersistencePortEvent[], roomId: string): Promise<void> {
@@ -401,9 +401,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         event_id: row.event_id,
         idempotency_key: `telegram:topic-board:${roomId}:${threadId}`,
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
         payload: {
-          botRole: "platoon_leader",
+          botRole: "leader",
           telegramChatId,
           messageThreadId: threadId,
           text: TOPIC_BOARD_MESSAGE_TEXT,
@@ -422,7 +422,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
 
   // "작업 실행을 시작했습니다: p_032d2db2..." 처럼 내부 id 만 보여주면
   // 방장은 무슨 작업이 시작됐는지, 누가 하는지 알 수 없다.
-  // 소대장이 이미 제목과 담당을 정해뒀으니 그것을 실어 보낸다.
+  // 리더가 이미 제목과 담당을 정해뒀으니 그것을 실어 보낸다.
   private async hydrateExecutionStartedMessages(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
     const targets = rows.filter((row) => row.idempotency_key.startsWith("telegram:execution-started:"));
     if (targets.length === 0) return rows;
@@ -451,7 +451,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     });
   }
 
-  // 소대장 판단 요청에 방의 직전 논의를 실어준다.
+  // 리더 판단 요청에 방의 직전 논의를 실어준다.
   // 오케스트레이터는 순수 함수라 DB 를 못 읽으므로 여기서 채운다.
   private async hydrateLeaderPlanningRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
     const hydrated: OutboxInsertRow[] = [];
@@ -525,7 +525,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return value === undefined || value === null ? undefined : String(value);
   }
 
-  // 소대장이 방에 대해 이미 알아야 하는 것.
+  // 리더가 방에 대해 이미 알아야 하는 것.
   // 이게 없으면 "이 방에 봇이 몇 개야?" 같은 질문에도 조사 작업을 만든다 —
   // 자기가 모르니까 확인하겠다고 하는 것이고, 방장은 답을 원했는데 일이 하나 생긴다.
   // 방 기억을 세션 폴더에서 읽는다.
@@ -586,7 +586,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         memberCount: members.length,
         memory: roomLabel ? await this.readRoomMemory(roomId, roomLabel) : undefined,
         // TASK_STATUS_META 가 단일 출처다 — 별도 상태 라벨표를 여기 두지 않는다.
-        // 이 결과는 소대장 판단 프롬프트(buildLeaderPlanningPrompt)에 순수 텍스트로만
+        // 이 결과는 리더 판단 프롬프트(buildLeaderPlanningPrompt)에 순수 텍스트로만
         // 들어간다: `${title}(${status})`. 파싱하는 코드는 없다(packages/orchestrator/src/leader-planning.ts 확인).
         openTasks: tasks.map((task) => ({ title: task.title, status: taskStatusMeta(task.status).label }))
       };
@@ -598,7 +598,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
 
   private async fetchLeaderActor(roomId: string): Promise<{ actor_id: string; cli_session_id?: string } | undefined> {
     const rows = await this.client
-      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&role=eq.platoon_leader&select=actor_id,cli_session_id&limit=1")
+      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&role=eq.leader&select=actor_id,cli_session_id&limit=1")
       .then((response) => response.json<Array<{ actor_id: string; cli_session_id?: string }>>())
       .catch(() => []);
     return rows[0];
@@ -644,7 +644,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       }
       const actor = hint.requestedActorRole ? actorsByRole.get(hint.requestedActorRole) : undefined;
       // reportBotRole 까지 함께 바꿔야 한다.
-      // 예전에는 actorId·adapterType 만 바꿔서, 소대장이 ClaudeBot 을 지정해도
+      // 예전에는 actorId·adapterType 만 바꿔서, 리더가 ClaudeBot 을 지정해도
       // 보고는 기본값인 CodexBot 이름으로 나갔다 — 방장이 보기에 배분이 무시된 것처럼 보인다.
       hydrated.push({
         ...row,
@@ -1138,9 +1138,9 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       event_id: row.event_id ?? null,
       idempotency_key: idempotencyKey,
       target_kind: "telegram_bot" as const,
-      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
       payload: {
-        botRole: "platoon_leader",
+        botRole: "leader",
         telegramChatId,
         messageThreadId: optionalPayloadString(row.payload.messageThreadId),
         text: ["이미 결정이 끝난 건이라 다시 처리하지 않았습니다.", "새로 지시해 주시면 새 작업으로 진행합니다."].join("\n"),
@@ -1436,8 +1436,8 @@ function parseContentRangeTotal(value: string | null): number | undefined {
 // 예전엔 humanTaskStatus(status: string) 가 따로 있었다. 실제 huai_tasks_status_check(schema.sql)
 // 값과 어긋나는 case 가 섞여 있었고("proposed"/"running"/"verified" 는 실제 TaskStatus 에 존재하지
 // 않는 값), 다수의 실제 상태값(proposal_pending/in_progress/mid_approval_pending 등)은 default 로
-// 원문 snake_case 그대로 노출됐다. /search·/task·room facts(소대장 판단 프롬프트) 세 경로가 전부
-// 이 결함을 물려받고 있었다 — room facts 쪽이 특히 나빴다: 소대장이 방 상태를 판단할 때 원문
+// 원문 snake_case 그대로 노출됐다. /search·/task·room facts(리더 판단 프롬프트) 세 경로가 전부
+// 이 결함을 물려받고 있었다 — room facts 쪽이 특히 나빴다: 리더가 방 상태를 판단할 때 원문
 // 값을 그대로 읽고 있었다는 뜻이다. TASK_STATUS_META(Record<TaskStatus, ...>, 23개 전수 컴파일
 // 타임 강제)가 이미 있었으므로 두 표를 남기지 않고 이걸 유일한 출처로 통일했다.
 // Record<TaskStatus, ...> 로 선언해 huai_tasks_status_check 의 23개 값 전수를 컴파일 타임에 강제한다.
@@ -1474,7 +1474,7 @@ const TASK_STATUS_META: Readonly<Record<TaskStatus, { group: TaskStatusGroupKey;
   revision_requested: { group: "action_needed", label: "보완 필요" },
   revision_in_progress: { group: "in_progress", label: "보완 작업 중" },
   reverification_pending: { group: "waiting", label: "재검증 대기" },
-  commander_completion_pending: { group: "approval_pending", label: "소대장 완료 확인 대기" },
+  commander_completion_pending: { group: "approval_pending", label: "리더 완료 확인 대기" },
   completion_approval_pending: { group: "approval_pending", label: "승인 대기" },
   owner_supplement_requested: { group: "action_needed", label: "보완 요청함" },
   completed: { group: "completed", label: "완료" },
@@ -1491,11 +1491,11 @@ function taskStatusMeta(status: TaskStatus): { group: TaskStatusGroupKey; label:
   return TASK_STATUS_META[status] ?? { group: "action_needed", label: String(status) };
 }
 
-// 우리 방 봇 4개(platoon_leader/claude_leader/codex_leader/auditor)의 사람이 읽는 담당자 이름.
-// botLabelForRole() 은 소대장 판단 프롬프트용 긴 표기("LeaderBot(소대장)")라 목적이 다르다 —
+// 우리 방 봇 4개(leader/claude_leader/codex_leader/auditor)의 사람이 읽는 담당자 이름.
+// botLabelForRole() 은 리더 판단 프롬프트용 긴 표기("LeaderBot(리더)")라 목적이 다르다 —
 // /tasks 는 여러 건을 한 화면에 보여줘야 해서 짧은 표기를 따로 둔다.
 const TASK_ASSIGNEE_DISPLAY_BY_ROLE: Readonly<Record<string, string>> = {
-  platoon_leader: "소대장",
+  leader: "리더",
   claude_leader: "ClaudeBot",
   codex_leader: "CodexBot",
   auditor: "AuditBot"
@@ -1626,7 +1626,7 @@ function nameFromTelegramUser(from: Record<string, unknown> | undefined, userId:
 }
 
 function botLabelForRole(role: string): string {
-  if (role === "platoon_leader") return "LeaderBot(소대장)";
+  if (role === "leader") return "LeaderBot(리더)";
   if (role === "claude_leader") return "ClaudeBot(Claude Code 실행)";
   if (role === "codex_leader") return "CodexBot(Codex 실행)";
   if (role === "auditor") return "AuditBot(독립 검증)";
@@ -1674,7 +1674,7 @@ function proposalIdNeedingPromptHydration(row: {
   // 이미 물질화된 작업(UUID)은 프롬프트가 채워져 있다. 아직 제안 단계인 것만 채운다.
   //
   // 예전에는 `proposal_` 접두사로 판별했는데, Telegram 콜백 64바이트 제한 때문에
-  // 소대장 제안 id 를 `p_...` 로 줄이자 이 검사가 걸러내 실행 에이전트가
+  // 리더 제안 id 를 `p_...` 로 줄이자 이 검사가 걸러내 실행 에이전트가
   // 작업 명세 대신 id 만 받았다("해당 ID 를 조회할 수 없습니다"로 끝남).
   // 접두사가 아니라 "프롬프트가 아직 비어 있는가"로 판별한다.
   if (isUuid(taskId)) return undefined;
@@ -1694,7 +1694,7 @@ function proposalPromptFromPayload(payload: Record<string, unknown>): string | u
   const requestText = rawText || title;
   if (!requestText) return undefined;
 
-  // 소대장이 구조화한 것이 있으면 그대로 실행자에게 넘긴다.
+  // 리더가 구조화한 것이 있으면 그대로 실행자에게 넘긴다.
   // 특히 완료 조건은 검증자가 합격/불합격을 판정할 기준이라, 실행자가 모르면
   // 무엇을 만족시켜야 하는지 알 수 없는 채로 일하게 된다.
   const purpose = proposalFieldFromPayload(payload, "purpose");
@@ -1819,7 +1819,7 @@ export function approvalReasonFromPayload(payload: Record<string, unknown>): str
 function inferredActorRoleFromEvent(eventType: string): string {
   if (eventType.startsWith("owner_")) return "human_owner";
   if (eventType.startsWith("verification") || eventType.startsWith("reverification")) return "auditor";
-  if (eventType.startsWith("commander_")) return "platoon_leader";
+  if (eventType.startsWith("commander_")) return "leader";
   return "system";
 }
 

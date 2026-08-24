@@ -275,7 +275,7 @@ function parseStringArray(value: unknown): string[] {
 }
 
 function assertBotRole(value: string): TelegramBotRole {
-  if (["platoon_leader", "claude_leader", "codex_leader", "auditor"].includes(value)) {
+  if (["leader", "claude_leader", "codex_leader", "auditor"].includes(value)) {
     return value as TelegramBotRole;
   }
   throw new Error("invalid-ai-actor-role");
@@ -294,7 +294,7 @@ function assertActorStatus(value: string): LoadedAiActor["status"] {
 }
 
 function assertMemberRole(value: string): RoomMembership["role"] {
-  if (["owner", "human_member", "platoon_leader", "claude_leader", "codex_leader", "auditor", "operator"].includes(value)) {
+  if (["owner", "human_member", "leader", "claude_leader", "codex_leader", "auditor", "operator"].includes(value)) {
     return value as RoomMembership["role"];
   }
   throw new Error("invalid-room-member-role");

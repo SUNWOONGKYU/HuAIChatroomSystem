@@ -35,8 +35,8 @@ test("/newagent 담당이 claude_leader/codex_leader 가 아니면 사용법만 
   const result = handleTelegramInput(
     {
       kind: "command",
-      envelope: envelope("/newagent 연구원 platoon_leader 뭔가 한다"),
-      command: { name: "/newagent", args: ["연구원", "platoon_leader", "뭔가", "한다"] }
+      envelope: envelope("/newagent 연구원 leader 뭔가 한다"),
+      command: { name: "/newagent", args: ["연구원", "leader", "뭔가", "한다"] }
     },
     membership(),
     ports()
@@ -98,9 +98,9 @@ test("/agents 는 목록 조회 표식을 outbox 에 싣는다", () => {
 
 function envelope(messageText: string): TelegramUpdateEnvelope {
   return new TelegramUpdateEnvelope(
-    "bot-platoon_leader",
-    "platoon_bot",
-    "platoon_leader",
+    "bot-leader",
+    "leader_bot",
+    "leader",
     "77",
     "1001",
     "7001",

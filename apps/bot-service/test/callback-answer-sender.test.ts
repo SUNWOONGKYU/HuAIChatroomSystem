@@ -8,7 +8,7 @@ test("answers callback queries from outbox payload without requiring message tex
   const bodies: unknown[] = [];
   const tokenResolver: TelegramBotTokenResolver = {
     async resolveBotToken() {
-      return "platoon-token";
+      return "leader-token";
     }
   };
   const sender = createTelegramFetchSender({
@@ -22,7 +22,7 @@ test("answers callback queries from outbox payload without requiring message tex
   const store = new SingleOutboxStore({
     outboxId: "outbox-callback",
     idempotencyKey: "callback-answer-1",
-    target: { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" },
+    target: { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" },
     payload: { callbackQueryId: "callback-1", text: "접수했습니다." },
     status: "processing",
     attempts: 0
@@ -38,7 +38,7 @@ test("answers callback queries from outbox payload without requiring message tex
   });
 
   assert.equal(result.sent, 1);
-  assert.equal(urls[0], "https://api.telegram.org/botplatoon-token/answerCallbackQuery");
+  assert.equal(urls[0], "https://api.telegram.org/botleader-token/answerCallbackQuery");
   assert.deepEqual(bodies[0], { callback_query_id: "callback-1", text: "접수했습니다." });
   assert.equal(store.sentResult?.telegramMessageId, "");
 });

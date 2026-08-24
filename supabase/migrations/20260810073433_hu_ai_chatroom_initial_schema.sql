@@ -23,7 +23,7 @@ create table if not exists huai_room_members (
   status text not null default 'active',
   created_at timestamptz not null default now(),
   primary key (room_id, telegram_user_id),
-  constraint huai_room_members_role_check check (role in ('owner', 'human_member', 'platoon_leader', 'claude_leader', 'codex_leader', 'auditor', 'operator')),
+  constraint huai_room_members_role_check check (role in ('owner', 'human_member', 'leader', 'claude_leader', 'codex_leader', 'auditor', 'operator')),
   constraint huai_room_members_status_check check (status in ('active', 'invited', 'left', 'removed', 'suspended'))
 );
 
@@ -34,7 +34,7 @@ create table if not exists huai_ai_actors (
   adapter_type text not null,
   status text not null default 'active',
   created_at timestamptz not null default now(),
-  constraint huai_ai_actors_role_check check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor')),
+  constraint huai_ai_actors_role_check check (role in ('leader', 'claude_leader', 'codex_leader', 'auditor')),
   constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'auditor')),
   constraint huai_ai_actors_status_check check (status in ('active', 'inactive', 'disabled')),
   unique (room_id, role)

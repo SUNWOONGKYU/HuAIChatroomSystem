@@ -266,10 +266,10 @@ function buildSupabaseInboundProcessorPorts(
   };
 }
 
-// 방 하나의 실행 기본값(소대장 판단 자동 호출에 쓰는 actor/gateway/project path)을 만든다.
+// 방 하나의 실행 기본값(리더 판단 자동 호출에 쓰는 actor/gateway/project path)을 만든다.
 // 예전에는 이 함수가 actor 를 못 찾으면 던졌고, 그 예외가 부팅 경로를 타면 프로세스 전체가
 // 죽었다 — 다방에서는 방 하나가 잘못 시딩됐다고 나머지 19개 방까지 멈추면 안 된다.
-// 이제는 던지지 않고 undefined 를 돌려준다: 그 방은 실행 기본값 없이(=소대장 자동 판단 없이,
+// 이제는 던지지 않고 undefined 를 돌려준다: 그 방은 실행 기본값 없이(=리더 자동 판단 없이,
 // 규칙 기반 경로로만) 계속 동작하고, 다른 방은 영향받지 않는다. 놓치면 안 되므로 로그는 남긴다.
 export function buildExecutionDefaultsForRoom(
   env: NodeJS.ProcessEnv,
@@ -309,7 +309,7 @@ function parseBotRuntimeConfigs(env: NodeJS.ProcessEnv): TelegramBotRuntimeConfi
   const raw = env.BOT_SERVICE_BOTS_JSON;
   if (!raw) {
     return [
-      buildBotFromEnv(env, "platoon_leader", "BOT_SERVICE_PLATOON_BOT_USERNAME", "BOT_SERVICE_PLATOON_BOT_ID", "BOT_SERVICE_PLATOON_WEBHOOK_SECRET"),
+      buildBotFromEnv(env, "leader", "BOT_SERVICE_LEADER_BOT_USERNAME", "BOT_SERVICE_LEADER_BOT_ID", "BOT_SERVICE_LEADER_WEBHOOK_SECRET"),
       buildBotFromEnv(env, "claude_leader", "BOT_SERVICE_CLAUDE_BOT_USERNAME", "BOT_SERVICE_CLAUDE_BOT_ID", "BOT_SERVICE_CLAUDE_WEBHOOK_SECRET"),
       buildBotFromEnv(env, "codex_leader", "BOT_SERVICE_CODEX_BOT_USERNAME", "BOT_SERVICE_CODEX_BOT_ID", "BOT_SERVICE_CODEX_WEBHOOK_SECRET"),
       buildBotFromEnv(env, "auditor", "BOT_SERVICE_AUDITOR_BOT_USERNAME", "BOT_SERVICE_AUDITOR_BOT_ID", "BOT_SERVICE_AUDITOR_WEBHOOK_SECRET")

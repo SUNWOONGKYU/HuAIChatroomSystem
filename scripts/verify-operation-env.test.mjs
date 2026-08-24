@@ -33,13 +33,13 @@ test("accepts operation env with no room selector at all (multi-room boot)", () 
 test("rejects missing webhook secret and duplicate role credentials", () => {
   const env = sampleEnv();
   delete env.BOT_SERVICE_CODEX_WEBHOOK_SECRET;
-  env.BOT_SERVICE_AUDITOR_BOT_TOKEN = env.BOT_SERVICE_PLATOON_BOT_TOKEN;
-  env.BOT_SERVICE_AUDITOR_WEBHOOK_SECRET = env.BOT_SERVICE_PLATOON_WEBHOOK_SECRET;
+  env.BOT_SERVICE_AUDITOR_BOT_TOKEN = env.BOT_SERVICE_LEADER_BOT_TOKEN;
+  env.BOT_SERVICE_AUDITOR_WEBHOOK_SECRET = env.BOT_SERVICE_LEADER_WEBHOOK_SECRET;
 
   assert.deepEqual(validateOperationEnv(env), [
     "missing-env:BOT_SERVICE_CODEX_WEBHOOK_SECRET",
-    "duplicate-env:BOT_SERVICE_BOT_TOKEN:BOT_SERVICE_PLATOON_BOT_TOKEN:BOT_SERVICE_AUDITOR_BOT_TOKEN",
-    "duplicate-env:BOT_SERVICE_WEBHOOK_SECRET:BOT_SERVICE_PLATOON_WEBHOOK_SECRET:BOT_SERVICE_AUDITOR_WEBHOOK_SECRET"
+    "duplicate-env:BOT_SERVICE_BOT_TOKEN:BOT_SERVICE_LEADER_BOT_TOKEN:BOT_SERVICE_AUDITOR_BOT_TOKEN",
+    "duplicate-env:BOT_SERVICE_WEBHOOK_SECRET:BOT_SERVICE_LEADER_WEBHOOK_SECRET:BOT_SERVICE_AUDITOR_WEBHOOK_SECRET"
   ]);
 });
 
@@ -123,11 +123,11 @@ function sampleEnv() {
     SUPABASE_URL: "https://example.supabase.co",
     SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
     BOT_SERVICE_ROOM_ID: "00000000-0000-0000-0000-000000000010",
-    BOT_SERVICE_PLATOON_BOT_TOKEN: "test-platoon-token",
+    BOT_SERVICE_LEADER_BOT_TOKEN: "test-leader-token",
     BOT_SERVICE_CLAUDE_BOT_TOKEN: "test-claude-token",
     BOT_SERVICE_CODEX_BOT_TOKEN: "test-codex-token",
     BOT_SERVICE_AUDITOR_BOT_TOKEN: "test-auditor-token",
-    BOT_SERVICE_PLATOON_WEBHOOK_SECRET: "test-platoon-secret",
+    BOT_SERVICE_LEADER_WEBHOOK_SECRET: "test-leader-secret",
     BOT_SERVICE_CLAUDE_WEBHOOK_SECRET: "test-claude-secret",
     BOT_SERVICE_CODEX_WEBHOOK_SECRET: "test-codex-secret",
     BOT_SERVICE_AUDITOR_WEBHOOK_SECRET: "test-auditor-secret",

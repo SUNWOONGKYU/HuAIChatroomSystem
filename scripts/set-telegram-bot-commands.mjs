@@ -1,12 +1,12 @@
 const ROLES = [
-  ["PLATOON", "platoon_bot"],
+  ["LEADER", "leader_bot"],
   ["CLAUDE", "claude_bot"],
   ["CODEX", "codex_bot"],
   ["AUDITOR", "auditor_bot"]
 ];
 
 const ROLE_COMMANDS = {
-  PLATOON: [
+  LEADER: [
     { command: "newtask", description: "새 작업 제안" },
     { command: "tasks", description: "작업 목록" },
     { command: "task", description: "작업 상세" },

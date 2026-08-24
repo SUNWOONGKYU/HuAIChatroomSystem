@@ -101,7 +101,7 @@ test("resolves each bot to a single telegram_bot_id and webhook secret regardles
 test("unions active actor roles across rooms for the telegram bot lookup", async () => {
   const fetchCalls: string[] = [];
   const roomBActorsWithoutAuditor = [
-    actor(roomIdB, "00000000-0000-0000-0000-000000000201", "platoon_leader", "orchestrator"),
+    actor(roomIdB, "00000000-0000-0000-0000-000000000201", "leader", "orchestrator"),
     actor(roomIdB, "00000000-0000-0000-0000-000000000202", "claude_leader", "claude_code"),
     actor(roomIdB, codexActorIdB, "codex_leader", "codex")
     // auditor 없음
@@ -157,7 +157,7 @@ test("fails when a database webhook secret ref is missing from env", async () =>
       env: {},
       fetchImpl: fakeRuntimeFetch([])
     }),
-    /missing-env:BOT_SERVICE_PLATOON_WEBHOOK_SECRET/
+    /missing-env:BOT_SERVICE_LEADER_WEBHOOK_SECRET/
   );
 });
 
@@ -202,7 +202,7 @@ test("resolves to an empty bot map without throwing when the bots table has no m
 test("skips the telegram bots lookup entirely when no room has an active actor", async () => {
   const fetchCalls: string[] = [];
   const allInactive = (roomId: string, ids: [string, string, string, string]) => [
-    actor(roomId, ids[0], "platoon_leader", "orchestrator", "inactive"),
+    actor(roomId, ids[0], "leader", "orchestrator", "inactive"),
     actor(roomId, ids[1], "claude_leader", "claude_code", "disabled"),
     actor(roomId, ids[2], "codex_leader", "codex", "inactive"),
     actor(roomId, ids[3], "auditor", "auditor", "disabled")
@@ -243,7 +243,7 @@ test("boots the async server runtime with every active room, not a single select
 
   assert.equal(runtime.storeKind, "supabase");
   assert.deepEqual(new Set(runtime.config.allowedChatIds), new Set([chatIdA, chatIdB]));
-  assert.equal(runtime.config.botsByUsername.get("platoon_bot")?.botRole, "platoon_leader");
+  assert.equal(runtime.config.botsByUsername.get("leader_bot")?.botRole, "leader");
 
   const queued = await runtime.processQueuedInputs();
   assert.deepEqual(queued, []);
@@ -278,7 +278,7 @@ test("drains queued messages from multiple rooms without one room's processing b
 // 죽지 않는다.
 test("keeps room A's execution defaults intact when room B is missing the configured actor role", async () => {
   const roomBActorsWithoutCodex = [
-    actor(roomIdB, "00000000-0000-0000-0000-000000000201", "platoon_leader", "orchestrator"),
+    actor(roomIdB, "00000000-0000-0000-0000-000000000201", "leader", "orchestrator"),
     actor(roomIdB, "00000000-0000-0000-0000-000000000202", "claude_leader", "claude_code")
     // codex_leader 없음 -> missing-runtime-actor
   ];
@@ -302,7 +302,7 @@ test("keeps room A's execution defaults intact when room B is missing the config
 // 까지 확인한다. 핵심 취지(방 B 때문에 방 A 메시지가 유실되지 않는다)는 그대로 유지한다.
 test("a room without execution defaults still processes normally and sends a visible not-configured notice, without losing a sibling room's message", async () => {
   const roomBActorsWithoutCodex = [
-    actor(roomIdB, "00000000-0000-0000-0000-000000000201", "platoon_leader", "orchestrator"),
+    actor(roomIdB, "00000000-0000-0000-0000-000000000201", "leader", "orchestrator"),
     actor(roomIdB, "00000000-0000-0000-0000-000000000202", "claude_leader", "claude_code")
     // codex_leader 없음 -> executionDefaults 는 undefined 로 뜬다(A-5).
   ];
@@ -385,8 +385,8 @@ test("a network failure processing one room's message does not swallow a sibling
 function approveCommandQueueItem(chatId: string, telegramUserId: string, taskId: string): TelegramInboundQueueMessage {
   const envelope = TelegramUpdateEnvelope.parse(
     "00000000-0000-0000-0000-000000000201-shared",
-    "platoon_bot",
-    "platoon_leader",
+    "leader_bot",
+    "leader",
     {
       update_id: Number(`${chatId}2`),
       message: {
@@ -407,8 +407,8 @@ function approveCommandQueueItem(chatId: string, telegramUserId: string, taskId:
 function observationQueueItem(chatId: string, telegramUserId: string): TelegramInboundQueueMessage {
   const envelope = TelegramUpdateEnvelope.parse(
     "00000000-0000-0000-0000-000000000201-shared",
-    "platoon_bot",
-    "platoon_leader",
+    "leader_bot",
+    "leader",
     {
       update_id: Number(`${chatId}1`),
       message: {
@@ -428,7 +428,7 @@ function observationQueueItem(chatId: string, telegramUserId: string): TelegramI
 
 function secretEnv(): NodeJS.ProcessEnv {
   return {
-    BOT_SERVICE_PLATOON_WEBHOOK_SECRET: "platoon-secret",
+    BOT_SERVICE_LEADER_WEBHOOK_SECRET: "leader-secret",
     BOT_SERVICE_CLAUDE_WEBHOOK_SECRET: "claude-secret",
     BOT_SERVICE_CODEX_WEBHOOK_SECRET: "codex-secret",
     BOT_SERVICE_AUDITOR_WEBHOOK_SECRET: "auditor-secret"
@@ -458,9 +458,9 @@ function defaultMembers(roomId: string, telegramUserId: string): MemberFixture[]
   return [{ room_id: roomId, telegram_user_id: telegramUserId, role: "owner", permissions: ["task:create", "task:read"], status: "active" }];
 }
 
-function defaultActors(roomId: string, ids: { platoon: string; claude: string; codex: string; auditor: string }): ActorFixture[] {
+function defaultActors(roomId: string, ids: { leader: string; claude: string; codex: string; auditor: string }): ActorFixture[] {
   return [
-    actor(roomId, ids.platoon, "platoon_leader", "orchestrator"),
+    actor(roomId, ids.leader, "leader", "orchestrator"),
     actor(roomId, ids.claude, "claude_leader", "claude_code"),
     actor(roomId, ids.codex, "codex_leader", "codex"),
     actor(roomId, ids.auditor, "auditor", "auditor")
@@ -481,7 +481,7 @@ function defaultGateway(roomId: string, gatewayId: string, projectRoot: string):
 // webhook secret 은 하나로 수렴해야 한다(방마다 별개 행이 아니다).
 function defaultBots(): BotFixture[] {
   return [
-    bot("00000000-0000-0000-0000-000000000201-shared", "platoon_bot", "platoon_leader", "env:BOT_SERVICE_PLATOON_WEBHOOK_SECRET"),
+    bot("00000000-0000-0000-0000-000000000201-shared", "leader_bot", "leader", "env:BOT_SERVICE_LEADER_WEBHOOK_SECRET"),
     bot("00000000-0000-0000-0000-000000000202-shared", "claude_bot", "claude_leader", "env:BOT_SERVICE_CLAUDE_WEBHOOK_SECRET"),
     bot("00000000-0000-0000-0000-000000000203-shared", "codex_bot", "codex_leader", "env:BOT_SERVICE_CODEX_WEBHOOK_SECRET"),
     bot("00000000-0000-0000-0000-000000000204-shared", "auditor_bot", "auditor", "env:BOT_SERVICE_AUDITOR_WEBHOOK_SECRET")
@@ -521,13 +521,13 @@ function fakeRuntimeFetch(
   ];
   const actors = [
     ...(overrides.roomAActors ?? defaultActors(roomIdA, {
-      platoon: "00000000-0000-0000-0000-000000000101",
+      leader: "00000000-0000-0000-0000-000000000101",
       claude: "00000000-0000-0000-0000-000000000102",
       codex: codexActorIdA,
       auditor: "00000000-0000-0000-0000-000000000104"
     })),
     ...(overrides.roomBActors ?? defaultActors(roomIdB, {
-      platoon: "00000000-0000-0000-0000-000000000201",
+      leader: "00000000-0000-0000-0000-000000000201",
       claude: "00000000-0000-0000-0000-000000000202",
       codex: codexActorIdB,
       auditor: "00000000-0000-0000-0000-000000000204"

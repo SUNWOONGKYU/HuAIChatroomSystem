@@ -18,7 +18,7 @@ export type InFlightExecution = {
   startedAtMs: number;
   // 포럼 주제 번호. 진행 표시도 지시가 오간 주제에 떠야 한다.
   messageThreadId?: string;
-  // 소대장 판단(리더 planning) 단계인지, 승인된 실제 작업 실행 단계인지.
+  // 리더 판단(리더 planning) 단계인지, 승인된 실제 작업 실행 단계인지.
   // 파이프라인은 이 둘을 순서대로 거치는데, 각각 별도의 outbox 행이라 planning 행이
   // 끝나고 실행 행이 아직 안 만들어진 찰나에는 두 단계 사이 빈틈이 생긴다. 이 빈틈을
   // "전체가 끝났다"로 오판하지 않으려면 방금 사라진 게 어느 단계였는지 알아야 한다.
@@ -45,7 +45,7 @@ export function renderProgressText(elapsedMs: number): string {
 
 export const PROGRESS_DONE_TEXT = "✅ 작업이 끝났습니다. 결과를 정리해 올리겠습니다.";
 
-// 소대장 판단(리더 planning) 단계만 끝났을 때 쓰는 문구. 아직 승인·실제 실행 단계가
+// 리더 판단(리더 planning) 단계만 끝났을 때 쓰는 문구. 아직 승인·실제 실행 단계가
 // 남아 있으므로 "끝났다"고 말하면 안 된다 — 다음 단계가 이어질 것을 알려준다.
 export const PROGRESS_PLANNING_DONE_TEXT = "🧭 판단을 마쳤습니다. 다음 단계(승인/실행)를 준비 중입니다.";
 
@@ -130,7 +130,7 @@ export async function runExecutionHeartbeatOnce(
   // 단, outbox 행 사이 빈틈(다음 단계 행이 아직 안 만들어진 찰나)일 수 있으므로 두 가지로
   // 방어한다. (1) 유예시간: 사라진 지 얼마 안 됐으면 아직 판단하지 않는다 — 곧 다음 단계
   // 행이 생기면 다시 나타난다. (2) 단계 구분: 유예시간이 지나 진짜 끊긴 것으로 봐도,
-  // 방금까지 돌던 게 planning(소대장 판단) 뿐이었다면 "전체가 끝났다"가 아니라 "다음 단계
+  // 방금까지 돌던 게 planning(리더 판단) 뿐이었다면 "전체가 끝났다"가 아니라 "다음 단계
   // 준비 중"이라고 말한다 — 승인·실제 실행이 아직 남아 있어서다.
   for (const [chatId, entry] of [...progress]) {
     if (byChat.has(chatId)) continue;

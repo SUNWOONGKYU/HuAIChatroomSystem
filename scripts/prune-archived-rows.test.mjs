@@ -40,9 +40,9 @@ test("장부에 등재된 날짜만 삭제 대상이 된다", () => {
   assert.equal(events.has("2026-06-02"), false, "표마다 따로 내보내고 따로 지운다");
 });
 
-// 소대장이 읽는 창이 40턴이다(supabase-store.ts fetchRecentRoomTurns). 조용한 방은 그 40턴이
+// 리더가 읽는 창이 40턴이다(supabase-store.ts fetchRecentRoomTurns). 조용한 방은 그 40턴이
 // 전부 보존기간 밖일 수 있는데, 그걸 비우면 텔레그램에는 대화가 그대로 보이는데 봇만
 // 기억을 잃은 상태가 된다.
-test("보호하는 턴 수가 소대장이 읽는 창과 같다", () => {
+test("보호하는 턴 수가 리더가 읽는 창과 같다", () => {
   assert.equal(PROTECTED_RECENT_TURNS, 40);
 });

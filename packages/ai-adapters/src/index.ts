@@ -25,7 +25,7 @@ export function resolveAdapterCommand(request: ExecutionRequest): readonly strin
 export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
   // 읽기만 허용해야 하는 실행.
   //   감사   — 검증자는 의견서만 낸다. 직접 고치면 자기검증이 된다 (AC-07).
-  //   소대장 판단 — 아직 방장 승인 전이다. 판단하면서 파일을 고치면
+  //   리더 판단 — 아직 방장 승인 전이다. 판단하면서 파일을 고치면
   //                "승인된 작업만 실행된다"(FR-008)가 통째로 뚫린다.
   const isAudit = request.reportBotRole === "auditor";
   const isPlanning = request.attemptId.startsWith("leader-planning-");
@@ -36,7 +36,7 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
       [
         "--print",
         "--permission-mode",
-        // 읽기 전용(dontAsk)은 그대로 둔다 — 검증자·소대장 판단이 파일을 고치면
+        // 읽기 전용(dontAsk)은 그대로 둔다 — 검증자·리더 판단이 파일을 고치면
         // AC-07/FR-008 이 뚫린다(위 readOnly 주석 참고).
         //
         // 비-읽기전용(승인된 실행)은 이전엔 acceptEdits 였는데, 이건 파일 편집과
@@ -61,7 +61,7 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
         // 꺼내 쓴다 — 그 짝을 안 맞추면 방에 JSON 원문이 그대로 뜬다.
         "json",
         `--add-dir=${request.projectPath}`,
-        // 이전 세션을 이어받으면 소대장이 방의 맥락을 기억한다.
+        // 이전 세션을 이어받으면 리더가 방의 맥락을 기억한다.
         ...(request.resumeSessionId ? ["--resume", request.resumeSessionId] : [])
       ],
       request.projectPath,

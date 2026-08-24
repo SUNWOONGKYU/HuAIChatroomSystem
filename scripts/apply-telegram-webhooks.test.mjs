@@ -9,15 +9,15 @@ import {
 
 const env = {
   BOT_SERVICE_PUBLIC_BASE_URL: "https://ops.example.com/",
-  BOT_SERVICE_PLATOON_BOT_TOKEN: "tok-platoon",
+  BOT_SERVICE_LEADER_BOT_TOKEN: "tok-leader",
   BOT_SERVICE_CLAUDE_BOT_TOKEN: "tok-claude",
   BOT_SERVICE_CODEX_BOT_TOKEN: "tok-codex",
   BOT_SERVICE_AUDITOR_BOT_TOKEN: "tok-auditor",
-  BOT_SERVICE_PLATOON_WEBHOOK_SECRET: "sec-platoon",
+  BOT_SERVICE_LEADER_WEBHOOK_SECRET: "sec-leader",
   BOT_SERVICE_CLAUDE_WEBHOOK_SECRET: "sec-claude",
   BOT_SERVICE_CODEX_WEBHOOK_SECRET: "sec-codex",
   BOT_SERVICE_AUDITOR_WEBHOOK_SECRET: "sec-auditor",
-  BOT_SERVICE_PLATOON_BOT_USERNAME: "platoon_live_bot",
+  BOT_SERVICE_LEADER_BOT_USERNAME: "leader_live_bot",
   BOT_SERVICE_CLAUDE_BOT_USERNAME: "claude_live_bot",
   BOT_SERVICE_CODEX_BOT_USERNAME: "codex_live_bot",
   BOT_SERVICE_AUDITOR_BOT_USERNAME: "auditor_live_bot"
@@ -28,9 +28,9 @@ test("builds token-free webhook dry-run plan", () => {
   const formatted = formatWebhookPlan(plan);
 
   assert.equal(plan.length, 4);
-  assert.equal(plan[0].url, "https://ops.example.com/telegram/webhook/platoon_live_bot");
-  assert.equal(formatted.includes("tok-platoon"), false);
-  assert.equal(formatted.includes("sec-platoon"), false);
+  assert.equal(plan[0].url, "https://ops.example.com/telegram/webhook/leader_live_bot");
+  assert.equal(formatted.includes("tok-leader"), false);
+  assert.equal(formatted.includes("sec-leader"), false);
 });
 
 test("applies four webhooks without formatting token or secret values", async () => {
@@ -41,14 +41,14 @@ test("applies four webhooks without formatting token or secret values", async ()
   });
 
   assert.equal(calls.length, 4);
-  assert.equal(calls[0].url, "https://api.telegram.org/bottok-platoon/setWebhook");
+  assert.equal(calls[0].url, "https://api.telegram.org/bottok-leader/setWebhook");
   assert.deepEqual(calls[0].body, {
-    url: "https://ops.example.com/telegram/webhook/platoon_live_bot",
-    secret_token: "sec-platoon"
+    url: "https://ops.example.com/telegram/webhook/leader_live_bot",
+    secret_token: "sec-leader"
   });
   const formatted = formatWebhookApplyResults(results);
-  assert.equal(formatted.includes("tok-platoon"), false);
-  assert.equal(formatted.includes("sec-platoon"), false);
+  assert.equal(formatted.includes("tok-leader"), false);
+  assert.equal(formatted.includes("sec-leader"), false);
 });
 
 test("requires public base url", () => {

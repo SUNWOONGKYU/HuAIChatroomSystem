@@ -167,7 +167,7 @@ export class SupabaseOutboxStore {
       }
     });
 
-    // 소대장 판단은 작업 실행이 아니다. "작업 실행 완료" 보고를 내보내면 방에 잡음만 남는다.
+    // 리더 판단은 작업 실행이 아니다. "작업 실행 완료" 보고를 내보내면 방에 잡음만 남는다.
     // 판단 결과는 아래 applyLeaderPlanningResult 가 제안 또는 답변으로 올린다.
     if (isLeaderPlanningAttempt(input.request.attemptId)) {
       await this.applyLeaderPlanningResult(input, telegramChatId, event.event_id);
@@ -236,8 +236,8 @@ export class SupabaseOutboxStore {
       await this.persistCollectedArtifacts(input.request, input.events);
     }
 
-    // 인지부채 방지 퀴즈 — 작업자(감사·소대장 판단 아님)가 실제로 파일을 바꾼 실행에서만
-    // 저장한다. 감사는 검증이지 방장이 이해해야 할 변경이 아니고, 소대장 판단은 애초에
+    // 인지부채 방지 퀴즈 — 작업자(감사·리더 판단 아님)가 실제로 파일을 바꾼 실행에서만
+    // 저장한다. 감사는 검증이지 방장이 이해해야 할 변경이 아니고, 리더 판단은 애초에
     // 이 지점에 도달하지 않는다(위 isLeaderPlanningAttempt 체크에서 이미 return 함).
     if (
       input.status === "completed" &&
@@ -284,16 +284,16 @@ export class SupabaseOutboxStore {
     if (!isUuid(request.taskId)) return;
     await this.advanceTaskStatus(request.taskId, "verification_started", { isVerifier: true, actorRole: "auditor", verifierActorId: request.actorId, authorActorId: "system" });
     await this.advanceTaskStatus(request.taskId, "verification_passed", { isVerifier: true, actorRole: "auditor" });
-    await this.advanceTaskStatus(request.taskId, "commander_completion_approved", { actorRole: "platoon_leader" });
+    await this.advanceTaskStatus(request.taskId, "commander_completion_approved", { actorRole: "leader" });
 
     const idempotencyKey = "telegram-completion-review:" + request.attemptId;
     await this.insertOutboxIdempotently({
       event_id: sourceEventId,
       idempotency_key: idempotencyKey,
       target_kind: "telegram_bot",
-      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
       payload: {
-        botRole: "platoon_leader",
+        botRole: "leader",
         messageThreadId: request.telegramMessageThreadId,
         telegramChatId,
         text: "파일 수정 작업이 아니어서 검증 없이 마쳤습니다.\n완료 승인은 고정된 작업 현황판에서 결정해 주세요.",
@@ -359,9 +359,9 @@ export class SupabaseOutboxStore {
       event_id: sourceEventId,
       idempotency_key: "telegram-engine-fallback:" + attemptId,
       target_kind: "telegram_bot",
-      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
       payload: {
-        botRole: "platoon_leader",
+        botRole: "leader",
         messageThreadId: request.telegramMessageThreadId,
         telegramChatId,
         text: isAudit
@@ -473,7 +473,7 @@ export class SupabaseOutboxStore {
     });
   }
 
-  // 소대장이 대화를 읽고 내린 판단을 방에 올린다.
+  // 리더가 대화를 읽고 내린 판단을 방에 올린다.
   // 판단 실패는 조용히 넘기지 않는다 — 사람이 불렀는데 아무 반응이 없으면 시스템이 죽은 것처럼 보인다.
   private async applyLeaderPlanningResult(
     input: { request: ExecutionRequest; status: "completed" | "failed" | "rejected"; events: GatewayEvent[] },
@@ -497,9 +497,9 @@ export class SupabaseOutboxStore {
         event_id: sourceEventId,
         idempotency_key: idempotencyKey,
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
         payload: {
-          botRole: "platoon_leader",
+          botRole: "leader",
           messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           text: "요청을 작업으로 정리하지 못했습니다. 조금 더 구체적으로 다시 말씀해 주세요.",
@@ -517,9 +517,9 @@ export class SupabaseOutboxStore {
         event_id: sourceEventId,
         idempotency_key: idempotencyKey,
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
         payload: {
-          botRole: "platoon_leader",
+          botRole: "leader",
           messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           text: maskSensitiveText(decision.text).slice(0, 3000),
@@ -543,9 +543,9 @@ export class SupabaseOutboxStore {
         event_id: sourceEventId,
         idempotency_key: idempotencyKey,
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
         payload: {
-          botRole: "platoon_leader",
+          botRole: "leader",
           messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           text: maskSensitiveText(decision.reason || "알겠습니다.").slice(0, 500),
@@ -601,7 +601,7 @@ export class SupabaseOutboxStore {
       idempotency_key: "leader-proposal:" + input.request.attemptId + (isVariant ? `:v${input.variantIndex}` : ""),
       payload: {
         proposalId,
-        // 소대장 판단은 방장이 말을 건 주제에서 시작됐다. 그 주제를 여기서 놓치면
+        // 리더 판단은 방장이 말을 건 주제에서 시작됐다. 그 주제를 여기서 놓치면
         // 승인 뒤 만들어지는 작업이 어느 주제 것인지 알 길이 없어진다.
         messageThreadId: input.request.telegramMessageThreadId,
         title,
@@ -623,9 +623,9 @@ export class SupabaseOutboxStore {
       event_id: input.sourceEventId,
       idempotency_key: input.idempotencyKey,
       target_kind: "telegram_bot",
-      target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: input.telegramChatId }),
+      target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId: input.telegramChatId }),
       payload: {
-        botRole: "platoon_leader",
+        botRole: "leader",
         messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId: input.telegramChatId,
         text: renderLeaderPlanMessage({ ...plan, title }),
@@ -798,9 +798,9 @@ export class SupabaseOutboxStore {
         event_id: sourceEventId,
         idempotency_key: idempotencyKey,
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
         payload: {
-          botRole: "platoon_leader",
+          botRole: "leader",
           telegramChatId,
           messageThreadId: request.telegramMessageThreadId,
           documentPath: localPath,
@@ -877,19 +877,19 @@ export class SupabaseOutboxStore {
     }
 
     if (verdict === "pass") {
-      // 검증 통과 -> 소대장 완료 결정 -> 방장 최종 승인 대기.
+      // 검증 통과 -> 리더 완료 결정 -> 방장 최종 승인 대기.
       // 앞의 두 단계는 시스템이 진행하고, 마지막 한 번만 방장이 누른다 (FR-015).
       await this.advanceTaskStatus(input.request.taskId, "verification_started", { isVerifier: true, actorRole: "auditor", verifierActorId: input.request.actorId, authorActorId: "system" });
       await this.advanceTaskStatus(input.request.taskId, "verification_passed", { isVerifier: true, actorRole: "auditor" });
-      await this.advanceTaskStatus(input.request.taskId, "commander_completion_approved", { actorRole: "platoon_leader" });
+      await this.advanceTaskStatus(input.request.taskId, "commander_completion_approved", { actorRole: "leader" });
 
       await this.insertOutboxIdempotently({
         event_id: sourceEventId,
         idempotency_key: "telegram-completion-review:" + input.request.attemptId,
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
         payload: {
-          botRole: "platoon_leader",
+          botRole: "leader",
           messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
           // 결정 버튼은 방에 붙이지 않는다 — 완료·보완 결정은 작업 현황판이 맡는다.
@@ -1195,7 +1195,7 @@ function gatewaySystemContext(): WorkflowContext {
   };
 }
 
-// 소대장이 정리한 작업을 방장이 읽고 판단할 수 있는 형태로 보여준다.
+// 리더가 정리한 작업을 방장이 읽고 판단할 수 있는 형태로 보여준다.
 // 내부 상태나 실행 로그는 넣지 않는다 (FR-005).
 export function renderLeaderPlanMessage(plan: LeaderPlan): string {
   const assigneeLabel = plan.assignee === "both"
@@ -1236,7 +1236,7 @@ export function shortProposalId(attemptId: string): string {
   return "p_" + compact;
 }
 
-// 표시용 정리를 거치지 않은 원본 stdout. 소대장 판단 JSON 을 잃지 않으려면 필요하다.
+// 표시용 정리를 거치지 않은 원본 stdout. 리더 판단 JSON 을 잃지 않으려면 필요하다.
 export function rawStdoutFromGatewayEvents(events: readonly GatewayEvent[]): string {
   return events
     .filter((event): event is GatewayEvent & { type: "stdout"; text: string } => event.type === "stdout" && typeof event.text === "string")
@@ -1246,7 +1246,7 @@ export function rawStdoutFromGatewayEvents(events: readonly GatewayEvent[]): str
 
 // claude --output-format json 은 session_id 를 돌려준다. codex --json 은 --json
 // 필드 이름이 다르다 — `{"type":"thread.started","thread_id":"..."}` (실측 확인,
-// codex exec --json 실제 호출 결과). 소대장(platoon_leader)은 기본 어댑터가 codex 라서
+// codex exec --json 실제 호출 결과). 리더(leader)은 기본 어댑터가 codex 라서
 // thread_id 를 못 잡으면 세션이 한 번도 저장되지 않는다 — 실제로 라이브 방들의
 // cli_session_id 가 전부 null 이었다.
 //
@@ -1549,17 +1549,18 @@ function summarizeGatewayEvents(events: GatewayEvent[]): Array<Record<string, un
 // \uC9C8\uC758\uC751\uB2F5\uB3C4 \uD30C\uC77C\uC744 \uBC14\uAFBC \uAC83\uCC98\uB7FC \uBCF4\uC778\uB2E4(\uB77C\uC774\uBE0C\uC5D0\uC11C README \uC904 \uC218 \uC870\uC0AC\uC5D0 3\uAC74 \uC7A1\uD614\uB2E4).
 const BOOKKEEPING_ARTIFACT_PATTERN = /(^|[\\/])sessions([\\/]|$)/i;
 
-// 폴백은 한 번만 한다. 붙였던 실행이 또 한도에 걸리면 그대로 실패로 보고한다 —
-// 두 엔진이 다 막힌 상태에서 계속 넘기면 방만 시끄럽고 아무것도 안 된다.
+// 폴백마다 이 접미사를 attemptId에 붙여 몇 번째 넘김인지 센다(fallbackHopCount).
 export const FALLBACK_ATTEMPT_SUFFIX = "-fallback";
 
-// 엔진이 셋이므로 넘기기는 최대 두 번이다. 그래야 세 엔진이 모두 한 번씩 기회를 갖는다.
+// 엔진이 셋이므로 넘기기는 최대 세 번이다 — 세 엔진이 모두 한 번씩 기회를 갖고
+// (2번), 그래도 다 막히면 처음 엔진으로 한 바퀴 더 돈다(3번, PO 요청 2026-08-24).
 //
-// 예전에는 한 번뿐이었다. 오늘 Claude 가 막히고 Codex 도 막히자 Antigravity 가 멀쩡한데도
-// 작업이 거기서 끝났다 — 남은 엔진이 있는데 멈추는 것은 폴백을 붙인 이유를 스스로 지운다.
-// 상한이 있어야 하는 이유는 그대로다: 전부 막힌 상태에서 계속 넘기면 방만 시끄럽고
-// 아무것도 안 된다.
-export const MAX_FALLBACK_HOPS = 2;
+// 처음엔 한 번뿐이었다: Claude 가 막히고 Codex 도 막히자 Antigravity 가 멀쩡한데도
+// 작업이 거기서 끝났다 — 남은 엔진이 있는데 멈추는 것은 폴백을 붙인 이유를 스스로
+// 지운다(그래서 2로 올렸다). 이후 "셋 다 막혔었어도 그새 풀렸을 수 있다"는 이유로
+// 한 바퀴 더(3)로 다시 올렸다. 상한이 있어야 하는 이유는 그대로다: 계속 넘기면
+// 방만 시끄럽고 아무것도 안 된다 — 그래서 무한이 아니라 딱 한 바퀴만 더다.
+export const MAX_FALLBACK_HOPS = 3;
 
 export function fallbackHopCount(attemptId: string): number {
   return attemptId.split(FALLBACK_ATTEMPT_SUFFIX).length - 1;
@@ -1572,6 +1573,11 @@ export function fallbackHopCount(attemptId: string): number {
 // 클로드부터 가고, 안티그래비티는 클로드까지 막혀야만 차례가 온다 — "코덱스가 막히면
 // 안티그래비티로" 라는 실제 기대(라이브 확인 후 PO 지적)와 어긋난다. 그래서 막힌
 // 엔진의 "다음 자리"부터 순환한다 — 방금 막힌 엔진 바로 뒤가 다음 후보다.
+//
+// 세 엔진을 한 바퀴 다 돌아 더 이상 안 써본 엔진이 없으면(PO 요청, 2026-08-24),
+// 처음 엔진부터 한 번 더 돈다 — 무한 반복이 아니라 딱 한 바퀴만 더다. 상한은
+// MAX_FALLBACK_HOPS(호출부 shouldFallbackToOtherEngine)가 막으므로 여기서는 "다시
+// 돌 수 있는 엔진이 있는가"만 본다.
 export function nextEngineAfterTried(
   tried: readonly AiAdapterType[],
   workerAdapterType?: AiAdapterType
@@ -1582,8 +1588,9 @@ export function nextEngineAfterTried(
     ? AI_ADAPTER_TYPES
     : [...AI_ADAPTER_TYPES.slice(blockedIndex + 1), ...AI_ADAPTER_TYPES.slice(0, blockedIndex + 1)];
   const remaining = rotated.filter((engine) => !tried.includes(engine));
-  const independent = remaining.filter((engine) => engine !== workerAdapterType);
-  return independent[0] ?? remaining[0];
+  const candidates = remaining.length > 0 ? remaining : rotated;
+  const independent = candidates.filter((engine) => engine !== workerAdapterType);
+  return independent[0] ?? candidates[0];
 }
 
 // 막힌 엔진 다음으로 넘길 엔진을 고른다.
@@ -1623,7 +1630,7 @@ export function shouldFallbackToOtherEngine(
   resultSummary: string
 ): boolean {
   if (fallbackHopCount(request.attemptId) >= MAX_FALLBACK_HOPS) return false;
-  // 소대장 판단은 방장 지시를 해석하는 단계라 엔진을 바꾸면 결과가 달라진다.
+  // 리더 판단은 방장 지시를 해석하는 단계라 엔진을 바꾸면 결과가 달라진다.
   // 여기서 넘기지 않고 실패를 그대로 보고해, 방장이 다시 말하게 한다.
   if (isLeaderPlanningAttempt(request.attemptId)) return false;
 
@@ -1838,7 +1845,7 @@ function summarizeGatewayOutput(events: GatewayEvent[]): string | undefined {
 // 두 엔진 출력의 겉포장을 벗겨 사람이 볼(또는 파서가 읽을) 실제 텍스트만 남긴다.
 // codex 는 JSONL 스트림(agent_message), claude 는 --output-format json 통짜 객체
 // (result 필드) — 어느 쪽도 아니면(과거 텍스트 모드 등) 원본을 그대로 돌려준다.
-// Telegram 보고문 요약과 소대장 판단(DECISION: 줄 파싱) 둘 다 이 함수로 겉포장을
+// Telegram 보고문 요약과 리더 판단(DECISION: 줄 파싱) 둘 다 이 함수로 겉포장을
 // 벗긴 뒤 처리한다 — 벗기지 않으면 파서가 JSON 이스케이프된 \n 뒤에 숨은
 // "DECISION: plan" 을 못 찾는다(실전에서 실제로 이 증상이 났다).
 export function extractAgentResultText(text: string): string {

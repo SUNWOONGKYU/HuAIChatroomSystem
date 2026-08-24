@@ -104,11 +104,11 @@ function sampleSeedEnv() {
     BOT_SERVICE_OWNER_TELEGRAM_USER_ID: "123456789",
     BOT_SERVICE_EXECUTION_GATEWAY_ID: "gateway-local",
     BOT_SERVICE_EXECUTION_PROJECT_PATH: "C:/Dev/HuAIChatroomSystem",
-    BOT_SERVICE_PLATOON_BOT_USERNAME: "platoon_live_bot",
+    BOT_SERVICE_LEADER_BOT_USERNAME: "leader_live_bot",
     BOT_SERVICE_CLAUDE_BOT_USERNAME: "claude_live_bot",
     BOT_SERVICE_CODEX_BOT_USERNAME: "codex_live_bot",
     BOT_SERVICE_AUDITOR_BOT_USERNAME: "auditor_live_bot",
-    BOT_SERVICE_PLATOON_BOT_TOKEN: "test-platoon-token",
+    BOT_SERVICE_LEADER_BOT_TOKEN: "test-leader-token",
     BOT_SERVICE_AUDITOR_BOT_TOKEN: "test-auditor-token"
   };
 }

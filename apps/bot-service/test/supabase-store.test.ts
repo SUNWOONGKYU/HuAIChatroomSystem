@@ -21,8 +21,8 @@ test("records telegram update once through Supabase REST", async () => {
   const store = makeStore(calls.fetchImpl);
   const envelope = new TelegramUpdateEnvelope(
     "00000000-0000-0000-0000-000000000001",
-    "platoon_bot",
-    "platoon_leader",
+    "leader_bot",
+    "leader",
     "123",
     "1001",
     "10",
@@ -51,7 +51,7 @@ test("persists outbox without event and leases telegram rows through RPC", async
         event_id: null,
         idempotency_key: "telegram:query:1",
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }),
         payload: { text: "ok" },
         status: "pending",
         attempts: 0,
@@ -64,7 +64,7 @@ test("persists outbox without event and leases telegram rows through RPC", async
         event_id: null,
         idempotency_key: "telegram:query:1",
         target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }),
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }),
         payload: { text: "ok" },
         status: "processing",
         attempts: 1,
@@ -78,7 +78,7 @@ test("persists outbox without event and leases telegram rows through RPC", async
     message: {
       input: {
         kind: "command",
-        envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "1", "1001", "10", "2001", false, "/help", undefined),
+        envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "1", "1001", "10", "2001", false, "/help", undefined),
         command: { name: "/help", args: [] }
       },
       idempotencyKey: "telegram-update:bot:1",
@@ -90,7 +90,7 @@ test("persists outbox without event and leases telegram rows through RPC", async
       events: [],
       outbox: [
         {
-          target: { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" },
+          target: { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" },
           idempotencyKey: "telegram:query:1",
           payload: { text: "ok" }
         }
@@ -279,7 +279,7 @@ test("does not persist raw telegram send result", async () => {
 });
 
 test("reuses existing outbox row on duplicate idempotency key with same content", async () => {
-  const target = { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" };
+  const target = { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" };
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(409, { code: "23505" }),
@@ -310,7 +310,7 @@ test("reuses existing outbox row on duplicate idempotency key with same content"
 // backfill 이 안 된 옛 행) target_kind/target/payload 만 같으면 같은 내용으로 봐야 한다 —
 // sameOutboxContent() 가 room_id 를 비교 대상에서 뺀 것이 이 테스트의 핵심 증명이다.
 test("멱등 재삽입 비교는 room_id 불일치로 오판하지 않는다", async () => {
-  const target = { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" };
+  const target = { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" };
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(409, { code: "23505" }),
@@ -427,7 +427,7 @@ test("actorId 등 진짜 내용이 다르면 attemptId/createdAt 제외 이후�
 });
 
 test("rejects duplicate outbox idempotency key with different content", async () => {
-  const target = { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" };
+  const target = { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" };
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(409, { code: "23505" }),
@@ -506,7 +506,7 @@ function makeOutboxCommit(idempotencyKey: string, target: any, payload: Record<s
     message: {
       input: {
         kind: "command" as const,
-        envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "1", "1001", "10", "2001", false, "/help", undefined),
+        envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "1", "1001", "10", "2001", false, "/help", undefined),
         command: { name: "/help" as const, args: [] }
       },
       idempotencyKey: "telegram-update:bot:1",
@@ -521,8 +521,8 @@ function makeOutboxCommit(idempotencyKey: string, target: any, payload: Record<s
   };
 }
 
-test("소대장이 지정한 담당이 실행자와 보고자 양쪽에 반영된다", async () => {
-  // 실전에서 소대장이 "담당: ClaudeBot" 이라고 정했는데 보고는 CodexBot 이름으로 나갔다.
+test("리더가 지정한 담당이 실행자와 보고자 양쪽에 반영된다", async () => {
+  // 실전에서 리더가 "담당: ClaudeBot" 이라고 정했는데 보고는 CodexBot 이름으로 나갔다.
   // actorId·adapterType 만 바꾸고 reportBotRole 을 두고 갔기 때문이다.
   const proposalId = "p_032d2db23aa44bdd";
   const taskId = "55555555-5555-4555-8555-555555555555";
@@ -544,7 +544,7 @@ test("소대장이 지정한 담당이 실행자와 보고자 양쪽에 반영�
 
   const outboxInsert = calls.requests.find((request) => request.method === "POST" && /huai_outbox$/.test(request.url));
   const executionRequest = outboxInsert?.body?.[0]?.payload?.executionRequest;
-  assert.equal(executionRequest?.adapterType, "claude_code", "소대장이 지정한 실행기로 바뀌어야 한다");
+  assert.equal(executionRequest?.adapterType, "claude_code", "리더가 지정한 실행기로 바뀌어야 한다");
   assert.equal(executionRequest?.reportBotRole, "claude_leader", "보고도 지정된 담당 이름으로 나가야 한다");
   assert.equal(executionRequest?.actorId, "actor-claude");
 });
@@ -604,9 +604,9 @@ test("실행 프롬프트에는 항상 QUIZ_START/QUIZ_END 이해도 확인 지�
 });
 
 // humanTaskStatus() 를 없애고 TASK_STATUS_META 를 단일 출처로 통일했다. 이 결함이 특히 나빴던
-// 지점이 room facts — 소대장 판단 프롬프트에 방의 열린 작업 상태가 원문 snake_case 로 그대로
-// 들어가고 있었다(예: "mid_approval_pending"). 소대장이 그걸 읽고 판단해야 했다는 뜻이다.
-test("room facts(소대장 판단 프롬프트)는 작업 상태를 raw 값이 아니라 사람이 읽는 라벨로 보여준다", async () => {
+// 지점이 room facts — 리더 판단 프롬프트에 방의 열린 작업 상태가 원문 snake_case 로 그대로
+// 들어가고 있었다(예: "mid_approval_pending"). 리더가 그걸 읽고 판단해야 했다는 뜻이다.
+test("room facts(리더 판단 프롬프트)는 작업 상태를 raw 값이 아니라 사람이 읽는 라벨로 보여준다", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponse(200, []), // fetchLeaderActor: 없음
@@ -654,8 +654,8 @@ test("주제로 나가는 메시지가 있으면 그 주제에 현황판을 올�
   });
 
   await store.commitTelegramInputResult(
-    makeOutboxCommit("telegram:something:1", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
-      botRole: "platoon_leader",
+    makeOutboxCommit("telegram:something:1", { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }, {
+      botRole: "leader",
       telegramChatId: "1001",
       messageThreadId: "613",
       text: "📥 접수했습니다."
@@ -685,8 +685,8 @@ test("주제 없는 그룹에는 현황판을 따로 올리지 않는다", async
   });
 
   await store.commitTelegramInputResult(
-    makeOutboxCommit("telegram:something:2", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
-      botRole: "platoon_leader",
+    makeOutboxCommit("telegram:something:2", { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }, {
+      botRole: "leader",
       telegramChatId: "1001",
       text: "📥 접수했습니다."
     })
@@ -719,8 +719,8 @@ test("현황판 행이 이미 있어도 그 주제의 다음 메시지가 막히
   });
 
   await store.commitTelegramInputResult(
-    makeOutboxCommit("telegram:proposal:p_1", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
-      botRole: "platoon_leader",
+    makeOutboxCommit("telegram:proposal:p_1", { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }, {
+      botRole: "leader",
       telegramChatId: "1001",
       messageThreadId: "613",
       text: "📋 작업 제안입니다."
@@ -756,7 +756,7 @@ test("이미 결정된 건에 다른 결정이 와도 처리 전체가 죽지 �
     event_id: null,
     idempotency_key: "telegram:decision:p_1",
     target_kind: "telegram_bot",
-    target: JSON.stringify({ kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }),
+    target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }),
     payload: { text: "승인 완료" },
     status: "sent",
     attempts: 1,
@@ -771,8 +771,8 @@ test("이미 결정된 건에 다른 결정이 와도 처리 전체가 죽지 �
   const store = makeStore(calls.fetchImpl);
 
   await store.commitTelegramInputResult(
-    makeOutboxCommit("telegram:decision:p_1", { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" }, {
-      botRole: "platoon_leader",
+    makeOutboxCommit("telegram:decision:p_1", { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }, {
+      botRole: "leader",
       telegramChatId: "1001",
       text: "보완 요청을 접수했습니다"
     })

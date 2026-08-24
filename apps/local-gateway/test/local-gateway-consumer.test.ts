@@ -71,7 +71,7 @@ test("executes allowed claude request through Windows executable path", async ()
     assert.equal(plans[0]?.executable, "claude");
   }
   // 프롬프트는 argv 가 아니라 stdin 으로 간다.
-  // 소대장이 대화 맥락 뭉치를 실어 보내면 Windows 명령줄 길이 한계에 걸리기 때문이다.
+  // 리더가 대화 맥락 뭉치를 실어 보내면 Windows 명령줄 길이 한계에 걸리기 때문이다.
   // acceptEdits -> bypassPermissions: packages/ai-adapters 가 codex(--approve-for-me)와
   // 대등하게 맞춘 변경(라이브 사고 수정) — apps/local-gateway/test/../../../packages/ai-adapters
   // 쪽 신규 테스트가 이 변경의 본체를 검증하고, 여기서는 실제 실행 경로가 그 값을 그대로
@@ -97,7 +97,7 @@ test("resumeSessionId 가 있으면 이전 세션을 이어받는다", async () 
     now: () => "2026-08-10T00:00:00.000Z"
   });
 
-  assert.deepEqual(plans[0]?.args.slice(-2), ["--resume", "sess-1"], "세션을 이어받아야 소대장이 방의 맥락을 기억한다");
+  assert.deepEqual(plans[0]?.args.slice(-2), ["--resume", "sess-1"], "세션을 이어받아야 리더가 방의 맥락을 기억한다");
   assert.equal(plans[0]?.args.includes("opus"), true, "역할별 모델 지정이 반영되어야 한다");
 });
 test("auditor codex execution stays read-only", async () => {
@@ -360,9 +360,9 @@ test("records masked stdout stderr and retryable failure on non-zero exit", asyn
 
 test("executes actual orchestrator approval payload", async () => {
   const envelope = new TelegramUpdateEnvelope(
-    "bot-platoon",
-    "platoon_bot",
-    "platoon_leader",
+    "bot-leader",
+    "leader_bot",
+    "leader",
     "77",
     "1001",
     "7001",
@@ -409,7 +409,7 @@ test("executes actual orchestrator approval payload", async () => {
   await store.commitTelegramInputResult({
     message: {
       input: { kind: "message", envelope: undefined as never },
-      idempotencyKey: "telegram-update:bot-platoon:77",
+      idempotencyKey: "telegram-update:bot-leader:77",
       receivedAt: "2026-08-10T00:00:00.000Z"
     },
     result: handled
@@ -603,7 +603,7 @@ function makeRowStore(rows: OutboxRecord[]): LocalGatewayOutboxStore {
   };
 }
 
-test("소대장 판단과 감사는 읽기 전용으로 실행된다", () => {
+test("리더 판단과 감사는 읽기 전용으로 실행된다", () => {
   // 판단은 아직 방장 승인 전이다. 판단하면서 파일을 고치면
   // "승인된 작업만 실행된다"가 통째로 뚫린다.
   const base = { roomId: "r", taskId: "t", actorId: "a", requestedBy: "1", projectPath: process.cwd(), prompt: "p", timeoutMs: 1000, idempotencyKey: "i", createdAt: "2026-08-15T00:00:00.000Z" } as const;
@@ -612,8 +612,8 @@ test("소대장 판단과 감사는 읽기 전용으로 실행된다", () => {
     return !args.includes("dontAsk") && !args.includes("read-only");
   };
 
-  assert.equal(writable({ ...base, attemptId: "leader-planning-x", adapterType: "claude_code", reportBotRole: "platoon_leader" }), false);
-  assert.equal(writable({ ...base, attemptId: "leader-planning-y", adapterType: "codex", reportBotRole: "platoon_leader" }), false);
+  assert.equal(writable({ ...base, attemptId: "leader-planning-x", adapterType: "claude_code", reportBotRole: "leader" }), false);
+  assert.equal(writable({ ...base, attemptId: "leader-planning-y", adapterType: "codex", reportBotRole: "leader" }), false);
   assert.equal(writable({ ...base, attemptId: "a1", adapterType: "claude_code", reportBotRole: "auditor" }), false, "검증자가 직접 고치면 자기검증이 된다");
   assert.equal(writable({ ...base, attemptId: "a2", adapterType: "claude_code", reportBotRole: "claude_leader" }), true, "승인된 작업은 쓸 수 있어야 한다");
 });

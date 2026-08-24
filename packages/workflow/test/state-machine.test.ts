@@ -59,7 +59,7 @@ test("allows independent verifier assignment", () => {
   assert.deepEqual(decision, { allowed: true, nextStatus: "verification_in_progress" });
 });
 
-test("commander completion approval requires platoon leader role", () => {
+test("commander completion approval requires leader role", () => {
   const denied = transitionTaskStatus("commander_completion_pending", "commander_completion_approved", {
     ...baseContext,
     actorRole: "codex_leader",
@@ -68,7 +68,7 @@ test("commander completion approval requires platoon leader role", () => {
   });
   const allowed = transitionTaskStatus("commander_completion_pending", "commander_completion_approved", {
     ...baseContext,
-    actorRole: "platoon_leader",
+    actorRole: "leader",
     isOwner: false
   });
 

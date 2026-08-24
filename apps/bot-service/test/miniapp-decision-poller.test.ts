@@ -32,8 +32,56 @@ test("an unprocessed approved decision is replayed and reaches commitTelegramInp
   assert.equal(backend.processed.get("a1")?.outcome, "replayed");
 });
 
+// Mini App [보완 요청] 사유 전달 회귀 — huai_approvals.reason 이 합성 콜백의
+// callback.reason 까지 그대로 실려야 orchestrator(buildSupplementRequestedText)가 방
+// 알림 본문에 사유를 포함시킬 수 있다. 이 값이 여기서 끊기면(예: 넘기는 걸 깜빡하면)
+// 사유 입력란은 여전히 화면에만 있고 아무 데도 닿지 않는 거짓 UI 로 되돌아간다.
+test("huai_approvals.reason reaches the synthetic callback's callback.reason", async () => {
+  const backend = new FakeMiniAppBackend();
+  backend.approvals.push({
+    approval_id: "a-reason-1",
+    task_id: null,
+    room_id: roomA.roomId,
+    stage: "final_approval",
+    decider_telegram_user_id: ownerA,
+    decision: "revision_requested",
+    reason: "로그인 버튼 색이 기획서와 다릅니다",
+    created_at: "2026-08-15T00:00:00.000Z",
+    idempotency_key: "fixture:a-reason-1",
+    entity_ref: "task-reason-1"
+  });
+  const persistence = new FakePersistence();
+
+  const result = await runMiniAppDecisionPollOnce(options(backend, persistence, [roomA]));
+
+  assert.equal(result.replayed, 1);
+  const committedInput = persistence.commits[0]!.message.input;
+  assert.equal(committedInput.kind, "callback");
+  assert.equal(
+    committedInput.kind === "callback" ? committedInput.callback.reason : undefined,
+    "로그인 버튼 색이 기획서와 다릅니다"
+  );
+});
+
+// reason 이 없는(구버전 결정, 혹은 사유 없이 보낼 수 있는 다른 액션) 행은 null 이
+// 그대로 callback.reason 에 새면 안 된다 — orchestrator 의 `reason?.trim()` 은 undefined
+// 를 예상하지, null 을 예상하지 않는다(둘 다 falsy 이긴 하나 타입 계약을 지킨다).
+test("a decision with no reason (huai_approvals.reason=null) yields callback.reason=undefined, not null", async () => {
+  const backend = new FakeMiniAppBackend();
+  backend.approvals.push(approvalRow({ approvalId: "a-no-reason", roomId: roomA.roomId, entityRef: "proposal_x", stage: "task_approval", decision: "approved", decider: ownerA, createdAt: "2026-08-15T00:00:00.000Z" }));
+  const persistence = new FakePersistence();
+
+  await runMiniAppDecisionPollOnce(options(backend, persistence, [roomA]));
+
+  const committedInput = persistence.commits[0]!.message.input;
+  assert.equal(
+    committedInput.kind === "callback" ? committedInput.callback.reason : "not-a-callback",
+    undefined
+  );
+});
+
 // 제안 승인(Echo 분대가 Mini App 에 붙이는 신규 결정 종류): entity_ref 가 task UUID 가
-// 아니라 제안 id(proposal_<uuid> 또는 소대장 판단이 만든 p_<16hex> 축약형) 이고,
+// 아니라 제안 id(proposal_<uuid> 또는 리더 판단이 만든 p_<16hex> 축약형) 이고,
 // task_id 컬럼은 null 이다 — huai_tasks 행이 아직 없기 때문이다(제안 승인 시점엔
 // hydrateExecutionOutboxPrompts 가 그제서야 task 를 물질화한다). 폴러는 이 문자열을
 // 파싱하지 않고 그대로 entityId 로 넘겨야 한다 — 파싱하면 그 자체가 store 쪽
@@ -508,7 +556,7 @@ test("반복 결정 재현 3/3 — Telegram 경로는 두 라운드 다 정상 �
     message: {
       input: {
         kind: "callback" as const,
-        envelope: new TelegramUpdateEnvelope("realbot", "platoon_bot", "platoon_leader", updateId, roomA.telegramChatId, "10", ownerA, false, undefined, undefined),
+        envelope: new TelegramUpdateEnvelope("realbot", "leader_bot", "leader", updateId, roomA.telegramChatId, "10", ownerA, false, undefined, undefined),
         callback: { entity: "task" as const, entityId: taskId, action: "request_revision" as const }
       },
       idempotencyKey: "telegram-update:realbot:" + updateId,

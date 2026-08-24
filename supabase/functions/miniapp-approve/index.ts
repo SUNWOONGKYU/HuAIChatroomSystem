@@ -6,7 +6,7 @@
 //   한다   — huai_approvals(승인 원장, append-only) 에 결정을 멱등하게 기록한다.
 //            huai_events 에도 감사용 이벤트를 남긴다.
 //   안 한다 — huai_tasks.status 를 직접 전이시키지 않는다.
-// 이유는 handler.ts 상단 및 이 함수의 최초 설계 보고에 남겨져 있다 — 소대장 쪽에서
+// 이유는 handler.ts 상단 및 이 함수의 최초 설계 보고에 남겨져 있다 — 리더 쪽에서
 // huai_approvals/huai_events(miniapp_decision_recorded) 를 소비하는 폴러를 붙이는 중이다.
 // 그 폴러가 이 파일이 쓰는 값의 모양(컬럼·idempotency_key 포맷)에 의존하므로,
 // 이 파일의 쓰기 계약은 팀장님 지시 없이 바꾸지 않는다.

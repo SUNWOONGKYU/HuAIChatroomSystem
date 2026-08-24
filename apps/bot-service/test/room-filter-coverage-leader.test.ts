@@ -26,7 +26,7 @@ function makeStore(fake: MiniSupabaseFake): SupabaseBotServiceStore {
 }
 
 function envelope(chatId: string, updateId: string, text: string | undefined): TelegramUpdateEnvelope {
-  return new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", updateId, chatId, "10", "9001", false, text, undefined);
+  return new TelegramUpdateEnvelope("bot", "leader_bot", "leader", updateId, chatId, "10", "9001", false, text, undefined);
 }
 
 function seedTwoRooms(fake: MiniSupabaseFake): void {
@@ -69,8 +69,8 @@ test("fetchLeaderActor 가 room_id 로 필터되어 다른 방의 CLI 세션을 
   // room B 것을 먼저 심어서, 필터가 빠지는 순간 limit=1 이 room B 걸 집어가게 만든다
   // (room A 를 먼저 심으면 우연히 여전히 A 가 나와서 이 회귀 테스트가 무의미해진다).
   fake.seed("huai_ai_actors", [
-    { actor_id: "actor-leader-b", room_id: ROOM_B, role: "platoon_leader", cli_session_id: "session-B", status: "active" },
-    { actor_id: "actor-leader-a", room_id: ROOM_A, role: "platoon_leader", cli_session_id: "session-A", status: "active" }
+    { actor_id: "actor-leader-b", room_id: ROOM_B, role: "leader", cli_session_id: "session-B", status: "active" },
+    { actor_id: "actor-leader-a", room_id: ROOM_A, role: "leader", cli_session_id: "session-A", status: "active" }
   ]);
   const store = makeStore(fake);
 
@@ -84,7 +84,7 @@ test("fetchLeaderActor 가 room_id 로 필터되어 다른 방의 CLI 세션을 
   assert.notEqual(executionRequest.resumeSessionId, "session-B");
 });
 
-test("fetchRoomFacts 가 room_id 로 필터되어 다른 방의 진행 중 작업이 소대장 프롬프트로 새지 않는다", async () => {
+test("fetchRoomFacts 가 room_id 로 필터되어 다른 방의 진행 중 작업이 리더 프롬프트로 새지 않는다", async () => {
   const fake = new MiniSupabaseFake();
   seedTwoRooms(fake);
   fake.seed("huai_tasks", [

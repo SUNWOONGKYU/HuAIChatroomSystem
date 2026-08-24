@@ -4,7 +4,7 @@ import { MAX_TELEGRAM_CALLBACK_BYTES, SupabaseOutboxStore, extractAgentResultTex
 import { buildProposalKeyboard } from "../../telegram-ui/src/index.js";
 import { type ExecutionRequest, type GatewayEvent } from "../../contracts/src/index.js";
 
-// 소대장이 대화를 읽고 내린 판단이 방장에게 승인 버튼과 함께 올라가는가.
+// 리더가 대화를 읽고 내린 판단이 방장에게 승인 버튼과 함께 올라가는가.
 
 const ROOM = "11111111-1111-4111-8111-111111111111";
 const LEADER_ACTOR = "22222222-2222-4222-8222-222222222222";
@@ -19,7 +19,7 @@ const PLAN = {
   reason: "분석은 Claude, 수정·테스트는 Codex"
 };
 
-test("소대장 판단이 제안 이벤트와 승인 버튼으로 올라간다", async () => {
+test("리더 판단이 제안 이벤트와 승인 버튼으로 올라간다", async () => {
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
@@ -43,14 +43,14 @@ test("소대장 판단이 제안 이벤트와 승인 버튼으로 올라간다",
   assert.equal(proposalEvent.body.payload.assignee, "both");
 
   const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
-  assert.equal(message?.body.payload.botRole, "platoon_leader");
+  assert.equal(message?.body.payload.botRole, "leader");
   assert.ok(message?.body.payload.keyboard, "방장이 누를 승인 버튼이 있어야 한다");
   assert.match(message?.body.payload.text, /결제 실패율 상승 원인/);
   assert.match(message?.body.payload.text, /완료 조건:/);
 });
 
 // Grok Bot 벤치마크 "승인 카테고리 분리(필수승인/자동허용)" 반영 — 2026-08-23.
-// 소대장이 MUTATES: no(파일 변경 없음)로 판단하면, 제안 카드·승인 버튼은 그대로 나가되
+// 리더가 MUTATES: no(파일 변경 없음)로 판단하면, 제안 카드·승인 버튼은 그대로 나가되
 // huai_approvals 에 자동승인 행도 함께 기록된다(miniapp-decision-poller.ts 가 그 행을
 // 집어 기존 승인 경로 그대로 실행을 큐에 올린다 — 이 파일은 그 재생까지는 검증하지 않는다,
 // miniapp-decision-poller.test.ts 의 몫이다. 여기선 "행이 올바른 모양으로 남는가"만 본다).
@@ -117,7 +117,7 @@ test("파일을 바꾸는 작업(기본값)은 자동승인 행을 남기지 않
   );
 });
 
-// "버전 3개 만들어줘" — 소대장 판단 1번이 제안 3개로 나뉜다. 각 제안은 독립적으로
+// "버전 3개 만들어줘" — 리더 판단 1번이 제안 3개로 나뉜다. 각 제안은 독립적으로
 // 승인받는 기존 방식 그대로다(1제안=1작업 불변식 안 건드림) — 유일한 차이는 제목에
 // 변형 표시가 붙고 useIsolatedWorktree 가 true 라는 것뿐이다.
 test("VARIANTS 를 요청하면 제안이 N개로 나뉘고 각각 격리 워크트리 표식을 단다", async () => {
@@ -184,7 +184,7 @@ test("VARIANTS 를 안 쓰면(기본 1) 지금까지와 똑같이 제안 1개, u
 });
 
 // 라이브 실전 사고 — Claude 를 --output-format json 으로 돌리기 시작하면서(Task D,
-// session_id 캡처용) 소대장 판단이 "요청을 작업으로 정리하지 못했습니다"만 계속 냈다.
+// session_id 캡처용) 리더 판단이 "요청을 작업으로 정리하지 못했습니다"만 계속 냈다.
 // DECISION: plan 줄이 stdout 최상위가 아니라 JSON "result" 문자열 안에 \n 으로
 // 이스케이프된 채 갇혀서, 줄 단위 파서가 못 찾았다. 아래 JSON은 그 사고를 낸 실제
 // 라이브 응답을 그대로 옮긴 것이다(2026-08-19 13:19, AI자격증사업 방, "!연구원" 페르소나
@@ -207,7 +207,7 @@ test("extractAgentResultText 는 claude json 통짜 응답에서 DECISION 줄을
   assert.equal(extracted.includes("session_id"), false, "JSON 겉포장은 벗겨져야 한다");
 });
 
-test("소대장이 claude json 으로 응답해도 제안이 실제로 만들어진다 (실전 회귀 재현·수정 확인)", async () => {
+test("리더가 claude json 으로 응답해도 제안이 실제로 만들어진다 (실전 회귀 재현·수정 확인)", async () => {
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
@@ -253,7 +253,7 @@ test("판단 결과에는 아티팩트·감사 처리가 붙지 않는다", asyn
   assert.equal(calls.requests.some((request) => /huai_verifications/.test(request.url)), false);
 });
 
-test("소대장이 나설 자리가 아니라고 하면 제안을 만들지 않고 사유를 방에 올린다", async () => {
+test("리더가 나설 자리가 아니라고 하면 제안을 만들지 않고 사유를 방에 올린다", async () => {
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
@@ -324,7 +324,7 @@ test("다음 호출에서 이어받도록 세션을 기억한다", async () => {
 
 test("승인 버튼의 callback_data 가 Telegram 한계를 넘지 않는다", () => {
   // 실전에서 71바이트가 나가 BUTTON_DATA_INVALID 로 죽었다.
-  // 소대장 제안이 방장에게 도달하지 못한 원인이었다.
+  // 리더 제안이 방장에게 도달하지 못한 원인이었다.
   const attempt = "leader-planning-planning_3dc08364-5a93-4dab-9c2d-875f18cd352f";
   const keyboard = buildProposalKeyboard(shortProposalId(attempt));
   for (const row of keyboard.inline_keyboard) {
@@ -366,7 +366,7 @@ test("세션 id 추출", () => {
 
 // Codex 는 session_id 가 아니라 thread_id 를 쓴다 — 실제로 `codex exec --json` 을 돌려서
 // 확인한 형식이다: {"type":"thread.started","thread_id":"01a017c9-95b5-7e93-af21-bb5a94e007c4"}
-// 소대장(platoon_leader) 기본 어댑터가 codex 라서, 이걸 못 잡으면 리더의 세션 이어받기가
+// 리더(leader) 기본 어댑터가 codex 라서, 이걸 못 잡으면 리더의 세션 이어받기가
 // 통째로 죽는다.
 test("codex 의 thread_id 도 세션 id 로 잡는다 (실측 형식)", () => {
   assert.equal(
@@ -404,7 +404,7 @@ function makeRequest(): ExecutionRequest {
     timeoutMs: 300000,
     idempotencyKey: "leader-planning:planning_0001",
     createdAt: "2026-08-15T00:00:00.000Z",
-    reportBotRole: "platoon_leader"
+    reportBotRole: "leader"
   };
 }
 

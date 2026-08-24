@@ -29,7 +29,7 @@ test("summarizes unique chat and human user ids from Telegram updates", () => {
 test("calls getUpdates without printing token values", async () => {
   const calls = [];
   const summary = await discoverTelegramIds(
-    { BOT_SERVICE_PLATOON_BOT_TOKEN: "tok-platoon" },
+    { BOT_SERVICE_LEADER_BOT_TOKEN: "tok-leader" },
     async (url, init) => {
       calls.push({ url: String(url), body: JSON.parse(String(init.body)) });
       return jsonResponse(200, {
@@ -47,10 +47,10 @@ test("calls getUpdates without printing token values", async () => {
     }
   );
 
-  assert.equal(calls[0].url, "https://api.telegram.org/bottok-platoon/getUpdates");
+  assert.equal(calls[0].url, "https://api.telegram.org/bottok-leader/getUpdates");
   assert.deepEqual(calls[0].body, { allowed_updates: ["message", "callback_query"] });
   const formatted = formatDiscoveredTelegramIds(summary);
-  assert.equal(formatted.includes("tok-platoon"), false);
+  assert.equal(formatted.includes("tok-leader"), false);
   assert.equal(formatted.includes("telegram_chat_id=-100123"), true);
   assert.equal(formatted.includes("telegram_user_id=2001"), true);
 });

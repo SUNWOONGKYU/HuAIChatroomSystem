@@ -3,7 +3,7 @@ import test from "node:test";
 import { resolveAdapterPlan } from "../src/index.js";
 import { type ExecutionRequest } from "../../contracts/src/index.js";
 
-// codex_leader/platoon_leader 는 기본 어댑터가 codex 다. `codex exec resume <id>`
+// codex_leader/leader 는 기본 어댑터가 codex 다. `codex exec resume <id>`
 // 서브커맨드가 실제로 있다는 것을 codex exec resume --help 로 실측 확인했고, 그 옵션
 // 목록에는 --sandbox·--approve-for-me·--add-dir 가 없다 — 세션을 처음 열 때 이미
 // readOnly 여부에 맞는 승인 모드로 만들어졌으므로, 이어받을 때는 그 모드를 다시

@@ -24,7 +24,7 @@ test("① 신규 방 정상 온보딩", async () => {
 
   assert.ok(result.summary);
   assert.equal(result.summary.bots.length, 4);
-  assert.deepEqual(new Set(result.summary.bots.map((bot) => bot.role)), new Set(["platoon_leader", "claude_leader", "codex_leader", "auditor"]));
+  assert.deepEqual(new Set(result.summary.bots.map((bot) => bot.role)), new Set(["leader", "claude_leader", "codex_leader", "auditor"]));
   assert.equal(result.summary.bots.every((bot) => bot.status === "created"), true);
 
   assert.equal(store.huai_rooms.length, 1);
@@ -219,8 +219,8 @@ test("두 번째 방을 온보딩해도 공유 봇 행의 actor_id 를 덮어쓰
 
   const firstResult = await onboardTelegramRoom(roomA, [], fetchImpl, fsOps);
   assert.equal(firstResult.ok, true);
-  const platoonBotAfterA = store.huai_telegram_bots.find((row) => row.role === "platoon_leader");
-  const actorIdFromRoomA = platoonBotAfterA.actor_id;
+  const leaderBotAfterA = store.huai_telegram_bots.find((row) => row.role === "leader");
+  const actorIdFromRoomA = leaderBotAfterA.actor_id;
   assert.ok(actorIdFromRoomA);
 
   const callsBeforeRoomB = calls.length;
@@ -229,8 +229,8 @@ test("두 번째 방을 온보딩해도 공유 봇 행의 actor_id 를 덮어쓰
 
   // 여전히 봇 행은 4개뿐이어야 한다(room 이 달라도 봇은 공유되므로 새로 생기면 안 된다).
   assert.equal(store.huai_telegram_bots.length, 4);
-  const platoonBotAfterB = store.huai_telegram_bots.find((row) => row.role === "platoon_leader");
-  assert.equal(platoonBotAfterB.actor_id, actorIdFromRoomA, "room B 온보딩이 room A 의 actor_id 를 덮어썼다");
+  const leaderBotAfterB = store.huai_telegram_bots.find((row) => row.role === "leader");
+  assert.equal(leaderBotAfterB.actor_id, actorIdFromRoomA, "room B 온보딩이 room A 의 actor_id 를 덮어썼다");
 
   // 계약 자체를 검증한다: PATCH 요청 바디에 actor_id/telegram_bot_id 키가 아예 없어야 한다.
   // (값이 우연히 같아서 통과하는 게 아니라, 애초에 그 컬럼을 보내지 않는지 확인)
@@ -282,11 +282,11 @@ function sampleEnv(overrides = {}) {
     BOT_SERVICE_OWNER_TELEGRAM_USER_ID: "123456789",
     BOT_SERVICE_EXECUTION_GATEWAY_ID: "gateway-local",
     BOT_SERVICE_EXECUTION_PROJECT_PATH: "C:/Dev/HuAIChatroomSystem",
-    BOT_SERVICE_PLATOON_BOT_USERNAME: "platoon_live_bot",
+    BOT_SERVICE_LEADER_BOT_USERNAME: "leader_live_bot",
     BOT_SERVICE_CLAUDE_BOT_USERNAME: "claude_live_bot",
     BOT_SERVICE_CODEX_BOT_USERNAME: "codex_live_bot",
     BOT_SERVICE_AUDITOR_BOT_USERNAME: "auditor_live_bot",
-    BOT_SERVICE_PLATOON_BOT_TOKEN: "test-platoon-token",
+    BOT_SERVICE_LEADER_BOT_TOKEN: "test-leader-token",
     BOT_SERVICE_AUDITOR_BOT_TOKEN: "test-auditor-token",
     ...overrides
   };

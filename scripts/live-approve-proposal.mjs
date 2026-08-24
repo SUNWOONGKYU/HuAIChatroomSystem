@@ -11,13 +11,13 @@ const botPid = Number(readFileSync("C:\\tmp\\huai-bot-service.pid", "utf8").trim
 const env = { ...process.env, ...(await readWindowsProcessEnv(botPid)) };
 applyOperationEnvAliases(env);
 
-const botUsername = env.BOT_SERVICE_PLATOON_BOT_USERNAME.replace(/^@/, "");
+const botUsername = env.BOT_SERVICE_LEADER_BOT_USERNAME.replace(/^@/, "");
 const stamp = Date.now();
 const response = await fetch(`http://127.0.0.1:8787/telegram/webhook/${encodeURIComponent(botUsername)}`, {
   method: "POST",
   headers: {
     "content-type": "application/json",
-    "x-telegram-bot-api-secret-token": env.BOT_SERVICE_PLATOON_WEBHOOK_SECRET
+    "x-telegram-bot-api-secret-token": env.BOT_SERVICE_LEADER_WEBHOOK_SECRET
   },
   body: JSON.stringify({
     update_id: stamp,

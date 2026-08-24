@@ -29,7 +29,7 @@ export function selectStaleProposals(events, decidedEntityRefs) {
     const payload = row.payload;
     if (!payload || typeof payload !== "object") continue;
 
-    // proposalId 가 없는 이벤트는 소대장 기획 요청이다(payload.stage =
+    // proposalId 가 없는 이벤트는 리더 기획 요청이다(payload.stage =
     // 'leader_planning_requested'). 작업 현황판이 애초에 안 보여주므로 재고가 아니다.
     const proposalId = typeof payload.proposalId === "string" ? payload.proposalId : undefined;
     if (!proposalId) continue;

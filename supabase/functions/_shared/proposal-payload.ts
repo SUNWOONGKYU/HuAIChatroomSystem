@@ -16,7 +16,7 @@
 //   1) packages/orchestrator/src/index.ts:157-180 createProposalFromTelegram
 //      — 규칙 기반, proposalId = "proposal_<uuid>"
 //   2) packages/supabase-runtime/src/index.ts:251-271 applyLeaderPlanningResult
-//      — 소대장 LLM 판단, proposalId = shortProposalId() = "p_<16hex>"
+//      — 리더 LLM 판단, proposalId = shortProposalId() = "p_<16hex>"
 //        (packages/supabase-runtime/src/index.ts:697-705, Telegram callback_data
 //        64바이트 제한 때문에 축약됐다는 주석까지 확인함)
 // 이 파일은 두 형식을 파싱하지 않는다 — 둘 다 불투명한 문자열 키로만 다루고,

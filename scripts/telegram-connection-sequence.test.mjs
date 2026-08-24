@@ -12,15 +12,15 @@ const completeEnv = {
   BOT_SERVICE_TELEGRAM_CHAT_ID: "-1001234567890",
   BOT_SERVICE_OWNER_TELEGRAM_USER_ID: "123456789",
   BOT_SERVICE_PUBLIC_BASE_URL: "https://ops.example.com",
-  BOT_SERVICE_PLATOON_BOT_TOKEN: "tok-platoon",
+  BOT_SERVICE_LEADER_BOT_TOKEN: "tok-leader",
   BOT_SERVICE_CLAUDE_BOT_TOKEN: "tok-claude",
   BOT_SERVICE_CODEX_BOT_TOKEN: "tok-codex",
   BOT_SERVICE_AUDITOR_BOT_TOKEN: "tok-auditor",
-  BOT_SERVICE_PLATOON_WEBHOOK_SECRET: "sec-platoon",
+  BOT_SERVICE_LEADER_WEBHOOK_SECRET: "sec-leader",
   BOT_SERVICE_CLAUDE_WEBHOOK_SECRET: "sec-claude",
   BOT_SERVICE_CODEX_WEBHOOK_SECRET: "sec-codex",
   BOT_SERVICE_AUDITOR_WEBHOOK_SECRET: "sec-auditor",
-  BOT_SERVICE_PLATOON_BOT_USERNAME: "platoon_live_bot",
+  BOT_SERVICE_LEADER_BOT_USERNAME: "leader_live_bot",
   BOT_SERVICE_CLAUDE_BOT_USERNAME: "claude_live_bot",
   BOT_SERVICE_CODEX_BOT_USERNAME: "codex_live_bot",
   BOT_SERVICE_AUDITOR_BOT_USERNAME: "auditor_live_bot",
@@ -52,8 +52,8 @@ test("formats a token-free blocked sequence when live values are missing", () =>
   assert.equal(sequence.ready, false);
   assert.match(formatted, /Telegram connection sequence: BLOCKED/);
   assert.match(formatted, /missing-env:SUPABASE_URL/);
-  assert.equal(formatted.includes("tok-platoon"), false);
-  assert.equal(formatted.includes("sec-platoon"), false);
+  assert.equal(formatted.includes("tok-leader"), false);
+  assert.equal(formatted.includes("sec-leader"), false);
 });
 
 test("stays ready without a per-room chat id/owner id (multi-room operation env)", () => {
@@ -109,7 +109,7 @@ test("formats webhook plan without leaking bot tokens or webhook secrets", () =>
   const sequence = buildTelegramConnectionSequence(completeEnv);
   const formatted = formatTelegramConnectionSequence(sequence);
 
-  assert.match(formatted, /PLAN platoon username=platoon_live_bot/);
-  assert.equal(formatted.includes("tok-platoon"), false);
-  assert.equal(formatted.includes("sec-platoon"), false);
+  assert.match(formatted, /PLAN leader username=leader_live_bot/);
+  assert.equal(formatted.includes("tok-leader"), false);
+  assert.equal(formatted.includes("sec-leader"), false);
 });

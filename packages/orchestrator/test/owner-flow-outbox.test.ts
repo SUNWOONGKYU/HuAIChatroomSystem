@@ -32,7 +32,7 @@ test("reverify callback routes an auditor bot message", () => {
   assert.match(String(result.outbox[0]?.payload.text), /재검증 요청: task-1/);
 });
 
-test("final approve callback routes platoon leader completion message", () => {
+test("final approve callback routes leader completion message", () => {
   const result = handleTelegramInput(
     { kind: "callback", envelope: envelope(undefined, "task:task-1:final_approve"), callback: { entity: "task", entityId: "task-1", action: "final_approve" } },
     ownerContext(),
@@ -41,15 +41,95 @@ test("final approve callback routes platoon leader completion message", () => {
 
   assert.equal(result.accepted, true);
   assert.equal(result.events[0]?.eventType, "owner_final_approved");
-  assert.equal(result.outbox[0]?.target.kind === "telegram_bot" ? result.outbox[0].target.botRole : undefined, "platoon_leader");
+  assert.equal(result.outbox[0]?.target.kind === "telegram_bot" ? result.outbox[0].target.botRole : undefined, "leader");
   // "최종"을 뗐다. 제안 단계 버튼이 "실행"으로 바뀌어 승인이 한 곳뿐이라, 무엇에 대한
   // 최종인지 읽는 사람이 알 수 없는 수식어만 남아 있었다.
   assert.match(String(result.outbox[0]?.payload.text), /승인 완료: task-1/);
 });
 
-test("소대장 멘션은 즉시 제안이 아니라 판단 실행을 요청한다", () => {
+// Mini App [보완 요청] 사유 입력란 → huai_approvals.reason → 폴러의 합성 콜백
+// (callback.reason) → 여기(buildOwnerActionOutbox)까지 실제로 닿는지 확인한다. 사유
+// 입력란을 붙이면서 "적었으니 전달됐겠지"라는 거짓 안심을 만들지 않으려면, 방 메시지가
+// 실제로 그 사유를 포함해야 한다 — 이게 그 끝단이다.
+test("보완 요청 콜백에 사유가 있으면 방 알림 본문에 그 사유가 그대로 실린다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot build the mention router") },
+    {
+      kind: "callback",
+      envelope: envelope(undefined, "task:task-1:request_revision"),
+      callback: { entity: "task", entityId: "task-1", action: "request_revision", reason: "로그인 버튼 색이 기획서와 다릅니다" }
+    },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.events[0]?.eventType, "owner_supplement_requested");
+  const message = result.outbox.find((item) => item.target.kind === "telegram_bot");
+  assert.ok(message, "보완 요청 알림이 없다");
+  assert.match(String(message.payload.text), /보완 요청: task-1/);
+  assert.match(String(message.payload.text), /사유: 로그인 버튼 색이 기획서와 다릅니다/);
+});
+
+// 사유 없이 온 결정(구버전 Mini App, 혹은 사유를 안 채운 호출부)은 예전 문구를 그대로
+// 유지한다 — 하위호환.
+test("보완 요청 콜백에 사유가 없으면 예전 문구를 그대로 유지한다", () => {
+  const result = handleTelegramInput(
+    { kind: "callback", envelope: envelope(undefined, "task:task-1:request_revision"), callback: { entity: "task", entityId: "task-1", action: "request_revision" } },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const message = result.outbox.find((item) => item.target.kind === "telegram_bot");
+  assert.ok(message, "보완 요청 알림이 없다");
+  assert.equal(String(message.payload.text), "보완 요청: task-1\n이후 결정은 고정된 작업 현황판에서 진행해 주세요.");
+});
+
+// 공백만 있는 사유(트림하면 빈 문자열)는 "사유 없음"과 동일하게 다룬다 — 서버 쪽에서도
+// 빈 문자열이 넘어올 가능성을 배제할 수 없다(Mini App 은 필수 검증을 걸지만, 폴러가
+// Telegram 실시간 흐름이 남긴 행까지 원장 전체를 읽으므로 방어적으로 둔다).
+test("공백만 있는 사유는 사유 없음과 동일하게 예전 문구로 떨어진다", () => {
+  const result = handleTelegramInput(
+    {
+      kind: "callback",
+      envelope: envelope(undefined, "task:task-1:request_revision"),
+      callback: { entity: "task", entityId: "task-1", action: "request_revision", reason: "   " }
+    },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const message = result.outbox.find((item) => item.target.kind === "telegram_bot");
+  assert.ok(message);
+  assert.equal(String(message.payload.text), "보완 요청: task-1\n이후 결정은 고정된 작업 현황판에서 진행해 주세요.");
+});
+
+// 지나치게 긴 사유는 방 메시지 안에서 잘리되, 잘렸다는 사실이 명시적으로 보여야 한다
+// (안 보이면 방 사람들은 사유 전체를 읽었다고 착각한다).
+test("지나치게 긴 사유는 방 메시지에서 잘리고, 잘렸다는 사실이 표시된다", () => {
+  const longReason = "가".repeat(600);
+  const result = handleTelegramInput(
+    {
+      kind: "callback",
+      envelope: envelope(undefined, "task:task-1:request_revision"),
+      callback: { entity: "task", entityId: "task-1", action: "request_revision", reason: longReason }
+    },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  const message = result.outbox.find((item) => item.target.kind === "telegram_bot");
+  assert.ok(message);
+  const text = String(message.payload.text);
+  assert.match(text, /잘렸습니다/);
+  assert.equal(text.includes(longReason), false, "원문 전체가 그대로 실리면 안 된다(잘려야 한다)");
+});
+
+test("리더 멘션은 즉시 제안이 아니라 판단 실행을 요청한다", () => {
+  const result = handleTelegramInput(
+    { kind: "message", envelope: envelope("@leader_bot build the mention router") },
     ownerContext(),
     ports()
   );
@@ -62,7 +142,7 @@ test("소대장 멘션은 즉시 제안이 아니라 판단 실행을 요청한�
   const request = gateway.payload.executionRequest as { attemptId: string; adapterType: string; reportBotRole: string };
   assert.equal(isLeaderPlanningAttempt(request.attemptId), true);
   assert.equal(request.adapterType, "claude_code");
-  assert.equal(request.reportBotRole, "platoon_leader");
+  assert.equal(request.reportBotRole, "leader");
   assert.equal(result.events[0]?.payload.stage, "leader_planning_requested");
   assert.equal(result.events[0]?.payload.triggeringText, "build the mention router");
   assert.equal(
@@ -72,31 +152,31 @@ test("소대장 멘션은 즉시 제안이 아니라 판단 실행을 요청한�
   );
 });
 
-test("다중 AI 요청도 소대장이 판단해 배분한다", () => {
+test("다중 AI 요청도 리더가 판단해 배분한다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot ClaudeBot과 CodexBot이 각각 의견 내고 AuditBot이 검증해서 결론 내줘") },
+    { kind: "message", envelope: envelope("@leader_bot ClaudeBot과 CodexBot이 각각 의견 내고 AuditBot이 검증해서 결론 내줘") },
     ownerContext(),
     ports()
   );
 
   assert.equal(result.accepted, true);
-  // 누구에게 시킬지는 정규식이 봇 이름을 찾는 게 아니라 소대장이 판단한다.
+  // 누구에게 시킬지는 정규식이 봇 이름을 찾는 게 아니라 리더가 판단한다.
   const gateway = result.outbox.find((item) => item.target.kind === "local_gateway");
   assert.ok(gateway, "판단 실행이 게이트웨이로 나가야 한다");
   assert.equal(isLeaderPlanningAttempt((gateway.payload.executionRequest as { attemptId: string }).attemptId), true);
   assert.match(String(gateway.payload.triggeringText), /ClaudeBot과 CodexBot/);
 });
 
-test("담당 지목이 있어도 소대장이 판단해 배분한다", () => {
+test("담당 지목이 있어도 리더가 판단해 배분한다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot Claude Code로 이 코드 점검해줘") },
+    { kind: "message", envelope: envelope("@leader_bot Claude Code로 이 코드 점검해줘") },
     ownerContext(),
     ports()
   );
 
   assert.equal(result.accepted, true);
   // 예전에는 정규식이 "Claude" 를 찾아 담당을 못박았다.
-  // 이제는 요청 원문을 소대장에게 넘기고 소대장이 배분을 판단한다.
+  // 이제는 요청 원문을 리더에게 넘기고 리더가 배분을 판단한다.
   const gateway = result.outbox.find((item) => item.target.kind === "local_gateway");
   assert.ok(gateway);
   assert.match(String(gateway.payload.triggeringText), /Claude Code/);
@@ -105,7 +185,7 @@ test("담당 지목이 있어도 소대장이 판단해 배분한다", () => {
 
 test("bare continuation mention asks for task clarification", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 계속해") },
+    { kind: "message", envelope: envelope("@leader_bot 계속해") },
     ownerContext(),
     ports()
   );
@@ -116,7 +196,7 @@ test("bare continuation mention asks for task clarification", () => {
 });
 
 test("vague actor delegation asks for concrete work instead of creating a proposal", () => {
-  for (const text of ["@platoon_bot 그러면 코덱스에게 시켜", "@platoon_bot 그러면 코덱스에게 작업시켜"]) {
+  for (const text of ["@leader_bot 그러면 코덱스에게 시켜", "@leader_bot 그러면 코덱스에게 작업시켜"]) {
     const result = handleTelegramInput(
       { kind: "message", envelope: envelope(text) },
       ownerContext(),
@@ -130,7 +210,7 @@ test("vague actor delegation asks for concrete work instead of creating a propos
 });
 test("context-dependent error fix request asks for the missing error context", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 이거 오류 해결해") },
+    { kind: "message", envelope: envelope("@leader_bot 이거 오류 해결해") },
     ownerContext(),
     ports()
   );
@@ -143,7 +223,7 @@ test("context-dependent error fix request asks for the missing error context", (
 
 test("context-dependent fix request with attachment becomes a work proposal", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 이거 오류 해결해", undefined, "platoon_leader", "platoon_bot", { attachmentKinds: ["photo"] }) },
+    { kind: "message", envelope: envelope("@leader_bot 이거 오류 해결해", undefined, "leader", "leader_bot", { attachmentKinds: ["photo"] }) },
     ownerContext(),
     ports()
   );
@@ -157,7 +237,7 @@ test("context-dependent fix request with attachment becomes a work proposal", ()
 
 test("bare continuation reply to a proposal message becomes a follow-up proposal", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("진행해", undefined, "platoon_leader", "platoon_bot", { replyToMessageText: "작업 실행을 시작했습니다: proposal_abc-123" }) },
+    { kind: "message", envelope: envelope("진행해", undefined, "leader", "leader_bot", { replyToMessageText: "작업 실행을 시작했습니다: proposal_abc-123" }) },
     ownerContext(),
     ports()
   );
@@ -171,7 +251,7 @@ test("bare continuation reply to a proposal message becomes a follow-up proposal
 
 test("context-dependent fix request reply to a proposal message becomes a follow-up proposal", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("이거 오류 해결해", undefined, "platoon_leader", "platoon_bot", { replyToMessageText: "작업 실행을 시작했습니다: proposal_abc-123" }) },
+    { kind: "message", envelope: envelope("이거 오류 해결해", undefined, "leader", "leader_bot", { replyToMessageText: "작업 실행을 시작했습니다: proposal_abc-123" }) },
     ownerContext(),
     ports()
   );
@@ -183,19 +263,19 @@ test("context-dependent fix request reply to a proposal message becomes a follow
 });
 
 test("caption text and reply context are parsed from Telegram updates", () => {
-  const parsed = TelegramUpdateEnvelope.parse("bot-platoon", "platoon_bot", "platoon_leader", {
+  const parsed = TelegramUpdateEnvelope.parse("bot-leader", "leader_bot", "leader", {
     update_id: 77,
     message: {
       message_id: 7001,
       chat: { id: 1001 },
       from: { id: 2001, is_bot: false },
-      caption: "@platoon_bot 이거 오류 해결해",
+      caption: "@leader_bot 이거 오류 해결해",
       photo: [{ file_id: "photo-file" }],
       reply_to_message: { message_id: 6001, text: "작업 실행을 시작했습니다: proposal_abc-123" }
     }
   });
 
-  assert.equal(parsed.messageText, "@platoon_bot 이거 오류 해결해");
+  assert.equal(parsed.messageText, "@leader_bot 이거 오류 해결해");
   assert.equal(parsed.replyToMessageId, "6001");
   assert.match(parsed.replyToMessageText ?? "", /proposal_abc-123/);
   assert.deepEqual(parsed.attachmentKinds, ["photo"]);
@@ -203,18 +283,18 @@ test("caption text and reply context are parsed from Telegram updates", () => {
 
 test("기존 작업 후속 요청은 연결을 잃지 않는다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot proposal_abc 이어서 진행해줘") },
+    { kind: "message", envelope: envelope("@leader_bot proposal_abc 이어서 진행해줘") },
     ownerContext(),
     ports()
   );
 
   assert.equal(result.accepted, true);
-  // 소대장이 판단하더라도 어느 작업의 후속인지는 보존되어야 한다.
+  // 리더가 판단하더라도 어느 작업의 후속인지는 보존되어야 한다.
   assert.equal(result.events[0]?.payload.targetId, "proposal_abc");
   assert.equal(result.events[0]?.payload.intent, "task_followup");
 });
 
-function envelope(messageText?: string, callbackData?: string, botRole: "platoon_leader" | "claude_leader" | "codex_leader" | "auditor" = "platoon_leader", botUsername = "platoon_bot", options: { replyToMessageText?: string; attachmentKinds?: readonly string[] } = {}): TelegramUpdateEnvelope {
+function envelope(messageText?: string, callbackData?: string, botRole: "leader" | "claude_leader" | "codex_leader" | "auditor" = "leader", botUsername = "leader_bot", options: { replyToMessageText?: string; attachmentKinds?: readonly string[] } = {}): TelegramUpdateEnvelope {
   return new TelegramUpdateEnvelope(
     `bot-${botRole}`,
     botUsername,
@@ -322,13 +402,13 @@ test("owner approval immediately posts execution-started message before gateway 
   assert.equal(startedIndex < gatewayIndex, true, "실행 요청이 방장 안내보다 먼저 나간다");
 
   const started = result.outbox[startedIndex];
-  assert.equal(started?.target.kind === "telegram_bot" ? started.target.botRole : undefined, "platoon_leader");
+  assert.equal(started?.target.kind === "telegram_bot" ? started.target.botRole : undefined, "leader");
   assert.match(String(started?.payload.text), /AI 작업자를 배정/);
 });
 
-test("개선 요청도 소대장이 읽고 배분을 판단한다", () => {
+test("개선 요청도 리더가 읽고 배분을 판단한다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 추가로 개선할 사항을 찾아줘") },
+    { kind: "message", envelope: envelope("@leader_bot 추가로 개선할 사항을 찾아줘") },
     ownerContext(),
     ports()
   );
@@ -389,11 +469,11 @@ test("task trace command includes structured DB query payload", () => {
   assert.deepEqual(result.outbox[0]?.payload.query, { kind: "trace", taskId: "22222222-2222-4222-8222-222222222222" });
 });
 
-test("질문인지 작업인지는 키워드 표가 아니라 소대장이 가른다", () => {
+test("질문인지 작업인지는 키워드 표가 아니라 리더가 가른다", () => {
   // 예전에는 "정리해줘" 같은 단어 하나로 질문으로 분류돼,
-  // 실제 작업 지시가 소대장에게 닿지 못하고 정형 답변만 나갔다.
+  // 실제 작업 지시가 리더에게 닿지 못하고 정형 답변만 나갔다.
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 로그인 세션이 풀리는 원인을 정리해줘") },
+    { kind: "message", envelope: envelope("@leader_bot 로그인 세션이 풀리는 원인을 정리해줘") },
     ownerContext(),
     ports()
   );
@@ -407,7 +487,7 @@ test("질문인지 작업인지는 키워드 표가 아니라 소대장이 가�
 
 test("인사·감사는 판단을 돌리지 않는다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 고마워") },
+    { kind: "message", envelope: envelope("@leader_bot 고마워") },
     ownerContext(),
     ports()
   );
@@ -442,7 +522,7 @@ test("실행 기본값 없는 방에서 승인 콜백은 던지지 않고 사용
     assert.equal(result.accepted, true);
     assert.equal(result.events[0]?.eventType, "owner_task_approved", "승인 자체는 감사 추적을 위해 이벤트로 남는다");
     assert.equal(result.outbox.length, 1, "실행이 안 되니 local_gateway 실행 요청이 추가로 붙으면 안 된다");
-    assert.equal(result.outbox[0]?.target.kind === "telegram_bot" ? result.outbox[0].target.botRole : undefined, "platoon_leader");
+    assert.equal(result.outbox[0]?.target.kind === "telegram_bot" ? result.outbox[0].target.botRole : undefined, "leader");
     const text = String(result.outbox[0]?.payload.text);
     assert.doesNotMatch(text, /작업 실행을 시작했습니다/, "실행되지 않을 것을 시작했다고 말하면 안 된다(거짓 안심)");
     assert.doesNotMatch(text, /missing-execution-defaults/, "내부 에러 코드를 사용자에게 노출하면 안 된다");
@@ -513,7 +593,7 @@ test("approvalEventIdempotencyKey 주입이 없으면 기존과 완전히 동일
   );
 
   assert.equal(result.accepted, true);
-  assert.equal(result.events[0]?.idempotencyKey, "owner_task_approved:bot-platoon_leader:77:proposal-1");
+  assert.equal(result.events[0]?.idempotencyKey, "owner_task_approved:bot-leader:77:proposal-1");
 });
 
 test("approvalEventIdempotencyKey 를 주입하면 승인 이벤트가 그 키를 그대로 쓴다", () => {
@@ -546,7 +626,7 @@ test("approvalEventIdempotencyKey 주입은 콜백 승인 이벤트에만 적용
 
   // 제안 생성 이벤트 — 승인 이벤트가 아니다.
   const proposalResult = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 새 기능 추가해줘") },
+    { kind: "message", envelope: envelope("@leader_bot 새 기능 추가해줘") },
     ownerContext(),
     portsWithOverride
   );
@@ -559,11 +639,11 @@ test("approvalEventIdempotencyKey 주입은 콜백 승인 이벤트에만 적용
 // 서로 다른 키를 만들어 huai_outbox 에 local_gateway 행이 2개 쌓이고 CLI 가 두 번
 // 실행된다. 아래 테스트들은 이 경계를 entityId(승인) / entityId+메시지id(검증) 로
 // 옮긴 것을 검증한다.
-function envelopeWithIds(updateId: string, telegramMessageId: string | undefined, callbackData?: string, botId = "bot-platoon", botUsername = "platoon_bot"): TelegramUpdateEnvelope {
+function envelopeWithIds(updateId: string, telegramMessageId: string | undefined, callbackData?: string, botId = "bot-leader", botUsername = "leader_bot"): TelegramUpdateEnvelope {
   return new TelegramUpdateEnvelope(
     botId,
     botUsername,
-    "platoon_leader",
+    "leader",
     updateId,
     "1001",
     telegramMessageId,
@@ -697,7 +777,7 @@ test("첫 검증(/verify 명령)과 그 뒤 재검증(버튼)은 서로 다른 �
 
 test("판단 경로가 없으면 기존 정형 답변으로 떨어진다", () => {
   const result = handleTelegramInput(
-    { kind: "message", envelope: envelope("@platoon_bot 설명문 관계도 흐름도 여기 채팅장에 띄워 줄 수 있나?") },
+    { kind: "message", envelope: envelope("@leader_bot 설명문 관계도 흐름도 여기 채팅장에 띄워 줄 수 있나?") },
     ownerContext(),
     { makeId: (prefix: string) => `${prefix}-1`, now: () => "2026-08-10T00:00:00.000Z" }
   );

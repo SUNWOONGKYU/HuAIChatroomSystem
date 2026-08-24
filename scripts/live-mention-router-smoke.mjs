@@ -8,8 +8,8 @@ const botPid = Number(readFileSync("C:\\tmp\\huai-bot-service.pid", "utf8").trim
 const env = { ...process.env, ...await readWindowsProcessEnv(botPid) };
 applyOperationEnvAliases(env);
 
-const botUsername = String(env.BOT_SERVICE_PLATOON_BOT_USERNAME).replace(/^@/, "");
-const secret = env.BOT_SERVICE_PLATOON_WEBHOOK_SECRET;
+const botUsername = String(env.BOT_SERVICE_LEADER_BOT_USERNAME).replace(/^@/, "");
+const secret = env.BOT_SERVICE_LEADER_WEBHOOK_SECRET;
 const roomInfo = await loadRoomInfo();
 const chatId = Number(env.BOT_SERVICE_TELEGRAM_CHAT_ID ?? roomInfo.telegramChatId);
 const ownerId = Number(env.BOT_SERVICE_OWNER_TELEGRAM_USER_ID ?? roomInfo.ownerTelegramUserId);

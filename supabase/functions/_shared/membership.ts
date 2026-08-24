@@ -70,7 +70,7 @@ async function checkTelegramChatMembership(
   roomId: string,
   telegramUserId: string
 ): Promise<TelegramChatMembership> {
-  const botToken = Deno.env.get("TELEGRAM_PLATOON_BOT_TOKEN");
+  const botToken = Deno.env.get("TELEGRAM_LEADER_BOT_TOKEN");
   if (!botToken) return "unavailable";
 
   const { data: room, error } = await supabase

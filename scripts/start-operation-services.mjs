@@ -12,7 +12,7 @@ const GATEWAY_PID = "C:\\tmp\\huai-local-gateway.pid";
 const loadedEnv = applyOperationEnvFile(process.env, process.env.OPERATION_ENV_FILE);
 if (loadedEnv.loaded) console.log(`operation_env_file_loaded keys=${loadedEnv.keys.length}`);
 
-for (const role of ["PLATOON", "CLAUDE", "CODEX", "AUDITOR"]) {
+for (const role of ["LEADER", "CLAUDE", "CODEX", "AUDITOR"]) {
   const key = `BOT_SERVICE_${role}_WEBHOOK_SECRET`;
   if (!process.env[key]) process.env[key] = randomBytes(48).toString("hex");
 }

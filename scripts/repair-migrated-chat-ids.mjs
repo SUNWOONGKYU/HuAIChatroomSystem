@@ -31,7 +31,7 @@ export function migrateTargetFromResponse(response) {
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
-  const token = requireEnv("BOT_SERVICE_PLATOON_BOT_TOKEN");
+  const token = requireEnv("BOT_SERVICE_LEADER_BOT_TOKEN");
   const base = requireEnv("SUPABASE_URL").replace(/\/+$/, "");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   const headers = { apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json" };

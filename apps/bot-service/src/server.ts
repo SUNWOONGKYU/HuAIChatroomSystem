@@ -123,7 +123,7 @@ async function maybeStartTelegramPolling(
 
 function telegramPollingBotsFromEnv(env: NodeJS.ProcessEnv): TelegramPollingBot[] {
   const pairs: Array<[string | undefined, string | undefined]> = [
-    [env.BOT_SERVICE_PLATOON_BOT_USERNAME, env.BOT_SERVICE_PLATOON_BOT_TOKEN],
+    [env.BOT_SERVICE_LEADER_BOT_USERNAME, env.BOT_SERVICE_LEADER_BOT_TOKEN],
     [env.BOT_SERVICE_CLAUDE_BOT_USERNAME, env.BOT_SERVICE_CLAUDE_BOT_TOKEN],
     [env.BOT_SERVICE_CODEX_BOT_USERNAME, env.BOT_SERVICE_CODEX_BOT_TOKEN],
     [env.BOT_SERVICE_AUDITOR_BOT_USERNAME, env.BOT_SERVICE_AUDITOR_BOT_TOKEN]
@@ -157,14 +157,14 @@ function maybeStartExecutionHeartbeat(
     // 입력중 표시는 있으면 쓰고 없으면 건너뛴다. 경과 시간 메시지가 본체이므로, 이것 때문에
     // 하트비트 전체를 멈추지 않는다 — 실제로 그렇게 막혀 아무 표시도 안 나갔다.
     sendTypingAction: async (telegramChatId) => {
-      await sender.sendChatAction?.({ botRole: "platoon_leader", telegramChatId, action: "typing" });
+      await sender.sendChatAction?.({ botRole: "leader", telegramChatId, action: "typing" });
     },
     async sendProgressMessage(telegramChatId, text, messageThreadId) {
-      const result = await sender.sendMessage({ botRole: "platoon_leader", telegramChatId, messageThreadId, text });
+      const result = await sender.sendMessage({ botRole: "leader", telegramChatId, messageThreadId, text });
       return result.telegramMessageId;
     },
     async editProgressMessage(telegramChatId, messageId, text) {
-      await sender.editMessageText({ botRole: "platoon_leader", telegramChatId, telegramMessageId: messageId, text });
+      await sender.editMessageText({ botRole: "leader", telegramChatId, telegramMessageId: messageId, text });
     },
     onError(error) {
       console.error(`bot-service-execution-heartbeat-error:${maskServerError(error)}`);

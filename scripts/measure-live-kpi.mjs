@@ -35,7 +35,7 @@ export function summarizeFairness(submittedAtMs, startedEvents) {
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
   const base = requireEnv("SUPABASE_URL").replace(/\/+$/, "");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-  const token = requireEnv("BOT_SERVICE_PLATOON_BOT_TOKEN");
+  const token = requireEnv("BOT_SERVICE_LEADER_BOT_TOKEN");
   const headers = { apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json" };
 
   const rooms = await supabase("/huai_rooms?select=room_id,purpose,telegram_chat_id,status&status=eq.active");

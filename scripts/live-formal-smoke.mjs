@@ -11,19 +11,19 @@ applyOperationEnvAliases(env);
 const required = [
   "SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
-  "BOT_SERVICE_PLATOON_BOT_USERNAME",
-  "BOT_SERVICE_PLATOON_WEBHOOK_SECRET",
+  "BOT_SERVICE_LEADER_BOT_USERNAME",
+  "BOT_SERVICE_LEADER_WEBHOOK_SECRET",
   "BOT_SERVICE_TELEGRAM_CHAT_ID"
 ];
 for (const key of required) if (!env[key]) throw new Error(`missing-live-env:${key}`);
 
 const stamp = Date.now();
 const prompt = `formal smoke OK ${stamp}`;
-const botUsername = String(env.BOT_SERVICE_PLATOON_BOT_USERNAME).replace(/^@/, "");
+const botUsername = String(env.BOT_SERVICE_LEADER_BOT_USERNAME).replace(/^@/, "");
 const roomInfo = await loadRoomInfo();
 const chatId = Number(env.BOT_SERVICE_TELEGRAM_CHAT_ID ?? roomInfo.telegramChatId);
 const ownerId = Number(env.BOT_SERVICE_OWNER_TELEGRAM_USER_ID ?? roomInfo.ownerTelegramUserId);
-const secret = env.BOT_SERVICE_PLATOON_WEBHOOK_SECRET;
+const secret = env.BOT_SERVICE_LEADER_WEBHOOK_SECRET;
 
 const commandAck = await postWebhook(botUsername, secret, {
   update_id: stamp,

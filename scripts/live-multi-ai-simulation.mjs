@@ -11,8 +11,8 @@ applyOperationEnvAliases(env);
 
 const baseUrl = required("SUPABASE_URL").replace(/\/+$/, "");
 const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
-const botUsername = required("BOT_SERVICE_PLATOON_BOT_USERNAME").replace(/^@/, "");
-const webhookSecret = required("BOT_SERVICE_PLATOON_WEBHOOK_SECRET");
+const botUsername = required("BOT_SERVICE_LEADER_BOT_USERNAME").replace(/^@/, "");
+const webhookSecret = required("BOT_SERVICE_LEADER_WEBHOOK_SECRET");
 const chatId = Number(required("BOT_SERVICE_TELEGRAM_CHAT_ID"));
 const ownerId = Number(env.BOT_SERVICE_OWNER_TELEGRAM_USER_ID || "52485734");
 const stamp = Date.now();

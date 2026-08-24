@@ -5,9 +5,9 @@ import { handleTelegramInput } from "../src/index.js";
 
 test("callback outbox preserves callback query id for Telegram answer", () => {
   const envelope = new TelegramUpdateEnvelope(
-    "bot-platoon",
-    "platoon_bot",
-    "platoon_leader",
+    "bot-leader",
+    "leader_bot",
+    "leader",
     "77",
     "1001",
     "7001",

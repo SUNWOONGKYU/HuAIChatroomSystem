@@ -27,7 +27,7 @@ test("같은 제안이 이벤트로 여러 번 남아도 한 번만 취소한다
   assert.equal(stale.length, 1);
 });
 
-test("소대장 기획 요청은 재고가 아니다", () => {
+test("리더 기획 요청은 재고가 아니다", () => {
   // payload.stage='leader_planning_requested' 는 proposalId 가 없고 작업 현황판도 안 보여준다.
   // 이걸 취소 대상에 넣으면 원장에 entity_ref 가 없는 쓰레기 행이 쌓인다.
   const stale = selectStaleProposals(

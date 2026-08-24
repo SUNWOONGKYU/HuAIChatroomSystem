@@ -22,11 +22,11 @@ test("uses the token for the requested bot role on send and edit", async () => {
     }
   });
 
-  await sender.sendMessage({ botRole: "platoon_leader", telegramChatId: "1001", text: "hello" });
+  await sender.sendMessage({ botRole: "leader", telegramChatId: "1001", text: "hello" });
   await sender.editMessageText({ botRole: "auditor", telegramChatId: "1001", telegramMessageId: "77", text: "checked" });
 
-  assert.deepEqual(resolvedRoles, ["platoon_leader", "auditor"]);
-  assert.equal(urls[0], "https://api.telegram.org/botplatoon_leader-token/sendMessage");
+  assert.deepEqual(resolvedRoles, ["leader", "auditor"]);
+  assert.equal(urls[0], "https://api.telegram.org/botleader-token/sendMessage");
   assert.equal(urls[1], "https://api.telegram.org/botauditor-token/editMessageText");
   assert.deepEqual(bodies[0], { chat_id: "1001", text: "hello" });
   assert.deepEqual(bodies[1], { chat_id: "1001", message_id: "77", text: "checked" });
@@ -44,14 +44,14 @@ test("grammy sender sends messages without optional reply id", async () => {
       async sendDocument() { return { message_id: 125 } as never; }
     })
   });
-  const sent = await sender.sendMessage({ botRole: "platoon_leader", telegramChatId: "1001", text: "hello" });
+  const sent = await sender.sendMessage({ botRole: "leader", telegramChatId: "1001", text: "hello" });
   assert.equal(sent.telegramMessageId, "123");
 });
 test("honors telegram retry_after when rate limited", async () => {
   const store = new SingleOutboxStore({
     outboxId: "outbox-1",
     idempotencyKey: "idem-1",
-    target: { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" },
+    target: { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" },
     payload: { text: "slow down" },
     status: "processing",
     attempts: 0
@@ -85,7 +85,7 @@ test("treats expired callback answer as non-fatal", async () => {
   const store = new SingleOutboxStore({
     outboxId: "outbox-callback-expired",
     idempotencyKey: "idem-callback-expired",
-    target: { kind: "telegram_bot", botRole: "platoon_leader", telegramChatId: "1001" },
+    target: { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" },
     payload: { callbackQueryId: "old-callback" },
     status: "processing",
     attempts: 0
@@ -204,7 +204,7 @@ test("fetch sender attaches timeout signal to Telegram API calls", async () => {
     }
   });
 
-  await sender.sendMessage({ botRole: "platoon_leader", telegramChatId: "1001", text: "hello" });
+  await sender.sendMessage({ botRole: "leader", telegramChatId: "1001", text: "hello" });
   assert.equal(signal instanceof AbortSignal, true);
 });
 
@@ -229,7 +229,7 @@ test("grammy sender 도 실행 중 표시를 보낼 수 있다", async () => {
   });
 
   assert.ok(sender.sendChatAction, "이 함수가 없으면 하트비트가 시작조차 안 된다");
-  await sender.sendChatAction!({ botRole: "platoon_leader", telegramChatId: "1001", action: "typing" });
+  await sender.sendChatAction!({ botRole: "leader", telegramChatId: "1001", action: "typing" });
   assert.deepEqual(calls, [{ chatId: "1001", action: "typing" }]);
 });
 

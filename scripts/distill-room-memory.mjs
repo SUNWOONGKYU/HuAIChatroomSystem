@@ -58,7 +58,7 @@ export function splitDistillOutput(text) {
   };
 }
 
-// 사람도 읽고 소대장도 읽는 형식. frontmatter 로 무엇의 요약인지 밝힌다.
+// 사람도 읽고 리더도 읽는 형식. frontmatter 로 무엇의 요약인지 밝힌다.
 export function renderMemoryNote(room, date, parsed, model) {
   return [
     "---",
@@ -169,7 +169,7 @@ async function main() {
       }
 
       const parsed = splitDistillOutput(result.text);
-      // 세션 폴더에 그날의 위키로 남긴다. 소대장은 이 파일을 읽는다 — 같은 PC 에서 돌기 때문이다.
+      // 세션 폴더에 그날의 위키로 남긴다. 리더는 이 파일을 읽는다 — 같은 PC 에서 돌기 때문이다.
       await mkdir(roomDir, { recursive: true });
       await writeFile(
         path.join(roomDir, `${manifest.archive_date}_위키.md`),

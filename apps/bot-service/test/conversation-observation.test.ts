@@ -18,12 +18,12 @@ test("사람끼리의 대화는 관찰로 분류된다", () => {
   assert.equal(decision.kind === "accepted" ? decision.input.kind : undefined, "observation");
 });
 
-test("소대장을 부르면 소대장 호출로 분류된다", () => {
+test("리더를 부르면 리더 호출로 분류된다", () => {
   const decision = accept(message(2, "1", "@leader_chatroom_bot 정리해서 진행해줘"));
   assert.equal(decision.kind === "accepted" ? decision.input.kind : undefined, "message");
 });
 
-test("명령은 언제나 소대장 호출이다", () => {
+test("명령은 언제나 리더 호출이다", () => {
   const decision = accept(message(3, "1", "/tasks"));
   assert.equal(decision.kind === "accepted" ? decision.input.kind : undefined, "command");
 });
@@ -36,7 +36,7 @@ test("관찰은 어떤 작업도 만들지 않는다", () => {
   assert.equal(result.accepted ? result.outbox.length : -1, 0, "관찰은 메시지를 보내지 않는다");
 });
 
-test("4턴 대화에서 제안은 소대장을 부른 1회만 생성된다", () => {
+test("4턴 대화에서 제안은 리더를 부른 1회만 생성된다", () => {
   const conversation: Array<[string, string]> = [
     ["2", "결제 실패율이 올라간 것 같아 확인이 필요해"],
     ["1", "맞아 어제부터야. 재시도 로직 쪽 같은데"],
@@ -56,13 +56,13 @@ test("4턴 대화에서 제안은 소대장을 부른 1회만 생성된다", () 
   });
 
   assert.equal(observations, 3, "사람끼리의 3턴은 관찰이어야 한다");
-  assert.equal(proposals, 1, "제안은 소대장을 부른 1회만 생성되어야 한다");
+  assert.equal(proposals, 1, "제안은 리더를 부른 1회만 생성되어야 한다");
 });
 
-test("동료도 소대장을 부를 수 있다 (심의는 여럿, 승인은 방장)", () => {
+test("동료도 리더를 부를 수 있다 (심의는 여럿, 승인은 방장)", () => {
   const decision = accept(message(20, "2", "@leader_chatroom_bot 이 건 정리해줘"));
   const result = handleTelegramInput(decision.kind === "accepted" ? decision.input : (undefined as never), authorization(), ports());
-  assert.equal(result.accepted, true, "동료의 소대장 호출은 허용된다");
+  assert.equal(result.accepted, true, "동료의 리더 호출은 허용된다");
 });
 
 test("동료는 승인 버튼을 누를 수 없다", () => {
@@ -88,7 +88,7 @@ test("다른 봇의 메시지에 답장한 것은 내 일이 아니다", () => {
     text: "그거 다시 해봐",
     reply_to_message: { message_id: 299, text: "실행 완료 보고", from: { id: "998", is_bot: true, username: "codex_chatroom_bot" } }
   });
-  assert.equal(addressed(envelope), false, "CodexBot 보고에 대한 답장을 소대장이 가로채면 안 된다");
+  assert.equal(addressed(envelope), false, "CodexBot 보고에 대한 답장을 리더가 가로채면 안 된다");
 });
 
 test("사람 메시지에 답장한 것은 사람끼리의 대화다", () => {
@@ -99,13 +99,13 @@ test("사람 메시지에 답장한 것은 사람끼리의 대화다", () => {
   assert.equal(addressed(envelope), false);
 });
 
-test("다른 봇을 지목한 발화를 소대장이 자기 지시로 처리하지 않는다", () => {
+test("다른 봇을 지목한 발화를 리더가 자기 지시로 처리하지 않는다", () => {
   const envelope = parse({ text: "@codex_chatroom_bot 그거 다시 해봐" });
   assert.equal(addressed(envelope), false, "네 봇이 한 발화를 각자 처리하면 중복 실행된다");
 });
 
-test("이름 없는 명령은 소대장이, 이름 붙은 명령은 지목된 봇이 받는다", () => {
-  assert.equal(addressed(parse({ text: "/tasks" })), true, "기본 입력 창구는 소대장이다");
+test("이름 없는 명령은 리더가, 이름 붙은 명령은 지목된 봇이 받는다", () => {
+  assert.equal(addressed(parse({ text: "/tasks" })), true, "기본 입력 창구는 리더이다");
   assert.equal(addressed(parse({ text: "/tasks@codex_chatroom_bot" })), false);
   assert.equal(addressed(parse({ text: "/tasks@leader_chatroom_bot" })), true);
 });
@@ -114,9 +114,9 @@ test("일반 발화는 관찰이다", () => {
   assert.equal(addressed(parse({ text: "오늘 점심 뭐 먹지" })), false);
 });
 
-test("태그 없이 이름만 불러도 소대장이 알아듣는다", () => {
+test("태그 없이 이름만 불러도 리더가 알아듣는다", () => {
   for (const text of [
-    "소대장 이거 정리해서 진행해줘",
+    "리더 이거 정리해서 진행해줘",
     "코덱스는 재시도 로직 좀 고쳐줘",
     "클로드는 테스트 쪽 맡아줘",
     "감사관한테 검토해달라고 하자"
@@ -129,14 +129,30 @@ test("이름이 나와도 지시가 아니면 사람끼리의 대화다", () => 
   for (const text of [
     "클로드가 만든 코드가 좀 이상한데",
     "코덱스 결과가 어제보다 낫네",
-    "아까 소대장이 올린 제안 봤어?",
+    "아까 리더가 올린 제안 봤어?",
     "결제 실패율이 올라간 것 같아"
   ]) {
     assert.equal(addressed(parse({ text })), false, text);
   }
 });
 
-test("이름 호출은 소대장만 받는다 (분대장 직접 수신은 승인 게이트를 우회한다)", () => {
+test("별칭이 다른 낱말 속에 들어있으면(부분일치) 지시로 안 본다", () => {
+  for (const text of [
+    "리더십 교육자료 좀 만들어",
+    "감사합니다 정리해서 진행해줘",
+    "우리리더는 참 잘한다 정리해줘"
+  ]) {
+    assert.equal(addressed(parse({ text })), false, text);
+  }
+});
+
+test("존재하지 않는 봇을 지목한 말은 리더 별칭 호출로 새지 않는다", () => {
+  // "leader" 가 부분문자열로 들어있어도 실제 편성에 없는 봇 핸들이면 무시해야 한다 —
+  // 방장이 오타를 내거나 예시 문구를 그대로 붙여넣었을 때 엉뚱하게 접수되면 안 된다.
+  assert.equal(addressed(parse({ text: "@my_leader_chatroom_bot retest.txt에 한 줄 추가해줘" })), false);
+});
+
+test("이름 호출은 리더만 받는다 (팀원 직접 수신은 승인 게이트를 우회한다)", () => {
   const envelope = parse({ text: "코덱스는 재시도 로직 좀 고쳐줘" });
   const toCodex = isAddressedToBot({
     envelope,
@@ -144,25 +160,25 @@ test("이름 호출은 소대장만 받는다 (분대장 직접 수신은 승인
     thisBotRole: "codex_leader",
     allBotUsernames: [BOT, "codex_chatroom_bot"]
   });
-  assert.equal(toCodex, false, "분대장이 직접 받으면 작업 카드·승인·검증이 빠진다");
-  assert.equal(addressed(envelope), true, "소대장이 받아 배분을 판단한다");
+  assert.equal(toCodex, false, "팀원이 직접 받으면 작업 카드·승인·검증이 빠진다");
+  assert.equal(addressed(envelope), true, "리더가 받아 배분을 판단한다");
 });
 
 function parse(message: Record<string, unknown>): TelegramUpdateEnvelope {
-  return TelegramUpdateEnvelope.parse("b1", BOT, "platoon_leader", {
+  return TelegramUpdateEnvelope.parse("b1", BOT, "leader", {
     update_id: 30,
     message: { message_id: 300, chat: { id: CHAT }, from: { id: "1" }, ...message }
   });
 }
 
 function addressed(envelope: TelegramUpdateEnvelope): boolean {
-  return isAddressedToBot({ envelope, thisBotUsername: BOT, thisBotRole: "platoon_leader", allBotUsernames: [BOT, "codex_chatroom_bot"] });
+  return isAddressedToBot({ envelope, thisBotUsername: BOT, thisBotRole: "leader", allBotUsernames: [BOT, "codex_chatroom_bot"] });
 }
 
 function config(): BotServiceConfig {
   return {
     allowedChatIds: [CHAT],
-    botsByUsername: new Map([[BOT, { telegramBotId: "b1", botUsername: BOT, botRole: "platoon_leader", webhookSecret: SECRET }]])
+    botsByUsername: new Map([[BOT, { telegramBotId: "b1", botUsername: BOT, botRole: "leader", webhookSecret: SECRET }]])
   };
 }
 

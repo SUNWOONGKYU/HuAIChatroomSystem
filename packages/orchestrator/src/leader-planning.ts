@@ -1,6 +1,6 @@
-// 소대장의 판단 계층.
+// 리더의 판단 계층.
 //
-// 지금까지 소대장 자리에는 정규식이 앉아 있었다 — 키워드 표로 제목을 고르고
+// 지금까지 리더 자리에는 정규식이 앉아 있었다 — 키워드 표로 제목을 고르고
 // 사용자 문장을 그대로 scope 에 복사했다. 그래서 "복붙 제안"이 나왔고,
 // 사람들이 나눈 논의는 애초에 읽히지도 않았다.
 //
@@ -33,7 +33,7 @@ export type LeaderPlan = {
 
 export type LeaderDecision =
   | { kind: "plan"; plan: LeaderPlan }
-  // 질문이면 작업으로 만들지 않고 소대장이 직접 답한다.
+  // 질문이면 작업으로 만들지 않고 리더가 직접 답한다.
   // 이 갈래가 없으면 "질문인가 작업인가"를 다시 키워드 표가 정하게 된다.
   | { kind: "answer"; text: string }
   // 사람끼리 상의 중이라 나설 자리가 아닌 경우.
@@ -41,9 +41,9 @@ export type LeaderDecision =
 
 const ASSIGNEES = ["claude_leader", "codex_leader", "both"] as const;
 
-// 소대장이 방에 대해 이미 알고 있어야 하는 것.
+// 리더가 방에 대해 이미 알고 있어야 하는 것.
 //
-// 이것이 없으면 소대장은 백지 세션이라 "이 방에 봇이 몇 개야?" 같은 질문에도
+// 이것이 없으면 리더는 백지 세션이라 "이 방에 봇이 몇 개야?" 같은 질문에도
 // "확인해서 보고하겠습니다" 하고 조사 작업을 만든다 — 방장은 답을 원했는데 작업이 하나 생긴다.
 export type RoomFacts = {
   bots: readonly string[];
@@ -51,7 +51,7 @@ export type RoomFacts = {
   openTasks: readonly { title: string; status: string }[];
   // 지난 며칠치 방 기억. 최근 40턴 밖의 일을 아는 유일한 통로다.
   //
-  // 이게 없으면 소대장은 40턴 창 밖을 아예 모른다 — 3주 전 결정을 되물으면 답을 못 하고,
+  // 이게 없으면 리더는 40턴 창 밖을 아예 모른다 — 3주 전 결정을 되물으면 답을 못 하고,
   // 이미 끝난 작업을 새 작업으로 제안한다(라이브에서 달걀 게임이 그랬다: 진행 중 8건만
   // 보고 판단했고 끝난 작업은 시야에 없었다).
   memory?: readonly { date: string; summary: string }[];
@@ -127,7 +127,7 @@ ${entry.summary}`),
     : [];
 
   return [
-    "너는 Telegram 프로젝트방의 소대장이다. 방에는 사람 여럿과 역할별 AI 봇이 함께 있다.",
+    "너는 Telegram 프로젝트방의 리더이다. 방에는 사람 여럿과 역할별 AI 봇이 함께 있다.",
     "",
     ...personaLines,
     ...factLines,
@@ -213,7 +213,7 @@ function parseLineFormat(raw: string): LeaderDecision | undefined {
     return answer ? { kind: "answer", text: answer } : undefined;
   }
   if (decision.startsWith("none") || decision.startsWith("no")) {
-    return { kind: "no_action", reason: fields.get("REASON") || "소대장이 나설 단계가 아니라고 판단했습니다." };
+    return { kind: "no_action", reason: fields.get("REASON") || "리더가 나설 단계가 아니라고 판단했습니다." };
   }
   if (!decision.startsWith("plan")) return undefined;
 
@@ -307,7 +307,7 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-// 소대장이 배분한 담당에 따라 실제로 몇 개의 실행을 띄울지 정한다.
+// 리더가 배분한 담당에 따라 실제로 몇 개의 실행을 띄울지 정한다.
 export function executionRolesForAssignee(assignee: LeaderPlan["assignee"]): Array<"claude_leader" | "codex_leader"> {
   if (assignee === "both") return ["claude_leader", "codex_leader"];
   return [assignee];

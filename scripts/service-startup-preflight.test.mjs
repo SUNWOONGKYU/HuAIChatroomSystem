@@ -12,11 +12,11 @@ const completeEnv = {
   BOT_SERVICE_TELEGRAM_CHAT_ID: "-1001234567890",
   BOT_SERVICE_PUBLIC_BASE_URL: "https://ops.example.com",
   BOT_SERVICE_PORT: "8787",
-  BOT_SERVICE_PLATOON_BOT_TOKEN: "tok-platoon",
+  BOT_SERVICE_LEADER_BOT_TOKEN: "tok-leader",
   BOT_SERVICE_CLAUDE_BOT_TOKEN: "tok-claude",
   BOT_SERVICE_CODEX_BOT_TOKEN: "tok-codex",
   BOT_SERVICE_AUDITOR_BOT_TOKEN: "tok-auditor",
-  BOT_SERVICE_PLATOON_WEBHOOK_SECRET: "sec-platoon",
+  BOT_SERVICE_LEADER_WEBHOOK_SECRET: "sec-leader",
   BOT_SERVICE_CLAUDE_WEBHOOK_SECRET: "sec-claude",
   BOT_SERVICE_CODEX_WEBHOOK_SECRET: "sec-codex",
   BOT_SERVICE_AUDITOR_WEBHOOK_SECRET: "sec-auditor",
@@ -85,6 +85,6 @@ test("formats startup preflight without leaking token or secret values", () => {
   const formatted = formatServiceStartupPreflight(buildServiceStartupPreflight(completeEnv));
 
   assert.match(formatted, /Service startup preflight: READY/);
-  assert.equal(formatted.includes("tok-platoon"), false);
-  assert.equal(formatted.includes("sec-platoon"), false);
+  assert.equal(formatted.includes("tok-leader"), false);
+  assert.equal(formatted.includes("sec-leader"), false);
 });

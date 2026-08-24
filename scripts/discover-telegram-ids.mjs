@@ -1,5 +1,5 @@
 ﻿export async function discoverTelegramIds(env, fetchImpl = fetch) {
-  const role = (env.DISCOVER_TELEGRAM_ROLE || "PLATOON").toUpperCase();
+  const role = (env.DISCOVER_TELEGRAM_ROLE || "LEADER").toUpperCase();
   const token = required(env, `BOT_SERVICE_${role}_BOT_TOKEN`);
   const response = await fetchImpl(`https://api.telegram.org/bot${token}/getUpdates`, {
     method: "POST",

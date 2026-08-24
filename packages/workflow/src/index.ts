@@ -246,7 +246,7 @@ export function transitionTaskStatus(
   if (event === "reverification_passed" && current === "verification_in_progress" && context.isVerifier) {
     return { allowed: true, nextStatus: "commander_completion_pending" };
   }
-  if (event === "commander_completion_approved" && current === "commander_completion_pending" && context.actorRole === "platoon_leader") {
+  if (event === "commander_completion_approved" && current === "commander_completion_pending" && context.actorRole === "leader") {
     return { allowed: true, nextStatus: "completion_approval_pending" };
   }
   if (event === "owner_supplement_requested" && current === "completion_approval_pending" && context.isOwner) {

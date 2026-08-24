@@ -29,7 +29,7 @@ function makeStore(fake: MiniSupabaseFake, now?: () => Date): SupabaseBotService
 }
 
 function envelope(chatId: string, updateId: string, text: string | undefined): TelegramUpdateEnvelope {
-  return new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", updateId, chatId, "10", "9001", false, text, undefined);
+  return new TelegramUpdateEnvelope("bot", "leader_bot", "leader", updateId, chatId, "10", "9001", false, text, undefined);
 }
 
 function seedTwoRooms(fake: MiniSupabaseFake): void {
@@ -54,7 +54,7 @@ function commandCommit(chatId: string, updateId: string, commandName: string, ar
       accepted: true as const,
       authorization: { allowed: true as const },
       events: [],
-      outbox: [{ target: { kind: "telegram_bot" as const, botRole: "platoon_leader" as const, telegramChatId: chatId }, idempotencyKey, payload: outboxPayload }]
+      outbox: [{ target: { kind: "telegram_bot" as const, botRole: "leader" as const, telegramChatId: chatId }, idempotencyKey, payload: outboxPayload }]
     }
   };
 }

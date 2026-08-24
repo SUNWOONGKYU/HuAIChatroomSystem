@@ -23,7 +23,7 @@ create table if not exists huai_room_members (
   status text not null default 'active',
   created_at timestamptz not null default now(),
   primary key (room_id, telegram_user_id),
-  constraint huai_room_members_role_check check (role in ('owner', 'human_member', 'platoon_leader', 'claude_leader', 'codex_leader', 'auditor', 'operator')),
+  constraint huai_room_members_role_check check (role in ('owner', 'human_member', 'leader', 'claude_leader', 'codex_leader', 'auditor', 'operator')),
   constraint huai_room_members_status_check check (status in ('active', 'invited', 'left', 'removed', 'suspended'))
 );
 
@@ -34,10 +34,10 @@ create table if not exists huai_ai_actors (
   adapter_type text not null,
   status text not null default 'active',
   created_at timestamptz not null default now(),
-  -- 소대장이 방의 맥락을 기억하도록 CLI 세션을 이어받는다(--resume).
+  -- 리더가 방의 맥락을 기억하도록 CLI 세션을 이어받는다(--resume).
   cli_session_id text,
   cli_session_updated_at timestamptz,
-  constraint huai_ai_actors_role_check check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor')),
+  constraint huai_ai_actors_role_check check (role in ('leader', 'claude_leader', 'codex_leader', 'auditor')),
   constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'antigravity', 'auditor')),
   constraint huai_ai_actors_status_check check (status in ('active', 'inactive', 'disabled')),
   unique (room_id, role)
@@ -79,7 +79,7 @@ create table if not exists huai_telegram_bots (
   status text not null default 'active',
   created_at timestamptz not null default now(),
   constraint huai_telegram_bots_status_check check (status in ('active', 'inactive', 'disabled')),
-  constraint huai_telegram_bots_role_check check (role in ('platoon_leader', 'claude_leader', 'codex_leader', 'auditor'))
+  constraint huai_telegram_bots_role_check check (role in ('leader', 'claude_leader', 'codex_leader', 'auditor'))
 );
 
 create table if not exists huai_telegram_updates (

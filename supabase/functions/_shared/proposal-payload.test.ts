@@ -39,7 +39,7 @@ test("이미 결정된 제안(huai_approvals 에 entity_ref 존재)은 안 뜬�
 test("제안 id 두 형식(proposal_<uuid>, p_<16hex>) 모두 처리된다", () => {
   const events = [
     event({ payload: { proposalId: "proposal_11111111-1111-1111-1111-111111111111", title: "규칙기반" } }),
-    event({ payload: { proposalId: "p_0123456789abcdef", title: "소대장판단", assignee: "codex_leader" } })
+    event({ payload: { proposalId: "p_0123456789abcdef", title: "리더판단", assignee: "codex_leader" } })
   ];
   const result = filterPendingProposals(events, []);
   assert.equal(result.length, 2);

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { applyOperationEnvFile } from "./operation-env-loader.mjs";
 
 const ROLES = [
-  ["PLATOON", "leader_chatroom_bot", "leaderbot-deep-orange.jpg"],
+  ["LEADER", "leader_chatroom_bot", "leaderbot-deep-orange.jpg"],
   ["CLAUDE", "claude_chatroom1_bot", "claudebot-orange.jpg"],
   ["CODEX", "codex_chatroom_bot", "codexbot-purple.jpg"],
   ["AUDITOR", "audit_chatroom_bot", "auditbot-gold.jpg"]

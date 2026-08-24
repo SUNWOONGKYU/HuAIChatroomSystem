@@ -34,7 +34,7 @@ test("persists event task_id and advances huai_tasks status through workflow tra
     message: {
       input: {
         kind: "command",
-        envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "77", "1001", "10", "2001", false, "/verify " + taskId, undefined),
+        envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "77", "1001", "10", "2001", false, "/verify " + taskId, undefined),
         command: { name: "/verify", args: [taskId] }
       },
       idempotencyKey: "telegram-update:bot:77",
@@ -87,7 +87,7 @@ test("persists proposal callback entity id without writing it to uuid task_id", 
     message: {
       input: {
         kind: "callback",
-        envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "88", "1001", "10", "2001", false, undefined, "proposal:" + proposalId + ":approve", "callback-88"),
+        envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "88", "1001", "10", "2001", false, undefined, "proposal:" + proposalId + ":approve", "callback-88"),
         callback: { entity: "proposal", entityId: proposalId, action: "approve" }
       },
       idempotencyKey: "telegram-update:bot:88",

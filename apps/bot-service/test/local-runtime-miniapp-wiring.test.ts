@@ -26,7 +26,7 @@ function tasksCommandMessage(): TelegramInboundQueueMessage {
   return {
     input: {
       kind: "command",
-      envelope: new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", "1", CHAT_A, "10", OWNER_USER_ID, false, "/tasks", undefined),
+      envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "1", CHAT_A, "10", OWNER_USER_ID, false, "/tasks", undefined),
       command: { name: "/tasks", args: [] }
     },
     idempotencyKey: "telegram-update:bot:1",

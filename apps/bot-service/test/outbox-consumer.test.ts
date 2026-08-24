@@ -316,9 +316,9 @@ async function seededOutboxStore(text: string): Promise<FakeBotServiceStore> {
 
 function makeInboundMessage(text: string): TelegramInboundQueueMessage {
   const envelope = new TelegramUpdateEnvelope(
-    "bot-platoon",
-    "platoon_bot",
-    "platoon_leader",
+    "bot-leader",
+    "leader_bot",
+    "leader",
     "1",
     "1001",
     "10",

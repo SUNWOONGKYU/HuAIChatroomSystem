@@ -23,7 +23,7 @@ function makeStore(fake: MiniSupabaseFake, miniAppDirectLinkBaseUrl?: string): S
 }
 
 function envelope(chatId: string, updateId: string, text: string | undefined): TelegramUpdateEnvelope {
-  return new TelegramUpdateEnvelope("bot", "platoon_bot", "platoon_leader", updateId, chatId, "10", "9001", false, text, undefined);
+  return new TelegramUpdateEnvelope("bot", "leader_bot", "leader", updateId, chatId, "10", "9001", false, text, undefined);
 }
 
 function seedTwoRooms(fake: MiniSupabaseFake): void {
@@ -48,7 +48,7 @@ function commandCommit(chatId: string, updateId: string, commandName: string, ar
       accepted: true as const,
       authorization: { allowed: true as const },
       events: [],
-      outbox: [{ target: { kind: "telegram_bot" as const, botRole: "platoon_leader" as const, telegramChatId: chatId }, idempotencyKey, payload: outboxPayload }]
+      outbox: [{ target: { kind: "telegram_bot" as const, botRole: "leader" as const, telegramChatId: chatId }, idempotencyKey, payload: outboxPayload }]
     }
   };
 }
@@ -341,7 +341,7 @@ test("outbox INSERT 가 room_id 를 채운다 — 방마다 각자의 room_id �
       authorization: { allowed: true as const },
       events: [],
       outbox: [{
-        target: { kind: "telegram_bot" as const, botRole: "platoon_leader" as const, telegramChatId: chatId },
+        target: { kind: "telegram_bot" as const, botRole: "leader" as const, telegramChatId: chatId },
         idempotencyKey,
         payload: { text: "hi" }
       }]

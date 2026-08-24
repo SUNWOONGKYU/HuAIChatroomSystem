@@ -9,9 +9,9 @@ test("generates idempotent room seed without raw bot token values", () => {
   assert.match(sql, /insert into huai_room_members/);
   assert.equal((sql.match(/insert into huai_ai_actors/g) ?? []).length, 4);
   assert.equal((sql.match(/insert into huai_telegram_bots/g) ?? []).length, 4);
-  assert.match(sql, /env:BOT_SERVICE_PLATOON_BOT_TOKEN/);
+  assert.match(sql, /env:BOT_SERVICE_LEADER_BOT_TOKEN/);
   assert.match(sql, /env:BOT_SERVICE_AUDITOR_WEBHOOK_SECRET/);
-  assert.equal(sql.includes("test-platoon-token"), false);
+  assert.equal(sql.includes("test-leader-token"), false);
   assert.equal(sql.includes("test-auditor-token"), false);
   assert.match(sql, /on conflict \(room_id\) do update/);
 });
@@ -35,9 +35,9 @@ test("locks the huai_telegram_bots insert/conflict shape for the room-independen
 
   // username 과 role 이 정확한 짝으로 나온다. role 이 봇의 정체성으로 바뀐 뒤로는
   // 어느 username 에 어느 role 이 붙었는지가 핵심이라, role 집합만 보는 것으로는
-  // 짝이 뒤바뀌어도 못 잡는다 (예: platoon_live_bot 이 auditor role 을 받는 경우).
+  // 짝이 뒤바뀌어도 못 잡는다 (예: leader_live_bot 이 auditor role 을 받는 경우).
   assert.deepEqual(botLines.map(insertedBotUsernameRolePair), [
-    ["platoon_live_bot", "platoon_leader"],
+    ["leader_live_bot", "leader"],
     ["claude_live_bot", "claude_leader"],
     ["codex_live_bot", "codex_leader"],
     ["auditor_live_bot", "auditor"]
@@ -258,11 +258,11 @@ function sampleEnv() {
     BOT_SERVICE_OWNER_TELEGRAM_USER_ID: "123456789",
     BOT_SERVICE_EXECUTION_GATEWAY_ID: "gateway-local",
     BOT_SERVICE_EXECUTION_PROJECT_PATH: "C:/Dev/HuAIChatroomSystem",
-    BOT_SERVICE_PLATOON_BOT_USERNAME: "platoon_live_bot",
+    BOT_SERVICE_LEADER_BOT_USERNAME: "leader_live_bot",
     BOT_SERVICE_CLAUDE_BOT_USERNAME: "claude_live_bot",
     BOT_SERVICE_CODEX_BOT_USERNAME: "codex_live_bot",
     BOT_SERVICE_AUDITOR_BOT_USERNAME: "auditor_live_bot",
-    BOT_SERVICE_PLATOON_BOT_TOKEN: "test-platoon-token",
+    BOT_SERVICE_LEADER_BOT_TOKEN: "test-leader-token",
     BOT_SERVICE_AUDITOR_BOT_TOKEN: "test-auditor-token"
   };
 }

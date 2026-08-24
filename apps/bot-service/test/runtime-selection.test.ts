@@ -66,7 +66,7 @@ test("derives distinct execution defaults per room from that room's own actors a
 
 // A-5: 이 방에 설정된 role(BOT_SERVICE_EXECUTION_ACTOR_ROLE)의 actor 가 없으면
 // 예전에는 던져서 부팅 전체를 죽였다. 이제는 undefined 를 돌려주고 그 방만
-// 실행 기본값(소대장 자동 판단) 없이 동작한다 — 예외를 던지지 않는다는 것 자체가
+// 실행 기본값(리더 자동 판단) 없이 동작한다 — 예외를 던지지 않는다는 것 자체가
 // 이 테스트의 핵심 단언이다.
 test("returns undefined instead of throwing when the configured actor role is missing from the room", () => {
   const roomWithoutCodexLeader = room({
@@ -133,7 +133,7 @@ function room(input: {
   actorId: string;
   gatewayId: string;
   projectRoot: string;
-  actorRole?: "platoon_leader" | "claude_leader" | "codex_leader" | "auditor";
+  actorRole?: "leader" | "claude_leader" | "codex_leader" | "auditor";
 }): LoadedSupabaseRoom {
   return {
     roomId: input.roomId,
@@ -157,9 +157,9 @@ function room(input: {
 function baseEnv(): NodeJS.ProcessEnv {
   return {
     BOT_SERVICE_ALLOWED_CHAT_IDS: "1001",
-    BOT_SERVICE_PLATOON_BOT_USERNAME: "platoon_bot",
-    BOT_SERVICE_PLATOON_BOT_ID: "00000000-0000-0000-0000-000000000001",
-    BOT_SERVICE_PLATOON_WEBHOOK_SECRET: "platoon-secret",
+    BOT_SERVICE_LEADER_BOT_USERNAME: "leader_bot",
+    BOT_SERVICE_LEADER_BOT_ID: "00000000-0000-0000-0000-000000000001",
+    BOT_SERVICE_LEADER_WEBHOOK_SECRET: "leader-secret",
     BOT_SERVICE_CLAUDE_BOT_USERNAME: "claude_bot",
     BOT_SERVICE_CLAUDE_BOT_ID: "00000000-0000-0000-0000-000000000002",
     BOT_SERVICE_CLAUDE_WEBHOOK_SECRET: "claude-secret",

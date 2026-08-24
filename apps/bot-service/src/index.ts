@@ -132,10 +132,10 @@ export function routeTelegramUpdate(
     if (isAddressedToADifferentBot(envelope, bot, config)) {
       // 양보에는 전제가 있다: 지목된 봇이 그 방에서 실제로 이 메시지를 받는다는 것.
       // 라이브에서 그 전제가 깨졌다 — 메인방에서 `@claude_chatroom1_bot ...` 을 보내면
-      // 소대장 봇만 업데이트를 받고(fetched=1) 양보했으며, ClaudeBot 에게는 Telegram 이
+      // 리더 봇만 업데이트를 받고(fetched=1) 양보했으며, ClaudeBot 에게는 Telegram 이
       // 아무것도 주지 않아 큐잉이 0건이었다. 아무도 처리하지 않고 방이 조용히 죽었다.
       //
-      // 그래서 소대장은 양보하지 않는다. 소대장은 방의 기본 창구이고, 작업자 배정은
+      // 그래서 리더는 양보하지 않는다. 리더는 방의 기본 창구이고, 작업자 배정은
       // 어차피 수신한 봇이 아니라 본문의 지목(@claude_chatroom1_bot 등)으로 정해진다
       // (packages/orchestrator detectRequestedExecutionActorRole). 지목된 봇이 따로
       // 받아서 기록해도 결과는 같다 — (chat_id, message_id) 중복 판정으로 하나만 남고,
@@ -144,7 +144,7 @@ export function routeTelegramUpdate(
       // 나머지 봇은 계속 양보한다. 그 역할들은 수신 봇 자신이 작업자 배정에 우선 반영되어
       // (예: CodexBot 이 claude 지목 메시지를 처리하면 codex 로 배정된다) 엉뚱한 작업자에게
       // 일이 넘어간다.
-      if (bot.botRole !== "platoon_leader") {
+      if (bot.botRole !== "leader") {
         return { kind: "ignored", reason: "not-addressed-to-this-bot" };
       }
       if (command) return { kind: "accepted", input: { kind: "command", envelope, command } };
@@ -174,8 +174,8 @@ function isAddressedToADifferentBot(
     const first = text.split(/\s+/)[0] ?? "";
     const [, targetUsername] = first.split("@");
     if (targetUsername) return targetUsername !== thisBot.botUsername;
-    // 이름 없는 명령은 소대장이 기본 창구다 — 다른 봇 입장에서는 소대장에게 간 것.
-    return thisBot.botRole !== "platoon_leader";
+    // 이름 없는 명령은 리더가 기본 창구다 — 다른 봇 입장에서는 리더에게 간 것.
+    return thisBot.botRole !== "leader";
   }
 
   const mentionsOtherBot = [...config.botsByUsername.keys()].some(
@@ -195,8 +195,8 @@ function isAddressedToADifferentBot(
     return true;
   }
 
-  // 이름만 부르는 지시(@ 없이)는 늘 소대장 몫이다 — isAddressedToBot 과 동일 규칙.
-  if (isNamedDirective(text)) return thisBot.botRole !== "platoon_leader";
+  // 이름만 부르는 지시(@ 없이)는 늘 리더 몫이다 — isAddressedToBot 과 동일 규칙.
+  if (isNamedDirective(text)) return thisBot.botRole !== "leader";
 
   return false;
 }

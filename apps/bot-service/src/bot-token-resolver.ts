@@ -2,14 +2,14 @@ import { type TelegramBotRole } from "../../../packages/contracts/src/index.js";
 import { type TelegramBotTokenResolver } from "./outbox.js";
 
 const TELEGRAM_BOT_ROLES: readonly TelegramBotRole[] = [
-  "platoon_leader",
+  "leader",
   "claude_leader",
   "codex_leader",
   "auditor"
 ] as const;
 
 export const DEFAULT_TELEGRAM_BOT_TOKEN_SECRET_REFS: Record<TelegramBotRole, string> = {
-  platoon_leader: "env:BOT_SERVICE_PLATOON_BOT_TOKEN",
+  leader: "env:BOT_SERVICE_LEADER_BOT_TOKEN",
   claude_leader: "env:BOT_SERVICE_CLAUDE_BOT_TOKEN",
   codex_leader: "env:BOT_SERVICE_CODEX_BOT_TOKEN",
   auditor: "env:BOT_SERVICE_AUDITOR_BOT_TOKEN"

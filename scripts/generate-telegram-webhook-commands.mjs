@@ -1,5 +1,5 @@
 ﻿const ROLES = [
-  ["PLATOON", "platoon_bot"],
+  ["LEADER", "leader_bot"],
   ["CLAUDE", "claude_bot"],
   ["CODEX", "codex_bot"],
   ["AUDITOR", "auditor_bot"]
