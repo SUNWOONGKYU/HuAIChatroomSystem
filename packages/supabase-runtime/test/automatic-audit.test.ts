@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, auditProducedNoVerdict, fallbackHopCount, nextEngineAfterTried, reportBotRoleForAdapter, buildSingleWorkerAuditPrompt, engineActorName, gatewayFailureEvidence, nextEngineAfter, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
+import { SupabaseOutboxStore, auditProducedNoVerdict, fallbackHopCount, nextEngineAfterTried, reportBotRoleForAdapter, buildSingleWorkerAuditPrompt, buildMultiAiAuditPrompt, engineActorName, gatewayFailureEvidence, nextEngineAfter, producedRealArtifacts, realArtifactPaths, shouldFallbackToOtherEngine } from "../src/index.js";
 import { AI_ADAPTER_TYPES, type GatewayEvent } from "../../contracts/src/index.js";
 
 // 자동 검증 기준: 이 실행이 실제로 무언가를 만들거나 고쳤는가.
@@ -65,6 +65,33 @@ test("감사 프롬프트에 작업자 보고와 바뀐 파일이 담긴다", ()
   assert.match(prompt, /- packages\/orchestrator\/src\/index\.ts/);
   // 감사 결과가 방으로 나가므로 내부 출력 금지는 프롬프트에 남아 있어야 한다.
   assert.match(prompt, /금지/);
+});
+
+// 라이브 결함 회귀(task d364326a, 2026-08-24) — 다중 AI 감사 프롬프트가 Codex 파서만
+// 써서, Claude Code 의 stdout(--output-format json)을 원본 JSON 그대로 실었다. 감사가
+// 그 JSON 덩어리를 보고 "ClaudeBot 결과가 없다"고 오판정했다 — 실제로는 완료했는데도.
+test("다중 AI 감사 프롬프트는 Claude 의 JSON stdout 에서도 사람이 읽는 결과를 뽑는다", () => {
+  const claudeStdoutJson = JSON.stringify({
+    type: "result",
+    result: "test-note.txt 생성 확인. 내용 한 줄, 열람 검증 완료.",
+    session_id: "abc"
+  });
+  const claudePayload = {
+    events: [
+      { type: "accepted" },
+      { type: "started" },
+      { type: "stdout", text: claudeStdoutJson },
+      { type: "completed" }
+    ]
+  };
+  const codexPayload = {
+    events: [{ type: "stdout", text: "파일 생성 완료했습니다." }]
+  };
+
+  const prompt = buildMultiAiAuditPrompt("task-d364326a", claudePayload, codexPayload);
+
+  assert.match(prompt, /test-note\.txt 생성 확인/, "Claude 의 실제 결과 문장이 프롬프트에 있어야 한다");
+  assert.doesNotMatch(prompt, /"type":\s*"result"/, "원본 JSON 이 그대로 새면 안 된다");
 });
 
 test("작업자 보고가 비어도 프롬프트가 빈칸으로 나가지 않는다", () => {

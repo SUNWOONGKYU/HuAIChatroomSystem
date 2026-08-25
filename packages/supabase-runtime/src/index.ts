@@ -1714,7 +1714,7 @@ function isCompletedMultiAiSibling(payload: Record<string, unknown>, taskId: str
   return payload.taskId === taskId && payload.status === "completed" && (payload.attemptId === baseAttemptId + "-claude" || payload.attemptId === baseAttemptId + "-codex");
 }
 
-function buildMultiAiAuditPrompt(taskId: string, claudePayload: Record<string, unknown>, codexPayload: Record<string, unknown>): string {
+export function buildMultiAiAuditPrompt(taskId: string, claudePayload: Record<string, unknown>, codexPayload: Record<string, unknown>): string {
   return [
     "HuAI Collab Chatroom System의 다중 AI 협의 결과를 독립 감사하세요.",
     "대상 작업: " + taskId,
@@ -1730,6 +1730,13 @@ function buildMultiAiAuditPrompt(taskId: string, claudePayload: Record<string, u
   ].join("\n");
 }
 
+// 다중 AI 감사 프롬프트에 실을 요약. ClaudeBot·CodexBot 둘 다의 결과를 감사에게
+// 보여줘야 하는데, 예전에는 extractCodexAgentMessage 만 시도했다 — Claude Code
+// stdout(`--output-format json`)은 이 파서가 못 알아보는 형식이라 원본 JSON 한
+// 덩어리가 그대로 감사 프롬프트에 실렸다(실측: task d364326a, ClaudeBot 이 실제로는
+// 완료했는데 감사가 그 stdout JSON 원문을 보고 "결과가 없어 정확성 평가 불가"라고
+// 오판정했다). 두 파서를 다 시도해 어느 엔진의 출력이든 사람이 읽는 문장으로
+// 뽑히게 한다 — 형식이 안 맞는 파서는 undefined 를 돌려주므로 순서는 안전하다.
 function summarizePersistedGatewayPayload(payload: Record<string, unknown>): string {
   const events = Array.isArray(payload.events) ? payload.events : [];
   const stdoutTexts = events
@@ -1739,7 +1746,7 @@ function summarizePersistedGatewayPayload(payload: Record<string, unknown>): str
     .filter((event) => event && typeof event === "object" && (event as { type?: unknown }).type !== "stderr")
     .map((event) => String((event as { text?: unknown }).text ?? ""));
   const texts = (stdoutTexts.length > 0 ? stdoutTexts : otherTexts)
-    .map((text) => extractCodexAgentMessage(text) ?? text)
+    .map((text) => extractClaudeAgentMessage(text) ?? extractCodexAgentMessage(text) ?? text)
     .map((text) => cleanHumanVisibleOutput(text) ?? "")
     .filter(Boolean);
   return truncate(texts.at(-1) ?? String(payload.errorKind ?? payload.status ?? "결과 요약 없음"), 3200);
