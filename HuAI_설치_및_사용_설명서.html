@@ -467,6 +467,15 @@ node scripts/start-services.mjs</code></pre>
     <pre><code>@&lt;LeaderBot_이름&gt; 안녕</code></pre>
     <div class="tip-box"><code>&lt;LeaderBot_이름&gt;</code>은 <b>그대로 치는 게 아니라 자리표시자</b>입니다. 5단계에서 본인이 BotFather로 지은 LeaderBot 사용자명으로 바꿔 쓰세요 — 텔레그램 봇 이름은 전 세계에서 하나뿐이라 남의 문서에 있는 이름을 그대로 쓸 수 없습니다. 이 설명서에서 <code>&lt;…_이름&gt;</code> 꼴은 전부 같은 뜻입니다.</div>
     <p>LeaderBot이 몇 초 안에 반응하면 설치 성공입니다. 반응이 없으면 탭 05 "문제 해결"을 봅니다.</p>
+
+    <h3 class="section">11단계 — 여러 방 동시 운영하기 (선택)</h3>
+    <p>봇 4개를 그대로 두고, 완전히 다른 프로젝트 폴더를 쓰는 방을 하나 더 운영하고 싶을 때만 합니다. BotFather에서 새 봇을 또 만들 필요는 없습니다 — 같은 봇 4개를 새 방에 다시 초대하면 됩니다.</p>
+    <ol>
+      <li>4~7단계를 새 방 기준으로 그대로 반복합니다(같은 봇 4개 초대 → 새 chat_id·room UUID 확인 → <code>generate-supabase-room-seed.mjs</code> 재실행). 이때 출력된 SQL 안에서 <code>huai_gateway_instances</code>에 들어가는 <b>gateway_id 값을 따로 복사</b>해 둡니다 — 직접 만드는 값이 아니라 스크립트가 방 UUID로 정해서 내놓는 값입니다.</li>
+      <li><code>.env.operation.local</code>의 <code>LOCAL_GATEWAY_EXTRA_INSTANCES</code>에 한 줄 추가합니다: <code>라벨|위에서 복사한 gateway_id|안 쓰는 포트 번호|그 방의 프로젝트 폴더 경로</code>. 방이 여러 개면 세미콜론(<code>;</code>)으로 이어 붙입니다.</li>
+      <li>서비스를 <b><code>node scripts/start-services.mjs</code>가 아니라 <code>node scripts/restart-operation-services-from-live-env.mjs</code></b>로 재시작해야 추가한 방이 같이 뜹니다 — 9단계의 명령은 기본 방 하나만 띄웁니다.</li>
+    </ol>
+    <div class="warn-box">⚠️ 포트 번호는 이미 쓰고 있는 값(기본 8797 등)과 겹치면 안 됩니다. 방마다 프로젝트 폴더도 서로 겹치지 않아야 합니다 — 한 방의 실행이 다른 방의 폴더를 건드리지 않게 막는 장치입니다.</div>
   </section>
 
   <!-- ============ 04. 사용법 ============ -->
