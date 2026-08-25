@@ -33,6 +33,17 @@ test("AC-02: 검증 단계에서 방장 최종 승인으로 건너뛸 수 없다
   }
 });
 
+// 라이브 결함 회귀(2026-08-25) — "both" 배정에서 Claude 가 먼저 시간초과로 실패해
+// blocked 로 굳었는데, 뒤이어 Codex 가 실제로 성공해도 meaningful_intermediate_ready 가
+// blocked 를 안 받아줘서 그 성공이 조용히 묻혔다(task d364326a 실측). blocked 에서도
+// 검증 단계로 넘어갈 수 있어야 짝의 늦은 성공이 작업을 구제한다.
+test("한쪽 엔진이 실패해 blocked 여도, 짝의 늦은 성공은 검증 단계로 넘어간다", () => {
+  assert.deepEqual(transitionTaskStatus("blocked", "meaningful_intermediate_ready", baseContext), {
+    allowed: true,
+    nextStatus: "verification_pending"
+  });
+});
+
 test("blocks verifier assignment when verifier matches author", () => {
   const decision = transitionTaskStatus("verification_pending", "verification_started", {
     ...baseContext,

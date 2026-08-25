@@ -225,7 +225,17 @@ export function transitionTaskStatus(
   // 의미 있는 산출물이 나오면 시스템이 검증을 부른다 (FR-012).
   // 방장이 매번 "검증해줘"를 눌러야 한다면 작업이 사람 손을 떠나지 못한다.
   // 검증 호출 자체는 방장 결정 사항이 아니다 — 완료 승인만 방장 몫이다.
-  if (event === "meaningful_intermediate_ready" && current === "in_progress") {
+  //
+  // current 에 "blocked" 도 받는 이유(실측 결함, 2026-08-25): 다중 AI("both") 배정은
+  // Claude·Codex 를 병렬로 돌린다. 한쪽이 먼저 시간초과로 실패하면 이 함수가 그 실패
+  // 하나만 보고 즉시 blocked 로 확정했는데, 그 직후 다른 한쪽이 실제로 성공해도
+  // meaningful_intermediate_ready 가 current==="in_progress" 만 받아줘서 blocked 에서는
+  // 막혔다 — 짝의 성공이 조용히 묻히고 작업이 영영 "막힘"에 남았다(라이브 재현:
+  // task d364326a, ClaudeBot 실패 후 CodexBot 이 실제로 산출물까지 만들었는데 상태만
+  // blocked 로 굳음). blocked 를 여기서도 받아야, 나중에 도착하는 짝의 성공이 작업을
+  // 다시 앞으로 옮길 수 있다 — "한쪽만 실패해도 병렬 배정 전체가 죽는다"는 뜻이
+  // 아니게 하려는 것이다.
+  if (event === "meaningful_intermediate_ready" && (current === "in_progress" || current === "blocked")) {
     return { allowed: true, nextStatus: "verification_pending" };
   }
   if (event === "verification_started" && current === "verification_pending" && isIndependentVerifier(context)) {
