@@ -1,6 +1,8 @@
 # HuAI Collab Chatroom Operation Status
 
-Last verified: 2026-08-17 KST
+Last verified: 2026-08-23 KST (see "Telegram receive mode switched to polling" section below —
+the 2026-08-17 live-verification section further down predates this switch and no longer describes
+the current receive mode by itself; read both together).
 
 This file is the current runtime evidence anchor for Telegram operation status reports.
 Do not treat older Gate setup documents as proof that operation is still incomplete.
@@ -9,7 +11,8 @@ Do not treat older Gate setup documents as proof that operation is still incompl
 
 - Product scope wording: 완성 제품 / 정식 운영 버전. Do not call this an MVP.
 - Primary UI: Telegram private project group.
-- Telegram group is connected to bot-service through HTTPS webhook.
+- Telegram group is connected to bot-service through polling (`BOT_SERVICE_RECEIVE_MODE=polling`,
+  switched from webhook on 2026-08-23 — see that section below for why and how to revert).
 - Role bots configured: LeaderBot, ClaudeBot, CodexBot, AuditBot.
 - Supabase runtime is connected and used as the central DB.
 - bot-service health check passed: `GET /healthz` returned ok with 4 bots and 1 allowed chat.

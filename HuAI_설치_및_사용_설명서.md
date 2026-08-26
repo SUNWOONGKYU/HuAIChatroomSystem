@@ -190,6 +190,14 @@ git에 올라가지는 않습니다.)
 3. 화면에 SQL 문장들이 출력됩니다. 이 전체를 복사해서 Supabase SQL Editor(4단계에서 썼던
    그 화면)에 새 쿼리로 붙여넣고 Run을 누릅니다.
 
+방을 **여러 개** 등록할 계획이면(봇 4개는 공용, 방마다 room-id·chat-id만 다름) 매번 SQL을
+손으로 붙여넣는 대신 `scripts/onboard-telegram-room.mjs`를 씁니다. 인자는 위와 동일하고,
+Supabase에 곧바로 API로 등록합니다(먼저 확인만 하려면 `--dry-run` 추가):
+
+```powershell
+node scripts/onboard-telegram-room.mjs --room-id <room-id> --chat-id <chat-id> --owner-id <owner-id> --project-path "C:\Dev\HuAIChatroomSystem"
+```
+
 ## 9단계 — Claude Code / Codex 로그인
 
 이 PC에 Claude Code와 Codex CLI가 설치·로그인돼 있어야 실제 작업 실행이 됩니다(이 부분은
