@@ -6,7 +6,8 @@ import {
   approvalDeciderFromPayload,
   approvalEntityRefFromPayload,
   approvalRecordForEvent,
-  approvalReasonFromPayload
+  approvalReasonFromPayload,
+  buildFinalApprovalResultText
 } from "../src/supabase-store.js";
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
@@ -46,6 +47,17 @@ test("결정자와 대상 식별자를 payload 에서 추출한다", () => {
 test("사유에 담긴 민감정보는 원장에 남기지 않는다", () => {
   const masked = approvalReasonFromPayload({ reason: "확인함 Bearer abc.def.ghi" });
   assert.equal(String(masked).includes("abc.def.ghi"), false);
+});
+
+test("최종 승인 결과 메시지에 최신 보고와 산출물 반환 정보가 담긴다", () => {
+  const text = buildFinalApprovalResultText(TASK_ID, "관련 테스트와 빌드 통과", [
+    { uri: "file:///C:/work/report.pdf" },
+    { uri: "file:///C:/work/result.html", public_url: "https://example.vercel.app/result.html" }
+  ]);
+  assert.match(text, /승인 완료/);
+  assert.match(text, /관련 테스트와 빌드 통과/);
+  assert.match(text, /report\.pdf/);
+  assert.match(text, /https:\/\/example\.vercel\.app\/result\.html/);
 });
 
 test("방장 승인이 huai_approvals 에 append-only 로 기록된다", async () => {

@@ -11,7 +11,7 @@ import {
   type OutboxTarget,
   type TelegramSendResult
 } from "../../contracts/src/index.js";
-import { buildProposalKeyboard } from "../../telegram-ui/src/index.js";
+import { buildMidApprovalKeyboard, buildProposalKeyboard } from "../../telegram-ui/src/index.js";
 import { isLeaderPlanningAttempt, LEADER_PLANNING_ATTEMPT_PREFIX } from "../../orchestrator/src/index.js";
 import { parseLeaderDecision, type LeaderPlan } from "../../orchestrator/src/leader-planning.js";
 import {
@@ -148,7 +148,20 @@ export class SupabaseOutboxStore {
     occurredAt: string;
   }): Promise<void> {
     const telegramChatId = await this.fetchRoomTelegramChatId(input.request.roomId);
-    const eventType = input.status === "completed" ? "meaningful_intermediate_ready" : "execution_delayed_or_failed";
+    const resultSummary = summarizeGatewayOutput(input.events) ?? "";
+    const midApproval = input.status === "completed" && input.request.reportBotRole !== "auditor"
+      ? parseMidApprovalRequestFromEvents(input.events)
+      : undefined;
+    const isAudit = input.request.reportBotRole === "auditor";
+    const eventType = input.status !== "completed"
+      ? "execution_delayed_or_failed"
+      : isAudit
+        ? "meaningful_intermediate_ready"
+        : input.request.revisionContext
+        ? "revision_submitted"
+        : midApproval
+          ? "mid_approval_required"
+          : "meaningful_intermediate_ready";
     const eventKey = "gateway-result:" + input.request.attemptId + ":" + input.status;
     const event = await this.insertEventIdempotently({
       room_id: input.request.roomId,
@@ -163,7 +176,19 @@ export class SupabaseOutboxStore {
         status: input.status,
         errorKind: maskSensitiveText(input.errorKind ?? ""),
         occurredAt: input.occurredAt,
-        events: summarizeGatewayEvents(input.events)
+        events: summarizeGatewayEvents(input.events),
+        ...(midApproval ? {
+          reportId: midApproval.reportId,
+          approvalRequestId: midApproval.approvalRequestId,
+          significanceReason: midApproval.significanceReason,
+          affectedTaskIds: midApproval.affectedTaskIds
+        } : {}),
+        ...(input.request.revisionContext ? {
+          revisionRequestId: input.request.revisionContext.revisionRequestId,
+          priorVerificationId: input.request.revisionContext.priorVerificationId,
+          changedScope: input.request.revisionContext.changedScope,
+          reverifyScope: input.request.revisionContext.reverifyScope
+        } : {})
       }
     });
 
@@ -174,9 +199,13 @@ export class SupabaseOutboxStore {
       return;
     }
 
+    await this.recordHookAttempt(event.event_id, input.status === "failed" ? "failed" : "succeeded", input.errorKind);
+    await this.recordExecutionAttempt(input);
+
     const botRole = input.request.reportBotRole ?? (input.request.adapterType === "codex" ? "codex_leader" : "claude_leader");
-    const resultSummary = summarizeGatewayOutput(input.events) ?? "";
-    const fullText = renderGatewayReportText(input);
+    const fullText = midApproval
+      ? `${midApproval.summary}\n\n이 결과는 영향이 커 방장 중간 승인이 필요합니다.`
+      : renderGatewayReportText(input);
     const idempotencyKey = "telegram-report:" + input.request.attemptId + ":" + input.status;
 
     // 긴 보고는 앞부분만 방에 보내고 전문은 현황판에서 읽는다. 전문을 먼저 저장해야
@@ -184,7 +213,9 @@ export class SupabaseOutboxStore {
     const report = await this.saveTaskReport(input.request, botRole, fullText);
     const preview = buildRoomMessageWithPreview(fullText, roomMessagePreviewLimit());
     const text = preview.text;
-    const reportKeyboard = preview.truncated && report ? buildReportOpenKeyboard(report.report_id, this.miniAppDirectLinkBaseUrl) : undefined;
+    const reportKeyboard = midApproval
+      ? buildMidApprovalKeyboard(input.request.taskId)
+      : preview.truncated && report ? buildReportOpenKeyboard(report.report_id, this.miniAppDirectLinkBaseUrl) : undefined;
 
     await this.insertOutboxIdempotently({
       event_id: event.event_id,
@@ -230,11 +261,22 @@ export class SupabaseOutboxStore {
     //
     // 이게 없으면 실행이 끝나도 작업이 영원히 scheduled 로 남는다.
     // 방장이 /tasks 를 치면 이미 끝난 일이 "실행 대기"로 보인다.
-    await this.advanceTaskThroughExecution(input.request.taskId, input.status);
+    if (!isAudit && input.request.revisionContext && input.status === "completed") {
+      await this.submitRevisionAfterExecution(input, resultSummary, telegramChatId, event.event_id);
+    } else {
+      await this.advanceTaskThroughExecution(input.request.taskId, input.status, midApproval ? "mid_approval_required" : undefined);
+    }
 
     if (input.status === "completed") {
       await this.persistCollectedArtifacts(input.request, input.events);
     }
+
+    if (midApproval) {
+      await this.persistMidApproval(input.request, midApproval);
+      return;
+    }
+
+    if (!isAudit && input.request.revisionContext && input.status === "completed") return;
 
     // 인지부채 방지 퀴즈 — 작업자(감사·리더 판단 아님)가 실제로 파일을 바꾼 실행에서만
     // 저장한다. 감사는 검증이지 방장이 이해해야 할 변경이 아니고, 리더 판단은 애초에
@@ -268,6 +310,92 @@ export class SupabaseOutboxStore {
       await this.enqueueSingleWorkerAudit(input, resultSummary, telegramChatId, event.event_id);
     } else if (input.status === "completed" && !isLeaderPlanningAttempt(input.request.attemptId) && input.request.reportBotRole !== "auditor") {
       await this.closeWithoutAudit(input.request, telegramChatId, event.event_id);
+    }
+  }
+
+  private async persistMidApproval(request: ExecutionRequest, checkpoint: MidApprovalRequest): Promise<void> {
+    if (!isUuid(request.taskId)) return;
+    await this.client.request("POST", "/huai_reports", {
+      body: {
+        report_id: checkpoint.reportId,
+        task_id: request.taskId,
+        is_meaningful: true,
+        summary: maskSensitiveText(checkpoint.summary).slice(0, 4000),
+        approval_required: true,
+        impact_scope: {
+          significanceReason: checkpoint.significanceReason,
+          affectedTaskIds: checkpoint.affectedTaskIds
+        }
+      },
+      prefer: "return=minimal"
+    }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
+
+    for (const affectedTaskId of checkpoint.affectedTaskIds) {
+      if (!isUuid(affectedTaskId) || affectedTaskId === request.taskId) continue;
+      await this.client.request("POST", "/huai_task_dependencies", {
+        body: {
+          room_id: request.roomId,
+          predecessor_task_id: request.taskId,
+          successor_task_id: affectedTaskId,
+          dependency_type: "blocks",
+          is_blocking: true
+        },
+        prefer: "return=minimal"
+      }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
+    }
+  }
+
+  private async submitRevisionAfterExecution(
+    input: { request: ExecutionRequest; events: GatewayEvent[]; occurredAt: string },
+    resultSummary: string,
+    telegramChatId: string,
+    sourceEventId: string
+  ): Promise<void> {
+    const revision = input.request.revisionContext;
+    if (!revision || !isUuid(input.request.taskId)) return;
+
+    await this.client.request(
+      "PATCH",
+      "/huai_revision_requests?revision_request_id=eq." + encodeURIComponent(revision.revisionRequestId) + "&status=eq.open",
+      {
+        body: {
+          status: "submitted",
+          fix_submission_id: input.request.attemptId,
+          changed_scope: revision.changedScope,
+          submitted_at: input.occurredAt
+        },
+        prefer: "return=minimal"
+      }
+    ).then((response) => response.expectOk());
+
+    await this.advanceTaskStatus(input.request.taskId, "revision_submitted", {
+      isAssignee: true,
+      actorRole: input.request.reportBotRole ?? "codex_leader",
+      changedScope: revision.changedScope
+    });
+
+    if (revision.changedScope === "content") {
+      await this.enqueueSingleWorkerAudit(input, resultSummary, telegramChatId, sourceEventId);
+      return;
+    }
+
+    if (revision.changedScope === "format_only") {
+      const idempotencyKey = "telegram-format-revision-review:" + input.request.attemptId;
+      await this.insertOutboxIdempotently({
+        event_id: sourceEventId,
+        idempotency_key: idempotencyKey,
+        target_kind: "telegram_bot",
+        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
+        payload: {
+          botRole: "leader",
+          messageThreadId: input.request.telegramMessageThreadId,
+          telegramChatId,
+          text: "형식 보완이 제출되었습니다. 내용 범위는 바뀌지 않아 전체 재검증 대신 소대장 확인으로 이동합니다.",
+          binding: { kind: "task", taskId: input.request.taskId },
+          idempotencyKey
+        },
+        room_id: input.request.roomId
+      });
     }
   }
 
@@ -462,6 +590,9 @@ export class SupabaseOutboxStore {
       idempotencyKey: "single-worker-audit:" + input.request.attemptId,
       reportBotRole: "auditor"
     };
+    // 보완 실행의 문맥은 작업자 제출까지만 유효하다. 이를 감사 요청에 남기면 감사 결과가
+    // revision_submitted 로 다시 분류되어 재검증 판정이 영원히 기록되지 않는다.
+    delete auditRequest.revisionContext;
 
     await this.insertOutboxIdempotently({
       event_id: eventId,
@@ -771,6 +902,23 @@ export class SupabaseOutboxStore {
       }
     });
 
+    // Keep an immutable recovery pointer for each persisted artifact.  Recovery
+    // metadata is best-effort: a metadata outage must never hide a result that
+    // was already saved and queued for delivery.
+    for (const artifact of saved) {
+      await this.client.request("POST", "/huai_recovery_snapshots", {
+        body: {
+          room_id: request.roomId,
+          task_id: request.taskId,
+          snapshot_type: "artifact",
+          storage_uri: artifact.uri,
+          checksum: artifact.version,
+          created_by: request.actorId || "gateway"
+        },
+        prefer: "return=minimal"
+      }).then((response) => (response.status === 409 ? undefined : response.expectOk())).catch(() => undefined);
+    }
+
     await this.enqueueDocumentDeliveries(request, collected, savedEvent.event_id);
   }
 
@@ -853,8 +1001,9 @@ export class SupabaseOutboxStore {
     const existing = await this.client
       .request("GET", "/huai_verifications?task_id=eq." + encodeURIComponent(input.request.taskId) + "&target_version=eq." + encodeURIComponent(input.request.attemptId) + "&select=verification_id&limit=1")
       .then((response) => response.json<Array<{ verification_id: string }>>());
+    let verificationId = existing[0]?.verification_id;
     if (existing.length === 0) {
-      await this.client.request("POST", "/huai_verifications", {
+      const inserted = await this.client.request("POST", "/huai_verifications", {
         body: {
           task_id: input.request.taskId,
           target_version: input.request.attemptId,
@@ -865,14 +1014,18 @@ export class SupabaseOutboxStore {
           reverify_scope: verdict === "pass" ? null : "보완 후 변경 범위 재검증",
           verifier_actor_id: isUuid(input.request.actorId) ? input.request.actorId : null
         },
-        prefer: "return=minimal"
-      }).then((response) => response.expectOk());
+        prefer: "return=representation"
+      }).then(async (response) => {
+        await response.expectOk();
+        return response.json<Array<{ verification_id: string }>>();
+      });
+      verificationId = inserted[0]?.verification_id;
     }
 
     // 불합격이 막다른 길이 되면 독립 검증 기능 전체가 장식이 된다.
     // 기획서 H-07: "검증 의견 등록 -> 담당 작업팀에 수정 요구, 상태를 수정 중으로 전환".
     if (verdict !== "pass") {
-      await this.requestRevisionAfterFailedVerification(input, resultSummary, telegramChatId, sourceEventId);
+      await this.requestRevisionAfterFailedVerification(input, resultSummary, telegramChatId, sourceEventId, verificationId);
       return;
     }
 
@@ -912,7 +1065,8 @@ export class SupabaseOutboxStore {
     input: { request: ExecutionRequest; events: GatewayEvent[]; occurredAt: string },
     resultSummary: string,
     telegramChatId: string,
-    sourceEventId: string
+    sourceEventId: string,
+    verificationId?: string
   ): Promise<void> {
     const taskId = input.request.taskId;
     const requiredFixes = resultSummary || "검증에서 보완이 필요한 항목이 확인되었습니다.";
@@ -922,16 +1076,27 @@ export class SupabaseOutboxStore {
       const existing = await this.client
         .request("GET", "/huai_revision_requests?task_id=eq." + encodeURIComponent(taskId) + "&status=eq.open&select=revision_request_id&limit=1")
         .then((response) => response.json<Array<{ revision_request_id: string }>>());
+      let revisionRequestId = existing[0]?.revision_request_id;
       if (existing.length === 0) {
-        await this.client.request("POST", "/huai_revision_requests", {
+        const inserted = await this.client.request("POST", "/huai_revision_requests", {
           body: {
             task_id: taskId,
+            verification_id: verificationId ?? null,
             required_fixes: maskSensitiveText(requiredFixes).slice(0, 4000),
             reverify_scope: reverifyScope,
             status: "open"
           },
-          prefer: "return=minimal"
-        }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
+          prefer: "return=representation"
+        }).then(async (response) => {
+          if (response.status === 409) return [];
+          await response.expectOk();
+          return response.json<Array<{ revision_request_id: string }>>();
+        });
+        revisionRequestId = inserted[0]?.revision_request_id;
+      }
+
+      if (revisionRequestId) {
+        await this.enqueueRevisionExecution(input, requiredFixes, reverifyScope, revisionRequestId, verificationId, sourceEventId);
       }
     }
 
@@ -996,15 +1161,67 @@ export class SupabaseOutboxStore {
     });
   }
 
+  private async enqueueRevisionExecution(
+    input: { request: ExecutionRequest; occurredAt: string },
+    requiredFixes: string,
+    reverifyScope: string,
+    revisionRequestId: string,
+    priorVerificationId: string | undefined,
+    sourceEventId: string
+  ): Promise<void> {
+    const gatewayId = await this.fetchActiveGatewayId(input.request.roomId);
+    if (!gatewayId) return;
+    const adapterType = input.request.workerAdapterType ?? input.request.adapterType;
+    const attemptId = input.request.attemptId + "-revision";
+    const changedScope: "content" = "content";
+    const executionRequest: ExecutionRequest = {
+      ...input.request,
+      attemptId,
+      adapterType,
+      reportBotRole: reportBotRoleForAdapter(adapterType),
+      prompt: [
+        "원 담당 작업자로서 검증 의견을 반영해 보완하세요.",
+        "필수 수정: " + requiredFixes,
+        "재검증 범위: " + reverifyScope,
+        "검증 의견을 바꾸거나 무시하지 말고 실제 산출물을 수정한 뒤 결과를 제출하세요."
+      ].join("\n"),
+      idempotencyKey: "revision-execution:" + revisionRequestId,
+      createdAt: input.occurredAt,
+      revisionContext: {
+        revisionRequestId,
+        priorVerificationId,
+        changedScope,
+        reverifyScope
+      }
+    };
+
+    await this.insertOutboxIdempotently({
+      event_id: sourceEventId,
+      idempotency_key: "gateway:revision:" + revisionRequestId,
+      target_kind: "local_gateway",
+      target: JSON.stringify({ kind: "local_gateway", gatewayId }),
+      payload: { executionRequest },
+      room_id: input.request.roomId
+    });
+  }
+
   // 승인된 작업이 실행을 거쳐 검증 대기까지 스스로 이동한다.
   // 사람이 눌러야 하는 지점은 시작 승인과 최종 완료 승인 둘뿐이다.
-  private async advanceTaskThroughExecution(taskId: string, status: "completed" | "failed" | "rejected"): Promise<void> {
+  private async advanceTaskThroughExecution(
+    taskId: string,
+    status: "completed" | "failed" | "rejected",
+    completionEvent?: "mid_approval_required"
+  ): Promise<void> {
     if (!isUuid(taskId)) return;
     // scheduled -> queued_for_gateway -> in_progress
     await this.advanceTaskStatus(taskId, "dependencies_satisfied", {});
     await this.advanceTaskStatus(taskId, "task_started", {});
     if (status !== "completed") {
       await this.advanceTaskStatus(taskId, "execution_delayed_or_failed", {});
+      return;
+    }
+    if (completionEvent === "mid_approval_required") {
+      await this.advanceTaskStatus(taskId, "mid_approval_required", {});
       return;
     }
     // in_progress -> verification_pending (검증 호출은 방장 결정 사항이 아니다)
@@ -1141,6 +1358,46 @@ export class SupabaseOutboxStore {
     return String(value);
   }
 
+  private async recordHookAttempt(eventId: string, status: "succeeded" | "failed", error?: string): Promise<void> {
+    await this.client.request("POST", "/huai_hook_attempts", {
+      body: {
+        event_id: eventId,
+        hook_type: "gateway_result",
+        status,
+        attempts: 1,
+        last_error: error ? maskSensitiveText(error) : null,
+        next_attempt_at: new Date().toISOString()
+      },
+      prefer: "return=minimal"
+    }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
+  }
+
+  private async recordExecutionAttempt(input: {
+    request: ExecutionRequest;
+    status: "completed" | "failed" | "rejected";
+    occurredAt: string;
+    errorKind?: string;
+  }): Promise<void> {
+    const gatewayId = this.gatewayId;
+    const taskId = input.request.taskId;
+    if (typeof taskId !== "string" || !isUuid(taskId) || typeof gatewayId !== "string" || !isUuid(gatewayId)) return;
+    await this.client.request("POST", "/huai_execution_attempts", {
+      body: {
+        task_id: taskId,
+        gateway_id: gatewayId,
+        adapter_type: input.request.adapterType === "claude_code" ? "claude_code" : input.request.adapterType,
+        status: input.status === "completed" ? "completed" : "failed",
+        attempt_no: 1,
+        idempotency_key: "execution-attempt:" + input.request.attemptId,
+        started_at: input.request.createdAt ?? input.occurredAt,
+        finished_at: input.occurredAt,
+        error: input.errorKind ? maskSensitiveText(input.errorKind) : null,
+        telemetry: { reportBotRole: input.request.reportBotRole ?? null }
+      },
+      prefer: "return=minimal"
+    }).then((response) => (response.status === 409 ? undefined : response.expectOk())).catch(() => undefined);
+  }
+
   private async insertEventIdempotently(row: EventInsertRow): Promise<EventRow> {
     const response = await this.client.request("POST", "/huai_events", {
       body: row,
@@ -1273,6 +1530,50 @@ export function renderRevisionRequestText(taskId: string, requiredFixes: string,
     "재검증 범위: " + reverifyScope,
     "보완 후 다시 검증을 요청해 주세요."
   ].join("\n");
+}
+
+export type MidApprovalRequest = {
+  reportId: string;
+  approvalRequestId: string;
+  summary: string;
+  significanceReason: string;
+  affectedTaskIds: string[];
+};
+
+const MID_APPROVAL_BLOCK = /MID_APPROVAL_START\s*([\s\S]*?)\s*MID_APPROVAL_END/;
+
+export function parseMidApprovalRequestFromEvents(events: readonly GatewayEvent[]): MidApprovalRequest | undefined {
+  const text = rawStdoutFromGatewayEvents(events);
+  const match = MID_APPROVAL_BLOCK.exec(text);
+  if (!match) return undefined;
+  try {
+    const value = JSON.parse(match[1] ?? "") as Record<string, unknown>;
+    const affectedTaskIds = Array.isArray(value.affectedTaskIds)
+      ? value.affectedTaskIds.filter((item): item is string => typeof item === "string" && isUuid(item))
+      : [];
+    if (
+      typeof value.reportId !== "string" || !isUuid(value.reportId) ||
+      typeof value.approvalRequestId !== "string" || !value.approvalRequestId.trim() ||
+      typeof value.summary !== "string" || !value.summary.trim() ||
+      typeof value.significanceReason !== "string" || !value.significanceReason.trim()
+    ) return undefined;
+    return {
+      reportId: value.reportId,
+      approvalRequestId: value.approvalRequestId.trim(),
+      summary: value.summary.trim(),
+      significanceReason: value.significanceReason.trim(),
+      affectedTaskIds: Array.from(new Set(affectedTaskIds))
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function classifyRevisionChangedScope(reason: string): "format_only" | "content" {
+  const changedScopeValue = reason.trim().toLowerCase();
+  return /(?:format(?:ting)?|cosmetic|typo|whitespace|형식|서식|오탈자|띄어쓰기)/i.test(changedScopeValue)
+    ? "format_only"
+    : "content";
 }
 
 export function collectedArtifactsFromEvents(events: readonly GatewayEvent[]): ArtifactManifest[] {
@@ -2097,10 +2398,3 @@ function requireSingle<T>(rows: T[], error: string): T {
   if (rows.length !== 1) throw new Error(error);
   return rows[0] as T;
 }
-
-
-
-
-
-
-

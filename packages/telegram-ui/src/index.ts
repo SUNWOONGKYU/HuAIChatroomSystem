@@ -54,6 +54,15 @@ export function buildTaskDecisionKeyboard(taskId: string): InlineKeyboardMarkup 
   };
 }
 
+export function buildMidApprovalKeyboard(taskId: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[
+      { text: "중간 승인", callback_data: `task:${taskId}:mid_approve` },
+      { text: "중단", callback_data: `task:${taskId}:mid_reject` }
+    ]]
+  };
+}
+
 export function buildCompletionKeyboard(taskId: string): InlineKeyboardMarkup {
   return {
     inline_keyboard: [

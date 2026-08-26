@@ -26,7 +26,7 @@ import {
   type RoomFacts,
   type RoomTurn
 } from "../../../packages/orchestrator/src/leader-planning.js";
-import { buildMiniAppOpenKeyboard } from "../../../packages/telegram-ui/src/index.js";
+import { buildMiniAppOpenKeyboard, buildProjectStatusMessage } from "../../../packages/telegram-ui/src/index.js";
 import { createNodeGitRunner, ensureWorktree } from "../../local-gateway/src/worktree.js";
 
 export type SupabaseStoreConfig = {
@@ -172,6 +172,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     // "누가 무엇을 승인했는가"는 사실로서 보존되어야 한다 (NFR-02).
     await this.recordApprovals(eventsToPersist, roomId);
     await this.applyTaskTransitions(eventsToPersist, roomId);
+    await this.materializePostCompletionChanges(persistedEvents, roomId);
     const fallbackEventId = persistedEvents[0]?.eventId;
     const outboxRows = input.result.outbox.map((item, index) => ({
       room_id: roomId,
@@ -186,17 +187,45 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows, roomId);
     const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows, roomId);
     const taskQueryHydratedRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
-    const hydratedOutboxRows = await this.hydrateAgentPersonaRows(taskQueryHydratedRows, roomId);
+    const finalApprovalHydratedRows = await this.hydrateFinalApprovalRows(taskQueryHydratedRows, roomId);
+    const personaHydratedRows = await this.hydrateAgentPersonaRows(finalApprovalHydratedRows, roomId);
+    const hydratedOutboxRows = await this.hydrateAiActorRows(personaHydratedRows, roomId);
+    const roomHydratedRows = await this.hydrateRoomCommandRows(hydratedOutboxRows, roomId);
+    const memberHydratedRows = await this.hydrateRoomMemberRows(roomHydratedRows, roomId);
     // 현황판 행은 주제당 하나뿐이라 두 번째 메시지부터는 반드시 이미 존재한다. 아래 배치
     // 삽입은 "행 하나라도 이미 있으면 전체 실패"라서, 같이 넣으면 그 주제의 모든 처리가
     // 멎는다(라이브에서 outbox-idempotency-conflict 로 제안 메시지가 통째로 안 나갔다).
-    await this.ensureTopicBoardRows(hydratedOutboxRows, roomId);
-    const insertedOutbox = await this.insertOutboxRowsIdempotently(hydratedOutboxRows);
+    await this.ensureTopicBoardRows(memberHydratedRows, roomId);
+    const insertedOutbox = await this.insertOutboxRowsIdempotently(memberHydratedRows);
 
     return {
       events: persistedEvents.map((event) => ({ ...event, createdAt: event.createdAt ?? createdAt })),
       outbox: insertedOutbox.map(toPersistedOutboxItem)
     };
+  }
+
+  private async hydrateFinalApprovalRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
+    const hydrated: OutboxInsertRow[] = [];
+    for (const row of rows) {
+      if (!row.idempotency_key.startsWith("telegram:final-approved:")) {
+        hydrated.push(row);
+        continue;
+      }
+      const taskId = taskIdFromBinding(row.payload.binding);
+      if (!taskId) {
+        hydrated.push(row);
+        continue;
+      }
+      const [reports, artifacts] = await Promise.all([
+        this.client.request("GET", "/huai_task_reports?task_id=eq." + encodeURIComponent(taskId) + "&kind=eq.execution&select=body&order=created_at.desc&limit=1")
+          .then((response) => response.json<Array<{ body: string }>>()),
+        this.client.request("GET", "/huai_artifacts?task_id=eq." + encodeURIComponent(taskId) + "&select=uri,public_url&order=created_at.desc&limit=10")
+          .then((response) => response.json<Array<{ uri: string; public_url?: string | null }>>())
+      ]);
+      const text = buildFinalApprovalResultText(taskId, reports[0]?.body, artifacts);
+      hydrated.push({ ...row, payload: { ...row.payload, text: maskSensitiveText(text).slice(0, 3900) } });
+    }
+    return hydrated;
   }
 
   async markTelegramUpdateProcessed(idempotencyKey: string): Promise<void> {
@@ -829,6 +858,125 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     return hydrated;
   }
 
+  private async hydrateAiActorRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
+    const hydrated: OutboxInsertRow[] = [];
+    for (const row of rows) {
+      const command = aiActorCommandPayload(row.payload);
+      if (!command || row.target_kind !== "telegram_bot") {
+        hydrated.push(row);
+        continue;
+      }
+      if (command.action === "check") {
+        const inactive = await this.client.request(
+          "GET",
+          "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.inactive&select=actor_id,role"
+        ).then((response) => response.json<Array<{ actor_id: string; role: string }>>()).catch(() => []);
+        for (const actor of inactive) {
+          await this.client.request("POST", "/huai_events", {
+            body: {
+              room_id: roomId,
+              task_id: null,
+              event_type: "ai_actor_inactive",
+              idempotency_key: "ai-actor-inactive:" + actor.actor_id,
+              payload: { actorId: actor.actor_id, role: actor.role, action: "propose_exit" }
+            },
+            prefer: "return=minimal"
+          }).then((response) => (response.status === 409 ? undefined : response.expectOk())).catch(() => undefined);
+        }
+        hydrated.push({ ...row, payload: { ...row.payload, text: inactive.length === 0 ? "현재 장기 미사용 전문 AI가 없습니다." : `${inactive.length}개 전문 AI가 장기 미사용 상태입니다. 퇴장 제안을 기록했습니다.` } });
+        continue;
+      }
+      const response = await this.client.request("POST", "/huai_ai_actors", {
+        body: {
+          room_id: roomId,
+          role: command.role,
+          adapter_type: command.adapterType,
+          status: "active"
+        },
+        prefer: "return=minimal"
+      });
+      const text = response.status === 409
+        ? `${command.role} 전문 AI가 이미 이 방에 등록되어 있습니다.`
+        : (await response.expectOk(), `${command.role} 전문 AI 초대가 등록되었습니다.`);
+      hydrated.push({ ...row, payload: { ...row.payload, text } });
+    }
+    return hydrated;
+  }
+
+  private async hydrateRoomCommandRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
+    const hydrated: OutboxInsertRow[] = [];
+    for (const row of rows) {
+      const command = roomCommandPayload(row.payload);
+      if (!command || row.target_kind !== "telegram_bot") {
+        hydrated.push(row);
+        continue;
+      }
+      const response = await this.client.request("POST", "/huai_rooms?on_conflict=room_id", {
+        body: {
+          room_id: roomId,
+          telegram_chat_id: command.telegramChatId,
+          owner_telegram_user_id: command.ownerTelegramUserId,
+          purpose: "Telegram 프로젝트 채팅룸",
+          rules: "방장 승인 후 실행"
+        },
+        prefer: "resolution=merge-duplicates,return=minimal"
+      });
+      await response.expectOk();
+      hydrated.push({ ...row, payload: { ...row.payload, text: "프로젝트 채팅룸 등록이 완료되었습니다." } });
+    }
+    return hydrated;
+  }
+
+  private async hydrateRoomMemberRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
+    const hydrated: OutboxInsertRow[] = [];
+    for (const row of rows) {
+      const command = roomMemberCommandPayload(row.payload);
+      if (!command || row.target_kind !== "telegram_bot") {
+        hydrated.push(row);
+        continue;
+      }
+      if (command.action === "add") {
+        await this.client.request("POST", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&telegram_user_id=eq." + encodeURIComponent(command.telegramUserId), {
+          body: { room_id: roomId, telegram_user_id: command.telegramUserId, role: "human_member", permissions: ["task:read"], status: "active" },
+          prefer: "resolution=merge-duplicates,return=minimal"
+        }).then((response) => response.expectOk());
+      } else {
+        await this.client.request("PATCH", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&telegram_user_id=eq." + encodeURIComponent(command.telegramUserId), { body: { status: "left" }, prefer: "return=minimal" }).then((response) => response.expectOk());
+      }
+      await this.client.request("POST", "/huai_events", {
+        body: { room_id: roomId, task_id: null, event_type: "participant_changed", idempotency_key: row.idempotency_key + ":participant", payload: { telegramUserId: command.telegramUserId, action: command.action } },
+        prefer: "return=minimal"
+      }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
+      hydrated.push({ ...row, payload: { ...row.payload, text: command.action === "add" ? "참여자를 초대했습니다." : "참여자를 퇴장 처리했습니다." } });
+    }
+    return hydrated;
+  }
+
+  private async materializePostCompletionChanges(events: readonly PersistedEvent[], roomId: string): Promise<void> {
+    for (const event of events) {
+      if (event.eventType !== "post_completion_scope_change_requested") continue;
+      const payload = event.payload as Record<string, unknown>;
+      const taskId = typeof payload.taskId === "string" ? payload.taskId : "";
+      const scope = typeof payload.scope === "string" ? payload.scope : "";
+      if (!taskId || !scope) continue;
+      await this.client.request("POST", "/huai_tasks", {
+        body: {
+          room_id: roomId,
+          proposal_id: null,
+          idempotency_key: "post-completion-scope-change:" + event.idempotencyKey,
+          status: "proposal_pending",
+          priority: "normal",
+          title: "완료 후 범위 변경: " + taskId.slice(0, 12),
+          purpose: "완료된 작업에서 새 범위의 변경을 별도 카드로 관리",
+          scope,
+          completion_criteria: "변경 범위 실행 후 독립 검증 및 방장 최종 승인",
+          telegram_message_thread_id: typeof payload.telegramChatId === "string" ? payload.telegramChatId : null
+        },
+        prefer: "return=minimal"
+      }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
+    }
+  }
+
   private async fetchAgentPersona(roomId: string, personaName: string): Promise<AgentPersona | undefined> {
     const rows = await this.client
       .request(
@@ -924,6 +1072,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
 
     if (rows.length === 0) return "작업 목록\n현재 등록된 작업이 없습니다.";
 
+
     const assigneeActorIds = Array.from(new Set(rows.map((task) => task.assignee_actor_id).filter((value): value is string => Boolean(value))));
     const roleByActorId = await this.fetchActorRolesByActorIds(assigneeActorIds);
     const now = this.now();
@@ -939,7 +1088,16 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     const headerLine = totalCount > rows.length
       ? `작업 목록 (최근 ${rows.length}건 표시 · 전체 ${totalCount}건 중 ${totalCount - rows.length}건 더 있음)`
       : `작업 목록 (총 ${rows.length}건)`;
-    const lines: string[] = [headerLine];
+    const lines: string[] = [
+      buildProjectStatusMessage({
+        title: "HuAI 프로젝트",
+        activeTasks: inProgressTotal,
+        pendingApprovals: rows.filter((task) => task.status.includes("pending")).length,
+        gatewayOnline: true
+      }),
+      "",
+      headerLine
+    ];
     let index = 0;
     for (const groupKey of TASK_STATUS_GROUP_ORDER) {
       const tasks = grouped.get(groupKey);
@@ -1327,6 +1485,29 @@ type OutboxInsertRow = {
   payload: Record<string, unknown>;
 };
 
+function taskIdFromBinding(binding: unknown): string | undefined {
+  if (!binding || typeof binding !== "object") return undefined;
+  const value = binding as Record<string, unknown>;
+  return value.kind === "task" && typeof value.taskId === "string" && isUuid(value.taskId) ? value.taskId : undefined;
+}
+
+export function buildFinalApprovalResultText(
+  taskId: string,
+  reportBody: string | undefined,
+  artifacts: ReadonlyArray<{ uri: string; public_url?: string | null }>
+): string {
+  const summary = String(reportBody ?? "").trim();
+  const artifactLines = artifacts.map((artifact) => {
+    const uri = artifact.public_url && /^https?:\/\//i.test(artifact.public_url) ? artifact.public_url : artifact.uri;
+    return "- " + safeTelegramTraceUri(uri);
+  });
+  return [
+    `승인 완료: ${taskId}`,
+    summary ? "결과 보고:\n" + summary : "결과 보고: 저장된 실행 보고가 없습니다.",
+    artifactLines.length > 0 ? "산출물:\n" + artifactLines.join("\n") : "산출물: 없음"
+  ].join("\n\n");
+}
+
 type ExecutionActorRow = {
   actor_id: string;
   role: ExecutionActorRole;
@@ -1411,6 +1592,37 @@ function agentPersonaCommandPayload(payload: Record<string, unknown>): AgentPers
     };
   }
   return undefined;
+}
+
+type AiActorCommandPayload = { action: "invite"; role: string; adapterType: string } | { action: "check" };
+function aiActorCommandPayload(payload: Record<string, unknown>): AiActorCommandPayload | undefined {
+  const value = payload.aiActorCommand;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const command = value as Record<string, unknown>;
+  if (command.action === "check") return { action: "check" };
+  if (command.action !== "invite" || typeof command.role !== "string" || typeof command.adapterType !== "string") return undefined;
+  const roles = ["leader", "claude_leader", "codex_leader", "auditor"];
+  const adapters = ["orchestrator", "claude_code", "codex", "auditor"];
+  if (!roles.includes(command.role) || !adapters.includes(command.adapterType)) return undefined;
+  return { action: "invite", role: command.role, adapterType: command.adapterType };
+}
+
+type RoomCommandPayload = { action: "register"; telegramChatId: string; ownerTelegramUserId: string };
+function roomCommandPayload(payload: Record<string, unknown>): RoomCommandPayload | undefined {
+  const value = payload.roomCommand;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const command = value as Record<string, unknown>;
+  if (command.action !== "register" || typeof command.telegramChatId !== "string" || typeof command.ownerTelegramUserId !== "string") return undefined;
+  return { action: "register", telegramChatId: command.telegramChatId, ownerTelegramUserId: command.ownerTelegramUserId };
+}
+
+type RoomMemberCommandPayload = { action: "add" | "leave"; telegramUserId: string };
+function roomMemberCommandPayload(payload: Record<string, unknown>): RoomMemberCommandPayload | undefined {
+  const value = payload.roomMemberCommand;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const command = value as Record<string, unknown>;
+  if ((command.action !== "add" && command.action !== "leave") || typeof command.telegramUserId !== "string" || !/^-?\d+$/.test(command.telegramUserId)) return undefined;
+  return { action: command.action, telegramUserId: command.telegramUserId };
 }
 
 function formatTraceTime(value?: string | null): string {
@@ -1730,6 +1942,7 @@ function buildApprovedTelegramTaskPrompt(requestText: string): string {
     "For project progress or operation-status questions, inspect OPERATION_STATUS.md first if it exists, then verify live scripts or runtime state before reporting.",
     "Do not infer that Telegram/Supabase/webhook/local-gateway operation is incomplete only because older Gate documents describe setup steps.",
     "Report only verified facts. If a check cannot run, say exactly which check failed.",
+    "If you reach a high-impact decision that must be approved before the remaining work is safe, stop at that checkpoint and output exactly one MID_APPROVAL_START/MID_APPROVAL_END block containing JSON fields reportId (UUID), approvalRequestId, summary, significanceReason, and affectedTaskIds (known downstream task UUIDs; [] if none are known). Do not continue past that checkpoint in the same execution.",
     // 라이브 사고 — 작업자가 브라우저 테스트를 하며 `taskkill /F /IM chrome.exe` 를 실행해
     // 방장이 열어 둔 Chrome 창 약 50개를 통째로 죽였다. 저장 안 한 작업물이 날아갔다.
     // 작업 폴더 안에서 무엇을 하든 그건 우리 일이지만, 사람이 쓰던 프로그램을 끄는 것은
@@ -1974,14 +2187,3 @@ function requireMiniAppDirectLinkBaseUrl(value: string): string {
   }
   return value;
 }
-
-
-
-
-
-
-
-
-
-
-

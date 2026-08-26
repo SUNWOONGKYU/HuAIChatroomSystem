@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { applyOperationEnvAliases } from "./operation-env-loader.mjs";
+import { buildOutboxTimeoutDiagnostic, checkLocalGatewayHealth } from "./live-formal-smoke-diagnostics.mjs";
 
 const ROOT = "C:\\Dev\\HuAIChatroomSystem";
 const botPid = Number(readFileSync("C:\\tmp\\huai-bot-service.pid", "utf8").trim());
@@ -24,6 +25,9 @@ const roomInfo = await loadRoomInfo();
 const chatId = Number(env.BOT_SERVICE_TELEGRAM_CHAT_ID ?? roomInfo.telegramChatId);
 const ownerId = Number(env.BOT_SERVICE_OWNER_TELEGRAM_USER_ID ?? roomInfo.ownerTelegramUserId);
 const secret = env.BOT_SERVICE_LEADER_WEBHOOK_SECRET;
+
+const gatewayHealth = await checkLocalGatewayHealth(fetch, env.LOCAL_GATEWAY_HEALTH_URL ?? "http://127.0.0.1:8797/healthz");
+console.log(`local_gateway_health=${JSON.stringify(gatewayHealth)}`);
 
 const commandAck = await postWebhook(botUsername, secret, {
   update_id: stamp,
@@ -55,7 +59,9 @@ console.log(`callback_ack=${JSON.stringify(callbackAck)}`);
 
 const approved = await waitForApproval(proposal.proposalId, 15000);
 console.log(`approval_event=${approved ? "found" : "missing"}`);
-const outbox = await waitForOutbox(proposal.proposalId, 180000);
+const task = await waitForTask(proposal.proposalId, 15000);
+console.log(`task_id=${task.taskId}`);
+const outbox = await waitForOutbox(task.taskId, 180000);
 console.log(`local_gateway_outbox=${outbox.status}`);
 console.log("formal_smoke_done");
 
@@ -109,15 +115,30 @@ async function waitForApproval(proposalId, timeoutMs) {
   return false;
 }
 
-async function waitForOutbox(proposalId, timeoutMs) {
+async function waitForOutbox(taskId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  let lastObserved;
   while (Date.now() < deadline) {
     const rows = await supabaseGet("/huai_outbox?target_kind=eq.local_gateway&select=idempotency_key,status,last_error,payload,created_at&order=created_at.desc&limit=50");
-    const found = rows.find((row) => row.payload?.executionRequest?.taskId === proposalId);
+    const found = rows.find((row) => row.payload?.executionRequest?.taskId === taskId);
+    if (found) lastObserved = found;
     if (found && ["sent", "dead", "failed", "retry_pending"].includes(found.status)) return found;
     await sleep(1000);
   }
-  throw new Error("local-gateway-outbox-timeout");
+  const diagnostic = buildOutboxTimeoutDiagnostic(taskId, lastObserved);
+  console.error(`local_gateway_outbox_timeout_diagnostic=${JSON.stringify(diagnostic)}`);
+  throw new Error(`local-gateway-outbox-timeout:${lastObserved ? "row-found" : "row-missing"}`);
+}
+
+async function waitForTask(proposalId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const rawProposalId = proposalId.replace(/^proposal_/, "");
+  while (Date.now() < deadline) {
+    const rows = await supabaseGet(`/huai_tasks?proposal_id=eq.${encodeURIComponent(rawProposalId)}&select=task_id&order=created_at.desc&limit=1`);
+    if (rows[0]?.task_id) return { taskId: rows[0].task_id };
+    await sleep(500);
+  }
+  throw new Error("task-not-found-for-proposal");
 }
 
 async function supabaseGet(path) {

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SupabaseOutboxStore, renderRevisionRequestText } from "../src/index.js";
+import {
+  SupabaseOutboxStore,
+  classifyRevisionChangedScope,
+  parseMidApprovalRequestFromEvents,
+  renderRevisionRequestText
+} from "../src/index.js";
 import { type ExecutionRequest } from "../../contracts/src/index.js";
 
 // FR-014 / H-07 / AC-07: 검증 불합격은 막다른 길이 아니어야 한다.
@@ -84,6 +89,107 @@ test("보완 요청 문구는 시크릿을 담지 않는다", () => {
   assert.equal(text.includes("leaked.token.value"), false);
 });
 
+test("S26: structured midpoint checkpoint is parsed and persists an approval gate", async () => {
+  const affectedTaskId = "88888888-8888-4888-8888-888888888888";
+  const text = `MID_APPROVAL_START\n${JSON.stringify({
+    reportId: "99999999-9999-4999-8999-999999999999",
+    approvalRequestId: "mid-attempt-1",
+    summary: "데이터 모델 변경안을 확정했습니다.",
+    significanceReason: "후속 구현의 저장 형식이 달라집니다.",
+    affectedTaskIds: [affectedTaskId]
+  })}\nMID_APPROVAL_END`;
+  const parsed = parseMidApprovalRequestFromEvents([{ type: "stdout", taskId: TASK_ID, attemptId: "mid-1", text }]);
+  assert.equal(parsed?.affectedTaskIds[0], affectedTaskId);
+
+  const calls = makeFetchSequence({ taskStatus: "scheduled" });
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), attemptId: "mid-1", reportBotRole: "codex_leader" },
+    status: "completed",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "mid-1", text }],
+    occurredAt: "2026-08-15T00:00:00.000Z"
+  });
+
+  assert.equal(calls.requests.some((request) => request.body?.event_type === "mid_approval_required"), true);
+  assert.equal(calls.requests.some((request) => request.method === "POST" && /huai_reports$/.test(request.url)), true);
+  assert.equal(calls.requests.some((request) => request.method === "POST" && /huai_task_dependencies$/.test(request.url)), true);
+  assert.equal(calls.currentTaskStatus(), "mid_approval_pending");
+  const approvalMessage = calls.requests.find((request) => request.body?.payload?.keyboard?.inline_keyboard);
+  assert.match(JSON.stringify(approvalMessage?.body.payload.keyboard), /mid_approve/);
+});
+
+test("S27/S33: content revision emits submission and queues scoped re-verification", async () => {
+  const calls = makeFetchSequence({ taskStatus: "revision_requested" });
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+  await store.recordGatewayExecutionResult({
+    request: revisionExecutionRequest("content"),
+    status: "completed",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "revision-submit", text: "필수 수정 완료" }],
+    occurredAt: "2026-08-15T01:00:00.000Z"
+  });
+
+  assert.equal(calls.requests.some((request) => request.body?.event_type === "revision_submitted"), true);
+  const revisionPatch = calls.requests.find((request) => request.method === "PATCH" && /huai_revision_requests/.test(request.url));
+  assert.equal(revisionPatch?.body.changed_scope, "content");
+  assert.equal(calls.currentTaskStatus(), "reverification_pending");
+  assert.equal(calls.requests.some((request) => String(request.body?.idempotency_key ?? "").startsWith("gateway:single-worker-audit:")), true);
+  const auditRow = calls.requests.find((request) => String(request.body?.idempotency_key ?? "").startsWith("gateway:single-worker-audit:"));
+  assert.equal(auditRow?.body.payload.executionRequest.reportBotRole, "auditor");
+  assert.equal(auditRow?.body.payload.executionRequest.revisionContext, undefined, "재검증 감사가 보완 제출 문맥을 상속하면 안 된다");
+});
+
+test("재검증 감사 통과는 완료 승인 대기까지 전이된다", async () => {
+  const calls = makeFetchSequence({ taskStatus: "reverification_pending" });
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: {
+      ...revisionExecutionRequest("content"),
+      attemptId: "revision-submit-audit",
+      reportBotRole: "auditor"
+    },
+    status: "completed",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "revision-submit-audit", text: "검증 결과: 통과" }],
+    occurredAt: "2026-08-15T01:05:00.000Z"
+  });
+
+  assert.equal(calls.currentTaskStatus(), "completion_approval_pending");
+  assert.equal(calls.requests.some((request) => request.body?.event_type === "revision_submitted"), false);
+  assert.equal(calls.requests.some((request) => request.method === "POST" && /huai_verifications$/.test(request.url)), true);
+});
+
+test("S33: format-only revision skips full audit and goes to leader confirmation", async () => {
+  assert.equal(classifyRevisionChangedScope("오탈자와 서식만 수정"), "format_only");
+  assert.equal(classifyRevisionChangedScope("API 동작 변경"), "content");
+
+  const calls = makeFetchSequence({ taskStatus: "revision_requested" });
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+  await store.recordGatewayExecutionResult({
+    request: revisionExecutionRequest("format_only"),
+    status: "completed",
+    events: [{ type: "stdout", taskId: TASK_ID, attemptId: "revision-submit", text: "서식 수정 완료" }],
+    occurredAt: "2026-08-15T01:00:00.000Z"
+  });
+
+  assert.equal(calls.currentTaskStatus(), "commander_completion_pending");
+  assert.equal(calls.requests.some((request) => String(request.body?.idempotency_key ?? "").startsWith("gateway:single-worker-audit:")), false);
+  assert.equal(calls.requests.some((request) => String(request.body?.idempotency_key ?? "").startsWith("telegram-format-revision-review:")), true);
+});
+
+function revisionExecutionRequest(changedScope: "format_only" | "content"): ExecutionRequest {
+  return {
+    ...makeRequest(),
+    attemptId: "revision-submit",
+    reportBotRole: "codex_leader",
+    revisionContext: {
+      revisionRequestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      priorVerificationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      changedScope,
+      reverifyScope: "수정된 파일"
+    }
+  };
+}
+
 function makeRequest(): ExecutionRequest {
   return {
     roomId: "11111111-1111-4111-8111-111111111111",
@@ -121,7 +227,7 @@ function jsonResponse(status: number, body: unknown): Response {
 // URL 로 응답을 정하면 호출 순서가 바뀌어도 테스트가 살아남고,
 // 무엇을 검증하는지도 분명해진다.
 function makeFetchSequence(options: { taskStatus?: string; openRevision?: boolean } = {}) {
-  const taskStatus = options.taskStatus ?? "verification_in_progress";
+  let taskStatus = options.taskStatus ?? "verification_in_progress";
   const requests: Array<{ url: string; method: string; body: any }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -131,15 +237,26 @@ function makeFetchSequence(options: { taskStatus?: string; openRevision?: boolea
     const path = url.split("/rest/v1")[1] ?? url;
     if (path.includes("huai_rooms")) return jsonResponse(200, [{ telegram_chat_id: "1001" }]);
     if (path.includes("huai_tasks") && method === "GET") return jsonResponse(200, [{ status: taskStatus }]);
+    if (path.includes("huai_tasks") && method === "PATCH") {
+      taskStatus = JSON.parse(String(init?.body)).status;
+      return jsonResponse(200, []);
+    }
+    if (path.includes("huai_gateway_instances") && method === "GET") return jsonResponse(200, [{ gateway_id: "primary" }]);
     if (path.includes("huai_revision_requests") && method === "GET") {
       return jsonResponse(200, options.openRevision ? [{ revision_request_id: "existing" }] : []);
     }
     if (path.includes("huai_events") && method === "POST") {
       return jsonResponse(201, [eventRow(JSON.parse(String(init?.body)).idempotency_key, "x")]);
     }
+    if (path.includes("huai_verifications") && method === "POST") {
+      return jsonResponse(201, [{ verification_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }]);
+    }
+    if (path.includes("huai_revision_requests") && method === "POST") {
+      return jsonResponse(201, [{ revision_request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
+    }
     return jsonResponse(200, []);
   };
-  return { fetchImpl, requests };
+  return { fetchImpl, requests, currentTaskStatus: () => taskStatus };
 }
 
 // 승인된 작업이 사람 손 없이 검증 대기까지 스스로 이동하는가.

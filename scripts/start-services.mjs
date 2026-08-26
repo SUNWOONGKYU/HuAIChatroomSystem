@@ -11,7 +11,7 @@
 // polling 이면 공개 URL·터널이 필요 없다.
 
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,10 +19,11 @@ import { applyOperationEnvFile } from "./operation-env-loader.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const LOG_DIR = join(ROOT, "logs");
+const PID_DIR = "C:\\tmp";
 
 const SERVICES = [
-  { name: "bot-service", entry: "dist/apps/bot-service/src/cli.js", healthPort: 8787 },
-  { name: "local-gateway", entry: "dist/apps/local-gateway/src/cli.js", healthPort: 8797 }
+  { name: "bot-service", entry: "dist/apps/bot-service/src/cli.js", healthPort: 8787, pidFile: join(PID_DIR, "huai-bot-service.pid") },
+  { name: "local-gateway", entry: "dist/apps/local-gateway/src/cli.js", healthPort: 8797, pidFile: join(PID_DIR, "huai-local-gateway.pid") }
 ];
 
 const RESTART_DELAY_MS = 3000;
@@ -82,6 +83,7 @@ function superviseService(service) {
     child.stderr?.pipe(log, { end: false });
 
     child.on("exit", (code, signal) => {
+      clearPidFile(service.pidFile, child.pid);
       if (stopped) return;
       // 오래 살아 있었으면 일시적 오류로 보고 대기 시간을 되돌린다.
       // 곧바로 죽으면 설정 문제일 가능성이 높아 점점 천천히 재시도한다.
@@ -98,6 +100,7 @@ function superviseService(service) {
     });
 
     log.write(`[감독자] ${service.name} 기동 (pid=${child.pid}) ${new Date().toISOString()}\n`);
+    writeFileSync(service.pidFile, `${child.pid}\n`, "utf8");
     console.log(`[감독자] ${service.name} 기동 pid=${child.pid}`);
   };
 
@@ -108,6 +111,14 @@ function superviseService(service) {
       child?.kill();
     }
   };
+}
+
+function clearPidFile(pidFile, pid) {
+  try {
+    if (Number(readFileSync(pidFile, "utf8").trim()) === Number(pid)) unlinkSync(pidFile);
+  } catch {
+    // PID file cleanup is best effort; stale files are ignored by live checks.
+  }
 }
 
 function isPortInUse(port) {

@@ -238,7 +238,7 @@ export function transitionTaskStatus(
   if (event === "meaningful_intermediate_ready" && (current === "in_progress" || current === "blocked")) {
     return { allowed: true, nextStatus: "verification_pending" };
   }
-  if (event === "verification_started" && current === "verification_pending" && isIndependentVerifier(context)) {
+  if (event === "verification_started" && ["verification_pending", "reverification_pending"].includes(current) && isIndependentVerifier(context)) {
     return { allowed: true, nextStatus: "verification_in_progress" };
   }
   if (event === "verification_failed_or_changes_requested" && current === "verification_in_progress" && context.isVerifier) {
@@ -248,7 +248,16 @@ export function transitionTaskStatus(
     return { allowed: true, nextStatus: "reverification_pending" };
   }
   if (event === "revision_submitted" && current === "revision_requested" && context.isAssignee) {
-    return { allowed: true, nextStatus: "reverification_pending" };
+    if (context.changedScope === "format_only") {
+      return { allowed: true, nextStatus: "commander_completion_pending" };
+    }
+    if (context.changedScope === "content") {
+      return { allowed: true, nextStatus: "reverification_pending" };
+    }
+    if (context.changedScope === "scope_change") {
+      return { allowed: false, reason: "scope-change-requires-new-task" };
+    }
+    return { allowed: false, reason: "revision-scope-required" };
   }
   if (event === "verification_passed" && current === "verification_in_progress" && context.isVerifier) {
     return { allowed: true, nextStatus: "commander_completion_pending" };
@@ -304,4 +313,3 @@ function isTerminalStatus(status: TaskStatus): boolean {
 function isIndependentVerifier(context: WorkflowContext): boolean {
   return context.isVerifier && Boolean(context.verifierActorId) && context.verifierActorId !== context.authorActorId;
 }
-

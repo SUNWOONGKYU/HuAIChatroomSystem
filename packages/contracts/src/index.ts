@@ -20,6 +20,8 @@ export type TelegramBotRole = Extract<ActorRole, "leader" | "claude_leader" | "c
 
 export type TelegramCallbackAction =
   | "approve"
+  | "mid_approve"
+  | "mid_reject"
   | "revise"
   | "reject"
   | "reverify"
@@ -40,7 +42,12 @@ export type TelegramCommandName =
   | "/cancel"
   | "/help"
   | "/newagent"
-  | "/agents";
+  | "/agents"
+  | "/inviteai"
+  | "/aihealth"
+  | "/registerroom"
+  | "/change"
+  | "/member";
 
 export type TelegramCommand = {
   name: TelegramCommandName;
@@ -410,6 +417,12 @@ export type ExecutionRequest = {
   // 감사가 사용 한도에 걸려 다른 엔진으로 넘길 때, 하필 작업자 엔진으로 넘기면
   // 자기 일을 자기가 검사하게 된다. 그 엔진을 뒤로 미루려면 누가 일했는지 알아야 한다.
   workerAdapterType?: AiAdapterType;
+  revisionContext?: {
+    revisionRequestId: string;
+    priorVerificationId?: string;
+    changedScope: "format_only" | "content" | "scope_change";
+    reverifyScope: string;
+  };
 };
 
 export function assertExecutionRequestPayload(value: unknown): ExecutionRequest {
@@ -430,11 +443,21 @@ export function assertExecutionRequestPayload(value: unknown): ExecutionRequest 
     Number.isNaN(Date.parse(request.createdAt)) ||
     (request.reportBotRole !== undefined && !["leader", "claude_leader", "codex_leader", "auditor"].includes(request.reportBotRole)) ||
     (request.workerAdapterType !== undefined && !isAiAdapterType(request.workerAdapterType)) ||
+    (request.revisionContext !== undefined && !isRevisionExecutionContext(request.revisionContext)) ||
     (request.telegramMessageThreadId !== undefined && typeof request.telegramMessageThreadId !== "string")
   ) {
     throw new Error("invalid-execution-request-payload");
   }
   return request;
+}
+
+function isRevisionExecutionContext(value: unknown): value is NonNullable<ExecutionRequest["revisionContext"]> {
+  if (!value || typeof value !== "object") return false;
+  const context = value as Record<string, unknown>;
+  return typeof context.revisionRequestId === "string" &&
+    ["format_only", "content", "scope_change"].includes(String(context.changedScope)) &&
+    typeof context.reverifyScope === "string" &&
+    (context.priorVerificationId === undefined || typeof context.priorVerificationId === "string");
 }
 export type ArtifactPolicy = {
   collectGlobs: string[];
@@ -565,7 +588,12 @@ export const knownCommands: readonly TelegramCommandName[] = [
   "/cancel",
   "/help",
   "/newagent",
-  "/agents"
+  "/agents",
+  "/inviteai",
+  "/aihealth",
+  "/registerroom",
+  "/change",
+  "/member"
 ] as const;
 
 export function isKnownCommand(value: string): value is TelegramCommandName {
@@ -598,6 +626,8 @@ function normalizeTelegramCallbackAction(value: string | undefined): TelegramCal
 function isTelegramCallbackAction(value: string | undefined): value is TelegramCallbackAction {
   return [
     "approve",
+    "mid_approve",
+    "mid_reject",
     "revise",
     "reject",
     "reverify",
@@ -606,5 +636,3 @@ function isTelegramCallbackAction(value: string | undefined): value is TelegramC
     "cancel"
   ].includes(value ?? "");
 }
-
-

@@ -70,6 +70,58 @@ test("allows independent verifier assignment", () => {
   assert.deepEqual(decision, { allowed: true, nextStatus: "verification_in_progress" });
 });
 
+test("감사 완료부터 검증 통과와 방장 최종 승인까지 completed로 이어진다", () => {
+  const auditContext = {
+    ...baseContext,
+    actorRole: "auditor" as const,
+    isOwner: false,
+    isVerifier: true,
+    authorActorId: "worker-a",
+    verifierActorId: "auditor-b"
+  };
+  const started = transitionTaskStatus("verification_pending", "verification_started", auditContext);
+  assert.deepEqual(started, { allowed: true, nextStatus: "verification_in_progress" });
+
+  const passed = transitionTaskStatus(started.nextStatus!, "verification_passed", auditContext);
+  assert.deepEqual(passed, { allowed: true, nextStatus: "commander_completion_pending" });
+
+  const commanderApproved = transitionTaskStatus(passed.nextStatus!, "commander_completion_approved", {
+    ...baseContext,
+    actorRole: "leader",
+    isOwner: false
+  });
+  assert.deepEqual(commanderApproved, { allowed: true, nextStatus: "completion_approval_pending" });
+
+  const completed = transitionTaskStatus(commanderApproved.nextStatus!, "owner_final_approved", baseContext);
+  assert.deepEqual(completed, { allowed: true, nextStatus: "completed" });
+});
+
+test("S27/S33: revision submission branches by changed scope", () => {
+  const assignee = { ...baseContext, isOwner: false, isAssignee: true };
+  assert.deepEqual(
+    transitionTaskStatus("revision_requested", "revision_submitted", { ...assignee, changedScope: "content" }),
+    { allowed: true, nextStatus: "reverification_pending" }
+  );
+  assert.deepEqual(
+    transitionTaskStatus("revision_requested", "revision_submitted", { ...assignee, changedScope: "format_only" }),
+    { allowed: true, nextStatus: "commander_completion_pending" }
+  );
+  assert.equal(
+    transitionTaskStatus("revision_requested", "revision_submitted", assignee).allowed,
+    false
+  );
+});
+
+test("S27: independent verifier can start a scoped re-verification", () => {
+  assert.deepEqual(transitionTaskStatus("reverification_pending", "verification_started", {
+    ...baseContext,
+    isOwner: false,
+    isVerifier: true,
+    authorActorId: "worker-a",
+    verifierActorId: "auditor-b"
+  }), { allowed: true, nextStatus: "verification_in_progress" });
+});
+
 test("commander completion approval requires leader role", () => {
   const denied = transitionTaskStatus("commander_completion_pending", "commander_completion_approved", {
     ...baseContext,

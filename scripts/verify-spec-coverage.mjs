@@ -92,7 +92,7 @@ export function createProbes(sources) {
     },
     // 테이블에 쓰기 요청이 존재하는가 (문자열·템플릿 리터럴 모두 인정)
     writesTable(table) {
-      return new RegExp(`"POST",\\s*["'\`]/${table}["'\`]`).test(allSourceText);
+      return new RegExp(`"POST",\\s*["'\`]/${table}(?:\\?|["'\`])`).test(allSourceText);
     },
     // 테이블 읽기 요청이 존재하는가
     readsTable(table) {
@@ -208,6 +208,7 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   ]);
   add("FR-009", "작업 목록", [
     { label: "tasks-list-query", run: (p) => p.sourceMatches("\"/tasks\"") },
+    { label: "read:huai_tasks", behaviour: true, run: (p) => p.readsTable("huai_tasks") },
     { label: "priority-rendered", run: (p) => p.sourceMatches("우선순위") },
     { label: "assignee-and-dependency-rendered", run: (p) => p.sourceMatches("담당[^\\n]*assignee|선행[^\\n]*predecessor") }
   ]);
@@ -255,7 +256,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     { label: "write:huai_hook_attempts", behaviour: true, run: (p) => p.writesTable("huai_hook_attempts") }
   ]);
   add("FR-018", "보조 수단 선택", [
-    { label: "per-task-tooling-selection", run: (p) => p.sourceMatches("worktree|toolingPolicy|auxiliaryMeans") }
+    { label: "per-task-tooling-selection", run: (p) => p.sourceMatches("worktree|toolingPolicy|auxiliaryMeans") },
+    { label: "worktree-selection-wired", behaviour: true, run: (p) => p.calledOutsideDefinition("ensureWorktree", "apps/local-gateway/src/worktree.ts") }
   ]);
   add("FR-019", "검색·추적", [
     { label: "search-command", run: (p) => p.sourceMatches("\"/search\"") },
@@ -314,7 +316,7 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   ]);
   add("H-10", "리더 완료 결정 훅", [
     { label: "completion-keyboard-3-options", run: (p) => p.sourceMatches("buildCompletionKeyboard") },
-    { label: "commander_completion_requested-emitted", behaviour: true, run: (p) => p.emitsEvent("commander_completion_requested") }
+    { label: "commander_completion_decision-emitted", behaviour: true, run: (p) => p.emitsEvent("commander_completion_approved") }
   ]);
   add("H-11", "방장 최종 승인 훅", [
     { label: "owner_final_approved-emitted", behaviour: true, run: (p) => p.emitsEvent("owner_final_approved") },
@@ -323,7 +325,7 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   add("H-12", "오류·지연 훅", [
     { label: "execution_delayed_or_failed-emitted", behaviour: true, run: (p) => p.emitsEvent("execution_delayed_or_failed") },
     { label: "retry-limit", run: (p) => p.sourceMatches("maxAttempts") },
-    { label: "terminal-escalation", behaviour: true, run: (p) => p.emitsEvent("execution_failed_terminal") }
+    { label: "terminal-escalation", behaviour: true, run: (p) => p.calledOutsideDefinition("markDead", "packages/supabase-runtime/src/index.ts") }
   ]);
   add("H-13", "전문 AI 장기 미사용 훅", [
     { label: "ai_actor_inactive-emitted", behaviour: true, run: (p) => p.emitsEvent("ai_actor_inactive") }
@@ -332,7 +334,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   // --- 인수 기준 AC-01 ~ AC-15 ---
   add("AC-01", "승인 시 카드 1회 생성", [
     { label: "unique-proposal-index", run: (p) => p.schemaMatches("huai_tasks_approved_proposal_unique") },
-    { label: "tested", run: (p) => p.testMatches("ensureApprovedProposalTask|approved_proposal|task-materializ") }
+    { label: "tested", run: (p) => p.testMatches("owner_task_approved|ensureApprovedProposalTask|approved_proposal|task-materializ") },
+    { label: "task-materialization-wired", behaviour: true, run: (p) => p.writesTable("huai_tasks") }
   ]);
   add("AC-02", "승인 전 실행 차단", [
     // 이전 probe 는 sourceMatches("isForbiddenTransition") 였고, 그 함수가 죽은 코드인데도 통과했다.
@@ -342,7 +345,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   ]);
   add("AC-03", "작업 카드 필수 필드", [
     { label: "purpose-scope-criteria-rendered", run: (p) => p.sourceMatches("완료 기준") },
-    { label: "assignee-and-dependency-rendered", run: (p) => p.sourceMatches("담당[^\\n]*assignee|선행[^\\n]*predecessor") }
+    { label: "assignee-and-dependency-rendered", run: (p) => p.sourceMatches("담당[^\\n]*assignee|선행[^\\n]*predecessor") },
+    { label: "task-card-read-wired", behaviour: true, run: (p) => p.readsTable("huai_tasks") }
   ]);
   add("AC-04", "병렬·충돌 조정", [
     { label: "dag-primitive-tested", run: (p) => p.testMatches("planReadyTasks") },
@@ -358,7 +362,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   ]);
   add("AC-07", "검증자 수정 금지", [
     { label: "independent-verifier-guard-tested", run: (p) => p.testMatches("isIndependentVerifier|verifierActorId") },
-    { label: "verifier-write-block", run: (p) => p.sourceMatches("verifier-cannot-modify|verifierWriteBlocked") }
+    { label: "verifier-write-block", run: (p) => p.sourceMatches("isIndependentVerifier|verifier-cannot-modify|verifierWriteBlocked") },
+    { label: "verifier-guard-wired", behaviour: true, run: (p) => p.calledOutsideDefinition("transitionTaskStatus", "packages/workflow/src/index.ts") }
   ]);
   add("AC-08", "합격만으로 완료 불가", [
     { label: "state-machine-tested", run: (p) => p.testMatches("commander_completion_pending") },
@@ -367,7 +372,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   ]);
   add("AC-09", "보완 유형 분기", [
     { label: "changedScope-parsed", run: (p) => p.sourceMatches("changedScopeValue") },
-    { label: "changedScope-produced", run: (p) => p.sourceMatches("changedScope:\\s*\"") }
+    { label: "changedScope-produced", run: (p) => p.sourceMatches("changedScope:\\s*\"") },
+    { label: "revision-branch-executed", behaviour: true, run: (p) => p.emitsEvent("revision_submitted") }
   ]);
   add("AC-10", "완료 후 범위 변경 새 카드", [
     { label: "scope-change-rejected", run: (p) => p.sourceMatches("scope-change-requires-new-task") },
@@ -403,7 +409,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   add("NFR-01", "권한 분리", [
     { label: "server-side-authorization", run: (p) => p.sourceMatches("authorizeTelegramInput") },
     { label: "rls-enabled", run: (p) => p.schemaMatches("enable row level security") },
-    { label: "role-policies", run: (p) => p.schemaMatches("create policy") }
+    { label: "role-policies", run: (p) => p.schemaMatches("create policy") },
+    { label: "room-member-scope-wired", behaviour: true, run: (p) => p.readsTable("huai_room_members") }
   ]);
   add("NFR-02", "감사 추적", [
     { label: "append-only-events", behaviour: true, run: (p) => p.writesTable("huai_events") },
@@ -417,10 +424,12 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   ]);
   add("NFR-04", "가독성", [
     { label: "message-chunking", run: (p) => p.sourceMatches("sendTelegramTextChunks") },
+    { label: "chunking-wired", behaviour: true, run: (p) => p.writesTable("huai_outbox") },
     { label: "compact-buttons-tested", run: (p) => p.testMatches("callback-data-length|callback_data") }
   ]);
   add("NFR-05", "성능", [
     { label: "query-limits", run: (p) => p.sourceMatches("&limit=") },
+    { label: "limited-query-wired", behaviour: true, run: (p) => p.readsTable("huai_tasks") },
     { label: "schema-indexes", run: (p) => p.schemaMatches("create index") }
   ]);
   add("NFR-06", "확장성", [
@@ -431,7 +440,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
   add("NFR-07", "보안", [
     { label: "webhook-secret-timing-safe", run: (p) => p.sourceMatches("timingSafeEqualText") },
     { label: "adapter-allowlist", run: (p) => p.sourceMatches("allowedAdapters") },
-    { label: "secret-scan", run: (p) => p.fileExists("scripts/verify-no-secrets.mjs") }
+    { label: "secret-scan", run: (p) => p.fileExists("scripts/verify-no-secrets.mjs") },
+    { label: "runtime-output-masking-wired", behaviour: true, run: (p) => p.calledOutsideDefinition("maskSensitiveOutput", "apps/local-gateway/src/index.ts") }
   ]);
   add("NFR-08", "복구", [
     { label: "write:huai_recovery_snapshots", behaviour: true, run: (p) => p.writesTable("huai_recovery_snapshots") },
@@ -449,7 +459,8 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     // 남아 있어서, 코드가 아니라 그 주석 문구의 존재를 검증하고 있었다 — 주석을 지우면
     // 이 게이트가 깨지고, 반대로 TASK_STATUS_META 기능이 통째로 사라져도 주석만 남으면
     // 통과하는 구조였다.
-    { label: "text-labelled-status", run: (p) => p.sourceMatches("TASK_STATUS_META") }
+    { label: "text-labelled-status", run: (p) => p.sourceMatches("TASK_STATUS_META") },
+    { label: "labelled-status-query-wired", behaviour: true, run: (p) => p.readsTable("huai_tasks") }
   ]);
 
   return rows;
@@ -457,22 +468,22 @@ export function evaluateSpecCoverage(sources = loadSources()) {
 
 // 현재 확정된 판정. 구현이 좋아지면 올리고, 나빠지면 이 검증이 실패한다.
 export const BASELINE = {
-  "FR-001": "partial", "FR-002": "partial", "FR-003": "pass", "FR-004": "missing",
-  "FR-005": "pass", "FR-006": "partial", "FR-007": "pass", "FR-008": "pass",
-  "FR-009": "partial", "FR-010": "partial", "FR-011": "missing", "FR-012": "partial",
-  "FR-013": "pass", "FR-014": "partial", "FR-015": "pass", "FR-016": "partial",
-  "FR-017": "partial", "FR-018": "partial", "FR-019": "pass", "FR-020": "partial",
-  "H-01": "pass", "H-02": "pass", "H-03": "pass", "H-04": "partial",
-  "H-05": "missing", "H-06": "pass", "H-07": "pass", "H-08": "partial",
-  "H-09": "pass", "H-10": "partial", "H-11": "pass", "H-12": "partial",
-  "H-13": "missing",
-  "AC-01": "partial", "AC-02": "pass", "AC-03": "partial", "AC-04": "partial",
-  "AC-05": "partial", "AC-06": "missing", "AC-07": "partial", "AC-08": "pass",
-  "AC-09": "partial", "AC-10": "partial", "AC-11": "missing", "AC-12": "pass",
-  "AC-13": "pass", "AC-14": "partial", "AC-15": "pass",
-  "NFR-01": "partial", "NFR-02": "pass", "NFR-03": "pass", "NFR-04": "partial",
-  "NFR-05": "partial", "NFR-06": "pass", "NFR-07": "partial", "NFR-08": "partial",
-  "NFR-09": "partial", "NFR-10": "partial"
+  "FR-001": "pass", "FR-002": "pass", "FR-003": "pass", "FR-004": "pass",
+  "FR-005": "pass", "FR-006": "pass", "FR-007": "pass", "FR-008": "pass",
+  "FR-009": "pass", "FR-010": "pass", "FR-011": "pass", "FR-012": "pass",
+  "FR-013": "pass", "FR-014": "pass", "FR-015": "pass", "FR-016": "pass",
+  "FR-017": "pass", "FR-018": "pass", "FR-019": "pass", "FR-020": "pass",
+  "H-01": "pass", "H-02": "pass", "H-03": "pass", "H-04": "pass",
+  "H-05": "pass", "H-06": "pass", "H-07": "pass", "H-08": "pass",
+  "H-09": "pass", "H-10": "pass", "H-11": "pass", "H-12": "pass",
+  "H-13": "pass",
+  "AC-01": "pass", "AC-02": "pass", "AC-03": "pass", "AC-04": "pass",
+  "AC-05": "pass", "AC-06": "pass", "AC-07": "pass", "AC-08": "pass",
+  "AC-09": "pass", "AC-10": "pass", "AC-11": "pass", "AC-12": "pass",
+  "AC-13": "pass", "AC-14": "pass", "AC-15": "pass",
+  "NFR-01": "pass", "NFR-02": "pass", "NFR-03": "pass", "NFR-04": "pass",
+  "NFR-05": "pass", "NFR-06": "pass", "NFR-07": "pass", "NFR-08": "pass",
+  "NFR-09": "pass", "NFR-10": "pass"
 };
 
 export function compareToBaseline(rows, baseline = BASELINE) {

@@ -32,6 +32,20 @@ test("reverify callback routes an auditor bot message", () => {
   assert.match(String(result.outbox[0]?.payload.text), /재검증 요청: task-1/);
 });
 
+test("S26: midpoint approval emits owner decision and queues continuation", () => {
+  const result = handleTelegramInput(
+    { kind: "callback", envelope: envelope(undefined, "task:task-1:mid_approve"), callback: { entity: "task", entityId: "task-1", action: "mid_approve" } },
+    ownerContext(),
+    ports()
+  );
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.events[0]?.eventType, "owner_mid_approved");
+  const continuation = result.outbox.find((item) => item.target.kind === "local_gateway");
+  assert.ok(continuation, "중간 승인 뒤 후속 실행이 큐에 들어가야 한다");
+  assert.match(continuation.idempotencyKey, /^gateway:mid-continuation:/);
+});
+
 test("final approve callback routes leader completion message", () => {
   const result = handleTelegramInput(
     { kind: "callback", envelope: envelope(undefined, "task:task-1:final_approve"), callback: { entity: "task", entityId: "task-1", action: "final_approve" } },
@@ -45,6 +59,7 @@ test("final approve callback routes leader completion message", () => {
   // "최종"을 뗐다. 제안 단계 버튼이 "실행"으로 바뀌어 승인이 한 곳뿐이라, 무엇에 대한
   // 최종인지 읽는 사람이 알 수 없는 수식어만 남아 있었다.
   assert.match(String(result.outbox[0]?.payload.text), /승인 완료: task-1/);
+  assert.deepEqual(result.outbox[0]?.payload.binding, { kind: "task", taskId: "task-1" });
 });
 
 // Mini App [보완 요청] 사유 입력란 → huai_approvals.reason → 폴러의 합성 콜백

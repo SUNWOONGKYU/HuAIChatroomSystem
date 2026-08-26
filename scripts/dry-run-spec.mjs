@@ -19,6 +19,7 @@ import { runLocalGatewayConsumerOnce } from "../dist/apps/local-gateway/src/cons
 import { createArtifactCollector } from "../dist/apps/local-gateway/src/artifact-collector.js";
 import { transitionTaskStatus, isForbiddenTransition, planReadyTasks } from "../dist/packages/workflow/src/index.js";
 import { approvalRecordForEvent, approvalEntityRefFromPayload, approvalDeciderFromPayload } from "../dist/apps/bot-service/src/supabase-store.js";
+import { SupabaseOutboxStore, classifyRevisionChangedScope } from "../dist/packages/supabase-runtime/src/index.js";
 
 const OWNER_USER = "5001";
 const MEMBER_USER = "5002";
@@ -401,16 +402,158 @@ const ownerContext = { actorRole: "human_owner", isOwner: true, isAssignee: fals
     nonApproval ? "PASS" : "FAIL", "제안생성·작업시작·산출물저장은 원장 대상 아님");
 }
 
-// ============ 8. 미구현 확인 (도달 불가 단계) ============
+// ============ 8. 중간 승인·보완·재검증 ============
+
+const WORKFLOW_TASK_ID = "66666666-6666-4666-8666-666666666666";
+const AFFECTED_TASK_ID = "88888888-8888-4888-8888-888888888888";
+
+{
+  const probe = createApprovalWorkflowProbe("scheduled");
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "dry-run", fetchImpl: probe.fetchImpl });
+  const midpointText = `MID_APPROVAL_START\n${JSON.stringify({
+    reportId: "99999999-9999-4999-8999-999999999999",
+    approvalRequestId: "mid-dry-run",
+    summary: "후속 구현이 의존하는 데이터 모델을 확정했습니다.",
+    significanceReason: "영향받는 작업의 저장 형식이 달라집니다.",
+    affectedTaskIds: [AFFECTED_TASK_ID]
+  })}\nMID_APPROVAL_END`;
+  await store.recordGatewayExecutionResult({
+    request: workflowExecutionRequest("mid-dry-run", "codex_leader"),
+    status: "completed",
+    events: [{ type: "stdout", taskId: WORKFLOW_TASK_ID, attemptId: "mid-dry-run", text: midpointText }],
+    occurredAt: ports.now()
+  });
+  const callback = accept(callbackUpdate(260, OWNER_USER, `task:${WORKFLOW_TASK_ID}:mid_approve`));
+  const callbackAuth = callback.kind === "accepted" ? authorizeTelegramInput(callback.input, authorization) : { allowed: false };
+  const approval = callback.kind === "accepted" && callbackAuth.allowed
+    ? handleTelegramInput(callback.input, authorization, ports)
+    : undefined;
+  const approvalEvent = approval?.accepted ? approval.events[0] : undefined;
+  const resumed = approvalEvent
+    ? transitionTaskStatus(probe.status(), approvalEvent.eventType, ownerContext)
+    : { allowed: false };
+  const passed = probe.hasEvent("mid_approval_required") &&
+    probe.wroteTable("huai_reports") && probe.wroteTable("huai_task_dependencies") &&
+    probe.status() === "mid_approval_pending" &&
+    approvalEvent?.eventType === "owner_mid_approved" && resumed.allowed && resumed.nextStatus === "in_progress" &&
+    approval?.accepted && approval.outbox.some((item) => item.target.kind === "local_gateway" && item.idempotencyKey.startsWith("gateway:mid-continuation:"));
+  record("S26", "FR-011 / H-05 / AC-06", "중간 승인 게이트", passed ? "PASS" : "FAIL",
+    `event=${probe.hasEvent("mid_approval_required")} status=${probe.status()} affected=${probe.wroteTable("huai_task_dependencies")} approval=${approvalEvent?.eventType ?? "none"}`);
+}
+
+{
+  const probe = createApprovalWorkflowProbe("verification_in_progress");
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "dry-run", fetchImpl: probe.fetchImpl });
+  await store.recordGatewayExecutionResult({
+    request: { ...workflowExecutionRequest("audit-fail", "auditor"), workerAdapterType: "codex" },
+    status: "completed",
+    events: [{ type: "stdout", taskId: WORKFLOW_TASK_ID, attemptId: "audit-fail", text: "검증 불합격. 입력 검증을 보완해야 합니다." }],
+    occurredAt: ports.now()
+  });
+  const revisionRequest = probe.outboxExecution("gateway:revision:");
+  if (revisionRequest) {
+    await store.recordGatewayExecutionResult({
+      request: revisionRequest,
+      status: "completed",
+      events: [{ type: "stdout", taskId: WORKFLOW_TASK_ID, attemptId: revisionRequest.attemptId, text: "입력 검증 보완 완료" }],
+      occurredAt: ports.now()
+    });
+  }
+  const passed = probe.wroteTable("huai_revision_requests") &&
+    probe.hasEvent("verification_failed_or_changes_requested") &&
+    probe.hasEvent("revision_submitted") &&
+    probe.hasRevisionSubmission("content") &&
+    probe.status() === "reverification_pending" &&
+    probe.hasOutbox("gateway:single-worker-audit:");
+  record("S27", "FR-014 / H-07 / H-08", "검증 불합격 → 보완 → 재검증 루프", passed ? "PASS" : "FAIL",
+    `failed=${probe.hasEvent("verification_failed_or_changes_requested")} revision=${Boolean(revisionRequest)} submitted=${probe.hasEvent("revision_submitted")} status=${probe.status()}`);
+}
+
+{
+  const probe = createApprovalWorkflowProbe("revision_requested");
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "dry-run", fetchImpl: probe.fetchImpl });
+  const changedScope = classifyRevisionChangedScope("오탈자와 서식만 수정");
+  await store.recordGatewayExecutionResult({
+    request: {
+      ...workflowExecutionRequest("format-revision", "codex_leader"),
+      revisionContext: {
+        revisionRequestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        priorVerificationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        changedScope,
+        reverifyScope: "표현과 서식"
+      }
+    },
+    status: "completed",
+    events: [{ type: "stdout", taskId: WORKFLOW_TASK_ID, attemptId: "format-revision", text: "형식 보완 완료" }],
+    occurredAt: ports.now()
+  });
+  const passed = changedScope === "format_only" && probe.hasRevisionSubmission("format_only") &&
+    probe.status() === "commander_completion_pending" && !probe.hasOutbox("gateway:single-worker-audit:");
+  record("S33", "AC-09", "보완 유형 분기 (내용 변경 vs 형식 수정)", passed ? "PASS" : "FAIL",
+    `changedScope=${changedScope} status=${probe.status()} fullAudit=${probe.hasOutbox("gateway:single-worker-audit:")}`);
+}
+
+function workflowExecutionRequest(attemptId, reportBotRole) {
+  return {
+    roomId: ports.executionDefaults.roomId,
+    taskId: WORKFLOW_TASK_ID,
+    attemptId,
+    actorId: ports.executionDefaults.actorId,
+    requestedBy: OWNER_USER,
+    adapterType: "codex",
+    projectPath: ports.executionDefaults.projectPath,
+    prompt: "dry-run workflow",
+    timeoutMs: ports.executionDefaults.timeoutMs,
+    idempotencyKey: `dry-run:${attemptId}`,
+    createdAt: ports.now(),
+    reportBotRole
+  };
+}
+
+function createApprovalWorkflowProbe(initialStatus) {
+  let taskStatus = initialStatus;
+  const requests = [];
+  const fetchImpl = async (input, init) => {
+    const url = String(input);
+    const method = String(init?.method ?? "GET");
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push({ url, method, body });
+    const path = url.split("/rest/v1")[1] ?? url;
+    if (path.includes("huai_rooms")) return workflowJson(200, [{ telegram_chat_id: CHAT_ID }]);
+    if (path.includes("huai_tasks") && method === "GET") return workflowJson(200, [{ status: taskStatus }]);
+    if (path.includes("huai_tasks") && method === "PATCH") {
+      taskStatus = body.status;
+      return workflowJson(200, []);
+    }
+    if (path.includes("huai_gateway_instances") && method === "GET") return workflowJson(200, [{ gateway_id: "primary" }]);
+    if (path.includes("huai_verifications") && method === "POST") return workflowJson(201, [{ verification_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }]);
+    if (path.includes("huai_revision_requests") && method === "GET") return workflowJson(200, []);
+    if (path.includes("huai_revision_requests") && method === "POST") return workflowJson(201, [{ revision_request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
+    if (path.includes("huai_events") && method === "POST") return workflowJson(201, [{ event_id: `event-${body.idempotency_key}`, ...body, created_at: ports.now() }]);
+    return workflowJson(200, []);
+  };
+  return {
+    fetchImpl,
+    status: () => taskStatus,
+    hasEvent: (eventType) => requests.some((request) => request.body?.event_type === eventType),
+    wroteTable: (table) => requests.some((request) => request.method === "POST" && request.url.endsWith(`/${table}`)),
+    hasOutbox: (prefix) => requests.some((request) => String(request.body?.idempotency_key ?? "").startsWith(prefix)),
+    outboxExecution: (prefix) => requests.find((request) => String(request.body?.idempotency_key ?? "").startsWith(prefix))?.body?.payload?.executionRequest,
+    hasRevisionSubmission: (scope) => requests.some((request) => request.method === "PATCH" && request.url.includes("huai_revision_requests") && request.body?.changed_scope === scope)
+  };
+}
+
+function workflowJson(status, body) {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+// ============ 9. 미구현 확인 (도달 불가 단계) ============
 
 const unreachable = [
-  ["S26", "FR-011 / H-05 / AC-06", "중간 승인 게이트", "mid_approval_required 이벤트를 발행하는 코드가 없어 이 흐름에 진입할 수 없다"],
-  ["S27", "FR-014 / H-07 / H-08", "검증 불합격 → 보완 → 재검증 루프", "verification_failed_or_changes_requested / revision_submitted 발행처 없음, huai_revision_requests 미배선"],
   ["S28", "FR-002 / FR-004 / H-13 / AC-11", "참여자 초대·퇴장·AI 퇴장 제안", "관련 명령·이벤트·쓰기 경로 전무"],
   ["S29", "FR-018", "보조 수단 선택 (워크트리·토론·투표·A2A·MCP)", "코드 없음"],
   ["S30", "NFR-08", "백업·복구", "huai_recovery_snapshots 미배선"],
   ["S32", "FR-020", "고정 현황 메시지 편집 갱신", "buildProjectStatusMessage 호출처 없음, editMessageId 생산자 없음"],
-  ["S33", "AC-09", "보완 유형 분기 (내용 변경 vs 형식 수정)", "changedScope 를 세팅하는 코드가 없어 항상 undefined"],
   ["S34", "AC-14", "attempt 단위 재개", "huai_execution_attempts 미배선 — outbox lease 로만 대체"]
 ];
 for (const [id, requirement, title, detail] of unreachable) {

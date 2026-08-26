@@ -204,6 +204,16 @@ function routeTelegramInput(
         return createAgentPersonaFromTelegram(input);
       case "/agents":
         return listAgentPersonasFromTelegram(input);
+      case "/inviteai":
+        return inviteAiActorFromTelegram(input);
+      case "/aihealth":
+        return checkAiActorHealthFromTelegram(input);
+      case "/registerroom":
+        return registerRoomFromTelegram(input);
+      case "/change":
+        return requestPostCompletionChangeFromTelegram(input);
+      case "/member":
+        return manageRoomMemberFromTelegram(input);
     }
   }
 
@@ -537,6 +547,26 @@ export function buildOwnerActionOutbox(
       enqueueExecutionAfterApproval(taskOrProposalId, input, ports)
     ];
   }
+  if (action === "owner_mid_approved" || action === "owner_mid_rejected") {
+    const messages = [makeRoleMessageOutbox({
+      botRole: "leader",
+      telegramChatId: input.envelope.telegramChatId,
+      idempotencyKey: `telegram:mid-decision:${taskOrProposalId}:${input.envelope.updateId}`,
+      text: action === "owner_mid_approved"
+        ? `중간 승인을 확인했습니다: ${taskOrProposalId}\n해당 작업 흐름을 계속할 수 있습니다.`
+        : `중간 결과를 반려했습니다: ${taskOrProposalId}\n해당 작업 흐름은 중단 상태로 유지됩니다.`,
+      callbackQueryId: input.envelope.callbackQueryId,
+      bindingId: `mid-decision:${taskOrProposalId}:${input.envelope.updateId}`
+    })];
+    if (action === "owner_mid_approved") {
+      if (!ports.executionDefaults) {
+        messages.push(buildExecutionNotConfiguredOutbox({ botRole: "leader", entityId: taskOrProposalId, input }));
+      } else {
+        messages.push(enqueueMidApprovalContinuation(taskOrProposalId, input, ports));
+      }
+    }
+    return messages;
+  }
   if (action === "owner_verification_requested" || action === "owner_reverification_requested") {
     // 실행 기본값이 없으면 enqueueAuditExecutionIfConfigured 는 조용히 []를 반환한다.
     // 그런데 위 코드는 "검증 요청: ..."을 무조건 먼저 보냈다 — 사용자는 검증이 접수된
@@ -566,7 +596,8 @@ export function buildOwnerActionOutbox(
         idempotencyKey: `telegram:final-approved:${taskOrProposalId}:${input.envelope.updateId}`,
         text: `승인 완료: ${taskOrProposalId}`,
         callbackQueryId: input.envelope.callbackQueryId,
-        bindingId: `final-approved:${taskOrProposalId}:${input.envelope.updateId}`
+        bindingId: `final-approved:${taskOrProposalId}:${input.envelope.updateId}`,
+        binding: { kind: "task", taskId: taskOrProposalId }
       })
     ];
   }
@@ -646,6 +677,35 @@ export function enqueueExecutionAfterApproval(
   };
 }
 
+function enqueueMidApprovalContinuation(
+  taskId: string,
+  input: NormalizedTelegramInput,
+  ports: TelegramInputHandlingPorts
+): OrchestratorOutboxItem {
+  const defaults = ports.executionDefaults;
+  if (!defaults) throw new Error("missing-execution-defaults");
+  const attemptId = ports.makeId("mid-continuation");
+  const executionRequest: ExecutionRequest = {
+    roomId: defaults.roomId,
+    taskId,
+    attemptId,
+    actorId: defaults.actorId,
+    requestedBy: input.envelope.telegramUserId ?? "unknown",
+    adapterType: defaults.adapterType,
+    projectPath: defaults.projectPath,
+    prompt: `방장이 중간 결과를 승인했습니다. 작업 ${taskId}의 승인된 체크포인트 다음 단계부터 계속 실행하세요.`,
+    timeoutMs: defaults.timeoutMs,
+    idempotencyKey: `mid-continuation:${taskId}:${attemptId}`,
+    createdAt: ports.now(),
+    telegramMessageThreadId: input.envelope.messageThreadId
+  };
+  return {
+    target: { kind: "local_gateway", gatewayId: defaults.gatewayId },
+    idempotencyKey: `gateway:mid-continuation:${taskId}:${decisionRoundKey(input)}`,
+    payload: { executionRequest }
+  };
+}
+
 // 실행 기본값(actor/gateway/project path)이 없는 방은 승인·검증을 실제로 실행할 수
 // 없다. 예외를 던지거나(승인) 성공 메시지를 먼저 보내고 조용히 아무 것도 안 하는 것
 // (검증) 둘 다 사용자에게 진짜 상태를 숨긴다 — 이 함수 하나로 통일해 "지금은 실행할
@@ -674,6 +734,7 @@ function makeRoleMessageOutbox(input: {
   idempotencyKey: string;
   text: string;
   bindingId: string;
+  binding?: { kind: "task"; taskId: string } | { kind: "event"; eventId: string };
   callbackQueryId?: string;
   keyboard?: unknown;
   editMessageId?: string;
@@ -687,7 +748,7 @@ function makeRoleMessageOutbox(input: {
       callbackQueryId: input.callbackQueryId,
       editMessageId: input.editMessageId,
       messageThreadId: input.messageThreadId,
-      binding: { kind: "event", eventId: input.bindingId }
+      binding: input.binding ?? { kind: "event", eventId: input.bindingId }
     }
   };
 }
@@ -850,6 +911,115 @@ export function listAgentPersonasFromTelegram(
     ]
   };
 }
+
+export function inviteAiActorFromTelegram(
+  input: Extract<NormalizedTelegramInput, { kind: "command" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const [role, adapterType] = input.command.args;
+  const validRoles = ["leader", "claude_leader", "codex_leader", "auditor"];
+  const adapters: Record<string, string> = {
+    leader: "orchestrator",
+    claude_leader: "claude_code",
+    codex_leader: "codex",
+    auditor: "auditor"
+  };
+  const normalizedRole = role ?? "";
+  const normalizedAdapter = adapterType || adapters[normalizedRole];
+  const key = `telegram:invite-ai:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
+  if (!validRoles.includes(normalizedRole) || !normalizedAdapter) {
+    return { accepted: true, authorization: { allowed: true }, events: [], outbox: [{
+      target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
+      idempotencyKey: key,
+      payload: { text: "사용법: /inviteai <leader|claude_leader|codex_leader|auditor> [adapter_type]", binding: { kind: "event", eventId: key } }
+    }] };
+  }
+  return { accepted: true, authorization: { allowed: true }, events: [], outbox: [{
+    target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
+    idempotencyKey: key,
+    payload: {
+      text: "전문 AI 초대를 처리 중…",
+      binding: { kind: "event", eventId: key },
+      aiActorCommand: { action: "invite", role: normalizedRole, adapterType: normalizedAdapter }
+    }
+  }] };
+}
+
+export function checkAiActorHealthFromTelegram(
+  input: Extract<NormalizedTelegramInput, { kind: "command" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const key = `telegram:ai-health:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
+  return { accepted: true, authorization: { allowed: true }, events: [], outbox: [{
+    target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
+    idempotencyKey: key,
+    payload: {
+      text: "전문 AI 사용 상태를 확인 중…",
+      binding: { kind: "event", eventId: key },
+      aiActorCommand: { action: "check" }
+    }
+  }] };
+}
+
+export function registerRoomFromTelegram(
+  input: Extract<NormalizedTelegramInput, { kind: "command" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const key = `telegram:register-room:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
+  return { accepted: true, authorization: { allowed: true }, events: [], outbox: [{
+    target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
+    idempotencyKey: key,
+    payload: {
+      text: "프로젝트 채팅룸 등록을 처리 중…",
+      binding: { kind: "event", eventId: key },
+      roomCommand: { action: "register", telegramChatId: input.envelope.telegramChatId, ownerTelegramUserId: input.envelope.telegramUserId }
+    }
+  }] };
+}
+
+export function requestPostCompletionChangeFromTelegram(
+  input: Extract<NormalizedTelegramInput, { kind: "command" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const [taskId, ...scopeParts] = input.command.args;
+  const scope = scopeParts.join(" ").trim();
+  const key = `telegram:post-completion-change:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
+  const valid = Boolean(taskId && scope);
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: valid ? [{
+      eventType: scope.includes("범위") || scope.toLowerCase().includes("scope") ? "post_completion_scope_change_requested" : "post_completion_minor_change_requested",
+      idempotencyKey: key + ":event",
+      payload: { taskId, scope, telegramChatId: input.envelope.telegramChatId }
+    }] : [],
+    outbox: [{
+      target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
+      idempotencyKey: key,
+      payload: { text: valid ? "완료 후 변경 요청을 기록했습니다. 새 작업 카드 승인 대기로 분기합니다." : "사용법: /change <task_id> <변경 내용>", binding: { kind: "event", eventId: key } }
+    }]
+  };
+}
+
+export function manageRoomMemberFromTelegram(
+  input: Extract<NormalizedTelegramInput, { kind: "command" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const [telegramUserId, action = "add"] = input.command.args;
+  const validAction = action === "add" || action === "leave";
+  const valid = Boolean(telegramUserId && /^-?\d+$/.test(telegramUserId) && validAction);
+  const key = `telegram:member:${input.envelope.telegramBotId}:${input.envelope.updateId}`;
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: [],
+    outbox: [{
+      target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
+      idempotencyKey: key,
+      payload: {
+        text: valid ? "참여자 변경을 처리 중…" : "사용법: /member <telegram_user_id> <add|leave>",
+        binding: { kind: "event", eventId: key },
+        ...(valid ? { roomMemberCommand: { action, telegramUserId } } : {})
+      }
+    }]
+  };
+}
+
 
 type RoutedProposalText = {
   text: string;
@@ -1149,6 +1319,16 @@ function requiredPermissionForInput(input: NormalizedTelegramInput): RoomPermiss
       case "/help":
       case "/agents":
         return "task:read";
+      case "/inviteai":
+        return "task:create";
+      case "/aihealth":
+        return "task:read";
+      case "/registerroom":
+        return "task:create";
+      case "/change":
+        return "task:create";
+      case "/member":
+        return "task:create";
       case "/newagent":
         return "task:create";
       case "/approve":
@@ -1166,6 +1346,9 @@ function requiredPermissionForInput(input: NormalizedTelegramInput): RoomPermiss
 
   switch (input.callback.action) {
     case "approve":
+      return "task:approve";
+    case "mid_approve":
+    case "mid_reject":
       return "task:approve";
     case "reject":
       return "task:reject";
@@ -1257,6 +1440,10 @@ function callbackActionToOwnerEvent(action: TelegramCallbackAction): WorkflowEve
   switch (action) {
     case "approve":
       return "owner_task_approved";
+    case "mid_approve":
+      return "owner_mid_approved";
+    case "mid_reject":
+      return "owner_mid_rejected";
     case "reject":
       return "proposal_rejected";
     case "revise":

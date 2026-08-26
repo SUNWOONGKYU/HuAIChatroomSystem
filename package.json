@@ -107,6 +107,7 @@
     "verify:automatic-audit": "npm run build && node --test dist/packages/supabase-runtime/test/automatic-audit.test.js",
     "verify:gate44": "npm run verify:automatic-audit",
     "verify:live-kpi-measure": "node --test scripts/measure-live-kpi.test.mjs",
+    "verify:live-formal-smoke-diagnostics": "node --test scripts/live-formal-smoke-diagnostics.test.mjs",
     "verify:gate45": "npm run verify:live-kpi-measure",
     "verify:execution-heartbeat": "npm run build && node --test dist/apps/bot-service/test/execution-heartbeat.test.js",
     "verify:gate46": "npm run verify:execution-heartbeat",
