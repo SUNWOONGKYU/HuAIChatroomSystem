@@ -273,9 +273,17 @@ create table if not exists huai_revision_requests (
   recommendations text,
   reverify_scope text not null,
   status text not null default 'open',
+  fix_submission_id text,
+  changed_scope text,
+  submitted_at timestamptz,
   created_at timestamptz not null default now(),
-  constraint huai_revision_requests_status_check check (status in ('open', 'submitted', 'verified', 'closed', 'cancelled'))
+  constraint huai_revision_requests_status_check check (status in ('open', 'submitted', 'verified', 'closed', 'cancelled')),
+  constraint huai_revision_requests_changed_scope_check check (changed_scope is null or changed_scope in ('format_only', 'content', 'scope_change'))
 );
+
+create unique index if not exists huai_revision_requests_one_open_per_task
+on huai_revision_requests (task_id)
+where status = 'open';
 
 create table if not exists huai_archive_manifest (
   manifest_id uuid primary key default gen_random_uuid(),
@@ -773,7 +781,6 @@ using (
 -- GRANT 와 RLS 는 별개의 관문이라 둘 다 통과해야 한다. anon 에는 주지 않는다 —
 -- 서명된 JWT 가 없어 어차피 항상 거부되지만 최소 권한 원칙을 지킨다.
 grant select on huai_tasks to authenticated;
-
 
 
 
