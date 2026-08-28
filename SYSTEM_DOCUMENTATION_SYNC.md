@@ -39,8 +39,8 @@
 ## 현재 사용자 표시 기준
 
 - 작업 제안 버튼: `실행`, `수정`, `반려`
-- 완료 승인 버튼: 방 안이 아니라 현황판(Mini App)에만 있다 — `승인`(final_approve), `보완 요청`
-  (request_revision) 둘. 옛 방 안 3버튼(`검증`/`보완`/`완료`, `buildCompletionKeyboard`)은
+- 완료 승인 버튼: 방 안이 아니라 협업 운영센터(Mini App)에만 있다 — `승인`(final_approve), `보완 요청`
+  (request_revision) 둘. 옛 방 안 3버튼(`검증`/`보완`/`완료`)은
   2026-08-23부로 어떤 운영 경로에서도 호출되지 않는다.
 - 실행 결과는 사람이 알아야 할 짧은 내용만 Telegram에 표시한다.
 - 내부 JSON, 훅 로그, 토큰 사용량, 파일 경로 나열은 기본적으로 숨긴다.
@@ -48,7 +48,7 @@
 - AI 협의 요청은 LeaderBot이 ClaudeBot, CodexBot, AuditBot 역할 실행으로 분리한다. 이를 다중 AI 협의로 표기한다.
 - 사람이 원하면 `@audit_chatroom_bot`으로 직접 감사를 요청한다.
 - `/trace <task_id>`는 이벤트·산출물 URI·검증 이력을 Telegram으로 직접 출력한다.
-- 실행 엔진은 Claude Code·Codex·Antigravity 셋이고, 한도에 걸리면 최대 두 번까지 넘긴다.
+- 실행 엔진은 Claude Code·Codex·Gemini 웹 셋이고, 기존 Antigravity/agy 값은 Gemini 웹으로 호환한다. Gemini 웹은 전용 Chrome CDP 세션의 응답 전용 경로이며 로컬 파일을 수정하지 않는다. 실제 한도·로그인·CDP·타임아웃 오류는 명시적으로 기록한다.
   한도 판정은 각 CLI 자체 통보(프로토콜 이벤트 포함)일 때만 인정한다.
 - 실행 결과·감사 보고가 300자를 넘으면 앞부분만 방에 보내고 `전문 보기` 버튼을 붙인다.
 - 웹 산출물은 실행 직후 Vercel 프리뷰로만 올리고, 완료 승인이 실제로 기록된 뒤에만 프로덕션
@@ -57,7 +57,11 @@
   자동승인도 방장 승인과 같은 권한 검사를 통과해야 실행된다.
 - Telegram 수신은 기본이 polling(`BOT_SERVICE_RECEIVE_MODE=polling`)이라 공개 URL이 필요 없다.
   공인 도메인이 있는 배포는 webhook 으로 전환할 수 있다.
-- 포럼 주제를 쓰는 방은 주제마다 작업·현황판이 따로 흐른다.
+- 포럼 주제를 쓰는 방은 주제마다 작업·협업 운영센터가 따로 흐른다.
+- 협업 운영센터 진입은 Telegram 메뉴 `/center` 또는 작업 메시지 링크다. 예전 고정 메시지는 만들지 않는다.
+- `/center`는 현재 방의 roomId와 포럼 주제의 threadId를 함께 전달한다.
 - `/trace` 출력에는 raw event payload와 URI secret query 값을 포함하지 않는다.
 - 질문형 멘션은 작업 제안 버튼 없이 즉답하고, 실제 변경 지시만 작업 제안으로 만든다.
 - 기본 AI 실행 제한은 15분이다.
+- 퀴즈는 `classifyTaskRisk`가 고위험으로 분류한 배포·삭제·권한/인증·환경변수·시크릿·중요 설정·DB 스키마 변경에만 3문항을 요구한다. 조회·분석·설명·검토와 단순 저위험 파일 변경은 퀴즈 행을 만들지 않는다.
+- synthetic 계획 테스트는 `apps/bot-service/test/synthetic-leader-planning-webhook.test.ts`에서 가상 room과 5001/9001 사용자, 가짜 fetch로만 실행하며 실제 Telegram/Supabase에는 쓰지 않는다.

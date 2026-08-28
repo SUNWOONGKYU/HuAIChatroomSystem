@@ -6,7 +6,7 @@ AI와 함께 일하는 공간을 Telegram 프로젝트방 안에 만들었습니
 
 HuAI Collab Chatroom System은 사람이 Telegram 방에서 평소처럼 요청하면, LeaderBot이 일을 제안으로 정리하고, CodexBot과 ClaudeBot이 (Claude Code·Codex·Antigravity 세 실행 엔진을 상황에 따라 돌아가며 써서) 실제 프로젝트 폴더에서 작업을 수행하며, AuditBot이 의미 있는 결과물을 독립 검증하는 협업 운영 시스템입니다.
 
-별도 앱을 설치하지 않아도 됩니다. 사람은 Telegram에서 요청하고 버튼으로 결정합니다. 중앙 오케스트레이터는 권한, 작업 상태, 실행 순서, 중복 처리, 검증 흐름을 관리하고, Supabase DB가 공식 작업 기록의 기준이 됩니다. 실제 코딩과 파일 작업은 작업 PC의 local-gateway를 통해 제한된 프로젝트 폴더에서 실행됩니다.
+별도 앱을 설치하지 않아도 됩니다. 사람은 Telegram에서 요청하고, 협업 운영센터에서 결정합니다. 중앙 오케스트레이터는 권한, 작업 상태, 실행 순서, 중복 처리, 검증 흐름을 관리하고, Supabase DB가 공식 작업 기록의 기준이 됩니다. 실제 코딩과 파일 작업은 작업 PC의 local-gateway를 통해 제한된 프로젝트 폴더에서 실행됩니다.
 
 이제 작업 목록과 이력도 Telegram에서 바로 확인할 수 있습니다. `/tasks`, `/task <id>`, `/search <단어>`, `/trace <task_id>`로 작업 상태, 상세, 검색 결과, 이벤트·산출물 URI·검증 이력을 볼 수 있습니다. 내부 JSON, 훅 로그, 토큰, 비밀 query 값은 사람에게 노출하지 않습니다.
 
@@ -35,7 +35,7 @@ HuAI Collab Chatroom System은 “AI에게 일을 시키는 별도 화면”을 
 @leader_chatroom_bot 이번 주 작업 내역 정리해서 보고서 파일로 만들어줘
 ```
 
-LeaderBot은 요청을 사람이 판단하기 쉬운 작업 제안으로 바꿉니다. ClaudeBot과 CodexBot을 함께 부르는 요청은 다중 AI 협의 작업으로 정리됩니다. 방장은 `실행`, `수정`, `반려` 버튼으로 결정합니다. 승인된 작업은 중앙 오케스트레이터를 거쳐 Supabase DB에 기록되고, local-gateway가 연결된 작업 PC에서 Codex·Claude Code·Antigravity 중 하나를 실행합니다.
+LeaderBot은 요청을 사람이 판단하기 쉬운 작업 제안으로 바꿉니다. ClaudeBot과 CodexBot을 함께 부르는 요청은 다중 AI 협의 작업으로 정리됩니다. 방장은 협업 운영센터에서 `승인`, `수정`, `반려`를 결정합니다. 승인된 작업은 중앙 오케스트레이터를 거쳐 Supabase DB에 기록되고, local-gateway가 연결된 작업 PC에서 Codex·Claude Code·Antigravity 중 하나를 실행합니다.
 
 실행 결과는 사람이 알아야 할 내용만 Telegram에 표시합니다. 긴 내부 로그, JSON 이벤트, hook 출력, 토큰 사용량, 불필요한 경로 나열은 숨깁니다. 다만 필요한 경우에는 `/trace <task_id>`로 공식 기록을 조회할 수 있습니다. 이 명령은 이벤트 종류와 시간, 산출물 URI와 버전, 검증 판정 이력을 Telegram에 직접 보여주되, 원문 payload와 비밀값은 노출하지 않습니다.
 
@@ -43,8 +43,8 @@ AuditBot은 모든 작은 응답마다 자동으로 붙지 않습니다. 보안,
 
 버튼 문구도 운영자가 바로 이해하도록 단순화했습니다.
 
-- 작업 제안(텔레그램 방): `실행`, `수정`, `반려`
-- 완료 결정(현황판): `승인`, `보완 요청`
+- 작업 제안(협업 운영센터): `승인`, `수정`, `반려`
+- 완료 결정(협업 운영센터): `승인`, `보완 요청`
 
 이 시스템에서 Telegram은 대화 화면이고, 공식 작업 상태의 기준은 중앙 DB입니다. 그래서 중복 메시지, 중복 승인, 봇 간 무한 대화, 잘못된 프로젝트 폴더 실행을 막는 구조를 갖추고 있습니다.
 
@@ -63,4 +63,3 @@ AuditBot은 모든 작은 응답마다 자동으로 붙지 않습니다. 보안,
 ## 해시태그
 
 #HuAI #AI협업 #TelegramBot #Codex #ClaudeCode #AuditBot #업무자동화 #AI에이전트 #HumanAI
-

@@ -1,5 +1,7 @@
 # GitHub Quick Start
 
+> 협업 운영센터 진입: 텔레그램 봇 메뉴의 `/center`를 선택합니다. 예전 고정 협업 운영센터 메시지는 사용하지 않습니다.
+
 이 문서는 HuAI Collab Chatroom System을 처음 받은 사람이 Telegram 프로젝트방 기반 운영 환경을 빠르게 구축하기 위한 절차입니다.
 
 ## 1. 준비물
@@ -8,7 +10,7 @@
 - Supabase 프로젝트 1개
 - (webhook을 쓸 경우에만) 공개 HTTPS 주소 1개: Cloudflare Tunnel, reverse proxy, 또는 배포 호스트 —
   기본값인 polling은 이게 아예 필요 없습니다. 아래 5단계 참고.
-- 작업 PC 1대: Codex CLI와 Claude Code가 로그인된 상태
+- 작업 PC 1대: Codex CLI와 Claude Code가 로그인된 상태. Gemini 웹을 사용할 경우 자동화 전용 Chrome(CDP 9222)에 운영자가 직접 로그인해야 합니다(비밀번호·2FA 자동 입력 없음).
 - Telegram 비공개 그룹 1개
 - Telegram BotFather로 만든 봇 4개
 
@@ -59,6 +61,10 @@ BOT_SERVICE_AUDITOR_BOT_TOKEN=
 BOT_SERVICE_EXECUTION_TIMEOUT_MS=900000
 LOCAL_GATEWAY_MAX_RUNTIME_MS=900000
 LOCAL_GATEWAY_LEASE_MS=960000
+GEMINI_WEB_SESSION_SCRIPT=C:\Users\home\.codex\skills\웹세션-자동화\session.js
+GEMINI_WEB_CHAT_URL=
+GEMINI_WEB_BRIDGE_ENTRYPOINT=C:\Dev\HuAIChatroomSystem\scripts\gemini-web-adapter.mjs
+LOCAL_GATEWAY_ALLOWED_ADAPTERS=codex,claude_code,gemini_web,antigravity
 ```
 
 `BOT_SERVICE_RECEIVE_MODE`를 비우거나 `webhook`으로 두면 기본값이 webhook으로 바뀌는데,
@@ -197,26 +203,49 @@ Telegram 그룹에서 다음처럼 입력합니다.
 @audit_chatroom_bot 이 작업을 보안 검토해줘
 ```
 
-버튼 — 방과 현황판에 나뉘어 있습니다.
+Telegram에는 작업 접수·진행 알림과 `협업 운영센터 열기` 링크가 제공됩니다. 별도로 봇 메뉴의
+`/center`를 선택하면 현재 방·포럼 주제의 협업 운영센터가 열립니다. 예전 고정 메시지는 사용하지 않습니다.
+300자를 넘는 보고의 `전문 보기` 링크가 제공됩니다. 제안 승인·수정·반려, 중간 승인,
+완료 승인·보완·취소 등 상태 변경은 모두 협업 운영센터에서 처리합니다.
 
-**텔레그램 방** (작업 제안 단계, `buildProposalKeyboard`)
-
-- `실행`: 제안을 승인하고 실제 작업을 시작합니다.
-- `수정`: 제안을 다시 다듬도록 요청합니다.
-- `반려`: 제안을 진행하지 않습니다.
-
-방에는 이 밖에 `작업 현황판 열기`(주제마다 고정, `/tasks`로도 열림)와, 300자를 넘는 보고에 붙는 `전문 보기`가 있습니다. 둘 다 Mini App을 여는 버튼입니다.
-
-**작업 현황판 / Mini App** (완료 게이트, `FINAL_APPROVAL_ACTIONS`)
+**협업 운영센터 / Mini App** (완료 게이트, `FINAL_APPROVAL_ACTIONS`)
 
 - `승인`: 완료를 승인합니다. 웹 산출물은 이때 프로덕션으로 승격됩니다.
 - `보완 요청`: 작업자에게 보완을 요청합니다.
 
-완료 단계에 `거부`는 없습니다. 파일을 변경한 작업은 `승인` 앞에 3문항 퀴즈 게이트가 먼저 뜹니다.
+완료 단계에 `거부`는 없습니다. 배포·삭제·권한/인증·환경변수·시크릿·중요 설정·DB 스키마 변경 등 고위험 작업만 `승인` 앞에 3문항 퀴즈 게이트가 뜹니다. 조회·분석·설명·검토와 단순 저위험 파일 변경은 퀴즈가 없습니다.
 
 > 2026-08-23 승인 게이트 리팩터 이전에는 완료 버튼이 방에 `검증`·`보완`·`완료` 3개로 붙었습니다(`buildCompletionKeyboard`). 그 경로는 현재 프로덕션에서 호출되지 않습니다.
 
-## 10. 배포 전 최종 확인
+## 10. GitHub·운영 배포
+
+```powershell
+node --env-file=.env.operation.local scripts/set-telegram-bot-commands.mjs --apply
+node scripts/verify-no-secrets.mjs
+npm run build
+npm run verify:doc-sync
+git status --short
+```
+
+GitHub에는 `.env.operation.local`, Telegram 토큰, Supabase service role key, webhook secret,
+CLI 인증 파일을 올리지 않습니다. 운영 PC 반영 순서는 `git pull` → `npm install` → `npm run build`
+→ 환경 검증 → 서비스 재시작 → 메뉴 등록입니다. 기존 고정 메시지 정리는 필요할 때 다음 명령을
+한 번 실행합니다.
+
+```powershell
+node --env-file=.env.operation.local scripts/remove-room-board-message.mjs --apply
+```
+
+synthetic LeaderBot 계획 회귀 테스트는 실제 운영 데이터 없이 실행합니다.
+
+```powershell
+npm run build
+node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js
+```
+
+`apps/bot-service/test/synthetic-leader-planning-webhook.test.ts`가 가상 방의 방장 5001·참여자 9001 4턴을 주입해 최근 대화 기반 계획과 제목·목적·범위·완료조건 proposal을 검증합니다. 실제 Telegram/Supabase 전송이나 운영 DB 쓰기는 없습니다.
+
+## 11. 배포 전 최종 확인
 
 ```powershell
 npm run verify:operation-ready

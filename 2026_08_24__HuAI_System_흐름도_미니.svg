@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="260" viewBox="0 0 900 260" role="img" aria-labelledby="t d">
   <title id="t">HuAI Collab Chatroom System 흐름도 요약</title>
-  <desc id="d">사람이 텔레그램에서 말하면 LeaderBot이 정리하고, AI들이 실행하고, 방장이 현황판에서 승인한다는 4단계 요약도</desc>
+  <desc id="d">사람이 텔레그램에서 말하면 LeaderBot이 정리하고, AI들이 실행하고, 방장이 협업 운영센터에서 승인한다는 4단계 요약도</desc>
 
   <style>
     .bg{fill:#fafaf7}
@@ -32,7 +32,7 @@
 
   <rect class="cardGold" x="680" y="80" width="200" height="100" rx="10"/>
   <text class="head" x="780" y="122" text-anchor="middle">방장 승인</text>
-  <text class="sub" x="780" y="150" text-anchor="middle">현황판에서 확인</text>
+  <text class="sub" x="780" y="150" text-anchor="middle">협업 운영센터에서 확인</text>
 
   <path class="flow" d="M 210 130 L 236 130"/>
   <path class="flow" d="M 430 130 L 456 130"/>

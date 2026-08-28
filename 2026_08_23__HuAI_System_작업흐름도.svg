@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1210" viewBox="0 0 1700 1210" role="img" aria-labelledby="t d">
-  <title id="t">HuAI Collab Chatroom System 작업 흐름도 (2026-08-23)</title>
+  <title id="t">HuAI Collab Chatroom System 작업 흐름도 (2026-08-28)</title>
   <desc id="d">지시 한 줄이 결과물이 되기까지의 순서, 승인 카테고리 분리, 엔진이 한도에 걸렸을 때의 인계 규칙, 하루가 끝난 뒤의 보관과 정리 절차.</desc>
 
   <style>
@@ -37,7 +37,7 @@
   <rect class="bg" x="0" y="0" width="1700" height="1210"/>
 
   <text class="title" x="60" y="70">HuAI Collab Chatroom System — 작업 흐름도</text>
-  <text class="sub" x="60" y="104">지시 한 줄이 결과물이 되기까지. 조회성 작업은 자동 시작, 그 외는 승인 최대 두 번</text>
+  <text class="sub" x="60" y="104">지시 한 줄이 결과물이 되기까지. 협업 운영센터는 Telegram 메뉴 /center에서 연다</text>
 
   <!-- 1단: 정상 흐름 -->
   <rect class="lane" x="60" y="140" width="1580" height="330" rx="10"/>
@@ -75,11 +75,11 @@
 
   <rect class="stepOwner" x="674" y="368" width="250" height="80" rx="8"/>
   <text class="stepHead" x="696" y="402">7. 완료 승인</text>
-  <text class="body" x="696" y="432">현황판 승인 → 웹 승격</text>
+  <text class="body" x="696" y="432">협업 운영센터 승인 → 웹 승격</text>
 
   <rect class="step" x="966" y="368" width="542" height="80" rx="8"/>
   <text class="stepHead" x="988" y="402">보고가 300자를 넘으면</text>
-  <text class="body" x="988" y="432">방에는 앞부분만. 전문은 현황판에서 읽는다</text>
+  <text class="body" x="988" y="432">방에는 앞부분만. 전문은 협업 운영센터에서 읽는다</text>
 
   <path class="flow" d="M 340 276 L 382 276"/>
   <path class="flow" d="M 632 276 L 674 276"/>
@@ -149,8 +149,8 @@
   <rect class="laneHead" x="60" y="950" width="1580" height="48" rx="10"/>
   <text class="laneLabel" x="86" y="984">방장이 누르는 자리</text>
 
-  <text class="body" x="90" y="1024">방에서 누르는 것: 작업 제안의 실행 · 수정 · 반려 (조회성 작업은 이 단계가 자동으로 생략된다)</text>
-  <text class="body" x="90" y="1056">현황판에서 누르는 것: 승인(웹 산출물은 이때 프로덕션으로 승격) · 보완 요청</text>
-  <text class="note" x="90" y="1088">자동 시작은 새 권한이 아니다 — 요청자가 원래 승인 권한이 없으면 조용히 무시되고 버튼 승인으로 돌아간다.</text>
+<text class="body" x="90" y="1024">Telegram은 지시·접수·진행 알림만. /center의 협업 운영센터에서 승인 · 보완 · 취소 (조회성 작업은 자동 시작)</text>
+  <text class="body" x="90" y="1056">협업 운영센터에서 누르는 것: 승인(웹 산출물은 이때 프로덕션으로 승격) · 보완 요청</text>
+  <text class="note" x="90" y="1088">자동 시작은 새 권한이 아니다 — 요청자가 원래 승인 권한이 없으면 조용히 무시되고 협업 운영센터의 승인 대기로 돌아간다.</text>
   <text class="note" x="90" y="1116">이미 결정이 끝난 건에 다시 누르면 그 사실을 방에 알린다 — 조용히 무시하지 않는다.</text>
 </svg>

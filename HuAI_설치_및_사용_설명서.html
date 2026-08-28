@@ -278,8 +278,8 @@
       <span class="panel-badge"><span class="n">00</span> 시스템 개요</span>
       <h2>이 시스템이 뭔가요</h2>
       <p class="lead">텔레그램 비공개 그룹방 하나가 "AI 업무 지휘소"가 됩니다. 방에서 사람 말투로
-      지시하면 AI(Claude·Codex·Antigravity)가 실제로 파일을 만들고 고치고, 결과를 방에 보고하고,
-      방장이 승인 버튼을 누르면 최종 확정됩니다.</p>
+      지시하면 AI(Claude·Codex)가 실제로 파일을 만들고 고치고, 결과를 방에 보고하고,
+      방장 승인·통제는 협업 운영센터에서 처리합니다.</p>
     </div>
 
     <a class="diagram-block" style="max-width:420px; margin:16px auto; display:block; text-decoration:none" href="#t6" onclick="activate('6')">
@@ -287,7 +287,7 @@
       <p class="cap">관계도 요약 — 누가 무엇에 기대는지</p>
     </a>
     <a class="diagram-block" style="max-width:420px; margin:8px auto 16px; display:block; text-decoration:none" href="#t6" onclick="activate('6')">
-      <img src="2026_08_24__HuAI_System_흐름도_미니.svg" alt="흐름도 요약 — 텔레그램 방에서 지시하면 LeaderBot이 정리하고 AI들이 실행하고 방장이 현황판에서 승인한다">
+      <img src="2026_08_24__HuAI_System_흐름도_미니.svg" alt="흐름도 요약 — 텔레그램 방에서 지시하면 LeaderBot이 정리하고 AI들이 실행하고 방장이 협업 운영센터에서 승인한다">
       <p class="cap">흐름도 요약 — 지시가 결과가 되기까지</p>
     </a>
     <p style="text-align:center; margin:-4px 0 16px; font-size:13.5px; color:var(--c-muted)">자세한 원본은 탭 06에서 →</p>
@@ -297,7 +297,7 @@
     <div class="step-grid">
       <div class="step-card"><div class="step-badge">방</div><h5>텔레그램 방</h5><p>사람이 지시하고 결과를 받는 화면. 이 시스템의 유일한 사용자 인터페이스입니다.</p></div>
       <div class="step-card"><div class="step-badge">L</div><h5>LeaderBot(리더)</h5><p>사람 말을 읽고 "이건 질문인지 작업인지" 먼저 판단합니다. 작업이면 목적·범위·완료조건을 갖춘 제안으로 정리해 방에 올립니다.</p></div>
-      <div class="step-card"><div class="step-badge">C</div><h5>ClaudeBot · CodexBot</h5><p>실제로 코드를 읽고 파일을 만들거나 고치는 실행자입니다. 내부적으로 Claude Code·Codex·Antigravity 세 실행 엔진을 쓰고, 하나가 사용 한도에 걸리면 다른 엔진이 이어받습니다(세 엔진을 한 바퀴 돌고도 막히면 처음 엔진으로 한 번 더, 최대 3번 인계).</p></div>
+      <div class="step-card"><div class="step-badge">C</div><h5>ClaudeBot · CodexBot</h5><p>실제로 코드를 읽고 파일을 만들거나 고치는 실행자입니다. Gemini 웹은 계획·검토·텍스트 결과에 사용되며 로컬 파일을 직접 수정하지 않습니다.</p></div>
       <div class="step-card"><div class="step-badge">A</div><h5>AuditBot(감사)</h5><p>실행자와 다른 엔진이 결과물을 독립적으로 다시 검토합니다 — 만든 사람이 자기 결과를 자기가 검사하지 않게 하기 위해서입니다.</p></div>
       <div class="step-card"><div class="step-badge">B</div><h5>bot-service</h5><p>텔레그램과 이 시스템을 연결하는 통로. 누가 말했는지 확인하고, 권한을 검사하고, 답을 다시 텔레그램으로 보냅니다.</p></div>
       <div class="step-card"><div class="step-badge">G</div><h5>local-gateway</h5><p>내 PC 안에서 실제로 명령을 실행하는 부분. 방마다 등록된 프로젝트 폴더인지 먼저 확인한 뒤에만 실행을 넘깁니다 — 등록 안 된 경로면 아예 실행을 거부합니다. 다만 <b>OS 수준 격리(샌드박스)까지는 아니고</b>, 그 폴더 안에서 AI가 실제로 뭘 바꾸는지는 되돌리는 기능이 따로 없습니다 — 중요한 폴더라면 직접 git으로 버전 관리해두는 걸 권장합니다.</p></div>
@@ -313,7 +313,7 @@
       <li><span class="mark">✓</span><div><b>Supabase 계정</b> — 작업 기록·승인 이력·산출물 주소를 저장하는 DB. 무료 플랜으로 충분합니다.</div></li>
       <li><span class="mark">✓</span><div><b>Telegram 계정 + 봇 4개</b> — 사람이 지시하고 결과를 받는 화면.</div></li>
       <li><span class="mark">✓</span><div><b>Vercel 계정 + Vercel CLI</b> — AI가 만든 웹 결과물을 인터넷에 올려 폰에서 열어보는 용도. 무료 플랜으로 충분하고, CLI 설치·로그인은 탭 03의 8단계에서 합니다.</div></li>
-      <li><span class="mark">✓</span><div><b>Claude Code · Codex · Antigravity CLI 로그인</b> — 실제로 파일을 읽고 고치는 실행 엔진 3종입니다. Claude Code·Codex는 각각 월 정액 구독이 필요하고, 이 PC에 설치·로그인해두면 시스템이 화면 없이(헤드리스) 그 구독으로 대신 실행합니다. 셋 다 설치하는 걸 권장합니다 — 하나가 한도에 걸렸을 때 나머지가 이어받는 구조라, 하나라도 빠지면 그 자리에서 멈출 수 있습니다(이미 설치돼 있다면 넘어가도 됩니다).</div></li>
+      <li><span class="mark">✓</span><div><b>Claude Code · Codex 로그인</b> — 실제로 파일을 읽고 고치는 실행 엔진입니다. Gemini 웹은 계획·검토·텍스트 결과용 웹 세션으로 사용되며 로컬 파일을 직접 수정하지 않습니다.</div></li>
     </ul>
 
     <div class="tip-box">예상 소요 시간: 처음이면 30~50분 정도 걸립니다. 대부분 "계정 만들고 값 복사해서 붙여넣기"입니다. 탭 01 → 02 → 03 순서로 그대로 따라가면 됩니다.</div>
@@ -397,7 +397,7 @@ npm run build</code></pre>
         <code>https://api.telegram.org/bot&lt;봇토큰&gt;/getUpdates</code> 를 엽니다.
         <code>&lt;봇토큰&gt;</code> 자리에는 <b>4개 중 아무 봇의 토큰이나</b> 넣으면 됩니다(같은 방이라 어느 봇으로 봐도 chat_id는 같습니다). 헷갈리면 LeaderBot 토큰을 쓰세요.
         <code>"result":[]</code>처럼 비어 있으면 봇을 한 번 더 지목해 보내고 새로고침하세요. <code>"chat":{"id":</code> 뒤에 나오는 숫자(보통 <code>-</code>로 시작)가 chat_id입니다.</li>
-      <li><b>내 user_id(내 번호) 알아내기</b>: 텔레그램에서 <code>@userinfobot</code>을 검색해 아무 메시지나 보내면 숫자 id를 알려줍니다. 이 값이 "방장 권한"의 기준입니다 — 승인 버튼은 이 id를 가진 사람만 누를 수 있습니다.</li>
+      <li><b>내 user_id(내 번호) 알아내기</b>: 텔레그램에서 <code>@userinfobot</code>을 검색해 아무 메시지나 보내면 숫자 id를 알려줍니다. 이 값이 "방장 권한"의 기준입니다 — 협업 운영센터의 결정 버튼은 이 id를 가진 사람만 사용할 수 있습니다.</li>
     </ol>
 
     <h3 class="section">6단계 — 설정 파일 채우기</h3>
@@ -435,8 +435,8 @@ npm run build</code></pre>
     <div class="warn-box">⚠️ 맨 앞의 <code>--env-file=.env.operation.local</code>을 빼면 안 됩니다. 이게 없으면 6단계에서 채운 값을 못 읽어 <code>missing-env:BOT_SERVICE_LEADER_BOT_USERNAME</code> 오류로 멈춥니다.</div>
     <p>출력된 SQL 전체를 복사해 Supabase SQL Editor에 붙여넣고 Run 합니다.</p>
 
-    <h3 class="section">8단계 — Claude Code / Codex / Antigravity / Vercel 로그인 확인</h3>
-    <p>이 PC에 Claude Code·Codex·Antigravity CLI가 <b>셋 다</b> 설치되고 로그인돼 있어야 합니다 — 셋이 서로의 대타 역할을 하는 구조라, 하나라도 빠지면 그 엔진 차례에서 실행이 멈출 수 있습니다. 웹 페이지를 만드는 작업을 쓸 거라면 <b>Vercel CLI</b>도 필요합니다(시스템이 배포할 때 이 PC의 <code>vercel</code> 명령을 그대로 호출합니다).</p>
+    <h3 class="section">8단계 — Claude Code / Codex / Gemini 웹 / Vercel 확인</h3>
+    <p>이 PC에는 Claude Code·Codex가 설치·로그인돼 있어야 파일 수정 작업이 실행됩니다. Gemini 웹은 전용 Chrome 세션에 로그인돼 있어야 계획·검토·텍스트 결과를 받을 수 있습니다. 웹 페이지를 만드는 작업을 쓸 거라면 <b>Vercel CLI</b>도 필요합니다.</p>
     <p><b>먼저 이미 깔려 있는지 확인합니다.</b> PowerShell에서:</p>
     <pre><code>claude --version
 codex --version
@@ -447,12 +447,12 @@ vercel --version</code></pre>
       <tr><th>도구</th><th>설치</th><th>로그인</th></tr>
       <tr><td>Claude Code</td><td><code>npm install -g @anthropic-ai/claude-code</code></td><td><code>claude</code> 를 실행하면 브라우저가 열리며 로그인 안내가 나옵니다</td></tr>
       <tr><td>Codex CLI</td><td><code>npm install -g @openai/codex</code></td><td><code>codex login</code> 실행 후 브라우저에서 ChatGPT 계정으로 로그인</td></tr>
-      <tr><td>Antigravity (<code>agy</code>)</td><td><code>winget install --id Google.AntigravityCLI -e</code> (Google 제품, npm 패키지 아님)</td><td><code>agy</code> 실행 시 나오는 안내를 따라 Google 계정으로 로그인</td></tr>
+      <tr><td>Gemini 웹</td><td>자동화 전용 Chrome(CDP 9222) 세션</td><td><code>gemini.google.com</code>에 운영자가 직접 로그인</td></tr>
       <tr><td>Vercel CLI</td><td><code>npm install -g vercel</code></td><td><code>vercel login</code> 실행 후 브라우저에서 로그인</td></tr>
     </table></div>
-    <p>공식 안내: <a href="https://code.claude.com/docs/en/overview" target="_blank" rel="noopener">Claude Code 문서</a> · <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex CLI 저장소</a> · <a href="https://antigravity.google/docs" target="_blank" rel="noopener">Antigravity 문서</a>. 설치 방법은 각 도구 쪽에서 바뀔 수 있으니, 위 명령이 안 되면 공식 안내를 따르세요.</p>
+    <p>공식 안내: <a href="https://code.claude.com/docs/en/overview" target="_blank" rel="noopener">Claude Code 문서</a> · <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex CLI 저장소</a> · <a href="https://gemini.google.com" target="_blank" rel="noopener">Gemini 웹</a>. 로그인·설치 방법은 각 서비스의 최신 안내를 따르세요.</p>
     <div class="tip-box">방금 설치했는데도 <code>인식할 수 없는 명령</code> 오류가 그대로 나오면, <b>지금 열려 있는 PowerShell 창을 닫고 새로 여세요</b> — 설치 직후엔 이미 열려 있던 창이 새로 생긴 명령어 경로를 못 읽는 경우가 흔합니다.</div>
-    <div class="tip-box">엔진 하나가 사용 한도에 걸리면 <b>바로 다음 엔진</b>이 이어받습니다 — 순서는 Claude Code → Codex → Antigravity → (다시) Claude Code입니다. 예를 들어 Codex가 막히면 Claude가 아니라 <b>Antigravity가 곧바로</b> 이어받습니다. 셋 중 하나라도 설치가 안 돼 있으면, 그 엔진 차례가 왔을 때 다음 엔진으로 넘어가지 않고 그 자리에서 "실행 프로그램을 찾지 못했습니다" 오류로 멈춥니다 — 그래서 셋 다 설치를 권장합니다. 세 엔진이 한 바퀴 다 돌고도 막히면, 방에 마지막 실패 사유가 오고 작업은 현황판 "중단" 탭에 <b>「막힘」</b> 상태로 남습니다(자동 재시도 없음 — 한도가 풀린 뒤 다시 지시해야 합니다).</div>
+    <div class="tip-box">파일 수정 작업은 Claude Code·Codex가 실행합니다. Gemini 웹은 전용 Chrome 세션으로 계획·검토·텍스트 결과를 처리하며 로컬 파일을 직접 수정하지 않습니다. 실행 엔진 한도가 발생하면 시스템 정책에 따라 가능한 엔진으로 인계합니다.</div>
 
     <h3 class="section">9단계 — 서비스 실행</h3>
     <p>PowerShell 창을 <b>1개</b> 열고 아래를 실행합니다. 이 명령 하나가 <code>.env.operation.local</code>을 읽어들이고 bot-service와 local-gateway 둘 다 띄워주며, 하나가 죽으면 자동으로 다시 올립니다.</p>
@@ -483,7 +483,7 @@ node scripts/start-services.mjs</code></pre>
     <div class="panel-head">
       <span class="panel-badge"><span class="n">04</span> AI 작업 시키기</span>
       <h2>실제로 이렇게 씁니다</h2>
-      <p class="lead">설치가 끝난 뒤, 방에서 AI에게 일을 시키고 승인하는 흐름입니다.</p>
+      <p class="lead">설치가 끝난 뒤, 방에서 AI에게 일을 시키고 협업 운영센터에서 결정하는 흐름입니다.</p>
     </div>
 
     <h3 class="section">AI에게 일 시키기</h3>
@@ -492,29 +492,27 @@ node scripts/start-services.mjs</code></pre>
     <p>LeaderBot이 이걸 목적·범위·완료 조건을 갖춘 "작업 제안"으로 정리해 방에 올립니다.</p>
 
     <h3 class="section">승인하기</h3>
-    <p>버튼은 <b>두 군데</b>에 나뉘어 있습니다. 헷갈리기 쉬운 부분이니 어디서 무엇을 누르는지 먼저 봐두세요.</p>
+    <p>Telegram은 작업 지시·접수·진행 알림과 협업 운영센터 링크를 제공합니다. 봇 메뉴의 <code>/center</code>를 선택하면 현재 방·포럼 주제의 협업 운영센터가 열립니다. 방장 승인·통제는 협업 운영센터에서만 처리합니다. 예전 고정 협업 운영센터 메시지는 사용하지 않습니다.</p>
     <div class="btn-row">
       <span class="pill accent">실행</span><span class="pill accent">수정</span><span class="pill accent">반려</span>
-      <span class="pill accent">전문 보기</span><span class="pill accent">작업 현황판 열기</span><span class="pill">승인</span><span class="pill">보완 요청</span>
+      <span class="pill accent">전문 보기</span><span class="pill accent">협업 운영센터 열기</span><span class="pill">승인</span><span class="pill">보완 요청</span>
     </div>
     <div class="table-wrap"><table>
       <tr><th>버튼</th><th>어디서 누르나</th><th>의미</th></tr>
-      <tr><td><b>실행</b></td><td>텔레그램 방</td><td>제안을 승인하고 실제 작업을 시작합니다</td></tr>
-      <tr><td><b>수정</b></td><td>텔레그램 방</td><td>제안 내용을 다시 다듬어달라고 요청합니다</td></tr>
-      <tr><td><b>반려</b></td><td>텔레그램 방</td><td>이 제안은 진행하지 않습니다</td></tr>
-      <tr><td><b>전문 보기</b></td><td>텔레그램 방</td><td>방에 앞부분만 온 긴 보고에 붙습니다. 누르면 현황판이 열리며 전체 내용을 봅니다</td></tr>
-      <tr><td><b>작업 현황판 열기</b></td><td>텔레그램 방</td><td>주제마다 고정돼 있는 버튼. <code>/tasks</code> 명령으로도 열립니다</td></tr>
-      <tr><td><b>승인</b></td><td>현황판</td><td>완료를 승인합니다 — 이때 웹 산출물이 정식 주소로 승격됩니다</td></tr>
-      <tr><td><b>보완 요청</b></td><td>현황판</td><td>결과가 부족할 때 작업자에게 보완을 요청합니다</td></tr>
+      <tr><td><b>작업 지시·알림</b></td><td>텔레그램 방</td><td>작업을 지시하고 접수·진행·결과 알림을 받습니다</td></tr>
+      <tr><td><b>전문 보기</b></td><td>텔레그램 방</td><td>방에 앞부분만 온 긴 보고에 붙습니다. 누르면 협업 운영센터가 열리며 전체 내용을 봅니다</td></tr>
+      <tr><td><b>/center</b></td><td>텔레그램 봇 메뉴</td><td>현재 방·포럼 주제의 협업 운영센터를 엽니다</td></tr>
+      <tr><td><b>승인·수정·반려·보완·취소</b></td><td>협업 운영센터</td><td>제안·중간 결과·완료에 대한 방장 결정을 처리합니다</td></tr>
     </table></div>
-    <div class="tip-box"><b>방에는 완료를 승인하는 버튼이 없습니다.</b> 작업을 <b>시작</b>시키는 결정(실행·수정·반려)만 방에서 하고, 끝난 뒤의 결정(승인·보완 요청)은 전부 현황판에서 합니다. 방에서 아무리 찾아도 없는 게 정상입니다. 현황판의 완료 버튼 이름은 <b>「완료 승인」이 아니라 그냥 「승인」</b>입니다.</div>
+    <div class="tip-box"><b>방에는 상태를 바꾸는 결정 버튼이 없습니다.</b> 제안 승인·수정·반려부터 중간 승인, 완료 승인·보완·취소까지 모든 방장 결정은 협업 운영센터에서 합니다. 방에서 아무리 찾아도 없는 게 정상입니다. 협업 운영센터의 완료 버튼 이름은 <b>「완료 승인」이 아니라 그냥 「승인」</b>입니다.</div>
 
     <div class="def-box">자동허용 — 파일을 전혀 안 바꾸는 조회·분석·설명성 지시는 "실행" 버튼 자체가 뜨지 않고 바로 시작됩니다(방에 "🟢 자동 시작" 안내만 뜹니다). 판단이 애매하면 시스템은 항상 안전한 쪽(승인 필요)으로 처리합니다.</div>
-    <div class="tip-box">현황판을 열면 <b>승인 필요 · 진행 중 · 대기 · 중단 · 완료</b> 5개 탭으로 작업이 나뉘어 있습니다. 작업 카드를 누르면 상세 화면이 열리고, 결과물이 있으면 「결과물」 항목에 링크로 뜹니다.</div>
+    <div class="tip-box">협업 운영센터를 열면 <b>승인 필요 · 진행 중 · 대기 · 중단 · 완료</b> 5개 탭으로 작업이 나뉘어 있습니다. 작업 카드를 누르면 상세 화면이 열리고, 결과물이 있으면 「결과물」 항목에 링크로 뜹니다.</div>
 
     <h3 class="section">결과 확인 · 완료 승인하기</h3>
-    <p>작업이 끝나면 방에 결과가 옵니다. 300자가 넘는 긴 보고는 앞부분만 방에 오고 <b>[전문 보기]</b> 버튼이 붙습니다 — 눌러서 현황판에서 전체를 봅니다. 결과물이 있으면 현황판 상세의 「결과물」 목록에 링크로 표시되니, 먼저 확인한 뒤 [승인]을 누르세요.</p>
-    <div class="tip-box"><b>퀴즈가 뜰 수 있습니다</b> — 파일을 실제로 바꾼 작업은 완료 승인 전에 "뭐가 바뀌었는지 이해했는지" 확인하는 객관식 3문항이 먼저 나옵니다(인지부채 방지 장치). 통과해야 완료 승인 버튼이 나옵니다.</div>
+    <p>작업이 끝나면 방에 결과가 옵니다. 300자가 넘는 긴 보고는 앞부분만 방에 오고 <b>[전문 보기]</b> 버튼이 붙습니다 — 눌러서 협업 운영센터에서 전체를 봅니다. 결과물이 있으면 협업 운영센터 상세의 「결과물」 목록에 링크로 표시되니, 먼저 확인한 뒤 [승인]을 누르세요.</p>
+<div class="tip-box"><b>퀴즈가 뜰 수 있습니다</b> — 배포·삭제·권한/인증·환경변수·시크릿·중요 설정·DB 스키마 변경처럼 고위험 작업만 완료 승인 전에 객관식 3문항을 요구합니다. 조회·분석·설명·검토와 단순 저위험 파일 변경은 퀴즈 없이 승인할 수 있습니다.</div>
+<div class="tip-box"><b>synthetic 계획 테스트</b> — <code>npm run build</code> 후 <code>node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js</code>를 실행합니다. 가상 방의 방장 5001·참여자 9001 4턴과 가짜 webhook/fetch만 사용하며 실제 Telegram/Supabase에 쓰지 않습니다. 게임의 30초 생존은 테스트 훅이고 공개 URL 클릭 여정은 환경 제약으로 미검증입니다.</div>
     <div class="tip-box"><b>웹 페이지를 만든 작업이라면</b> — 완료 승인 전에는 산출물 링크가 "프리뷰"(아직 정식 주소 아님) 상태입니다. 완료 승인을 누르는 순간 그 링크가 정식(프로덕션) 주소로 바뀝니다 — 승인 전에 결과물이 먼저 공개돼버리는 걸 막기 위한 설계입니다.</div>
 
     <h3 class="section">그 밖의 명령어</h3>
@@ -540,8 +538,8 @@ node scripts/start-services.mjs</code></pre>
       <tr><td>"봇 여러 개가 같은 토큰" 비슷한 에러</td><td>봇 4개가 진짜 서로 다른 토큰인지 확인</td></tr>
       <tr><td>승인 버튼을 눌러도 반응이 늦다</td><td>정상입니다 — 실제 AI 실행은 몇 초~몇 분 걸립니다. 방에 "⏳ 작업 중" 표시가 주기적으로 올라옵니다</td></tr>
       <tr><td>Supabase SQL 실행에서 에러</td><td><code>supabase/schema.sql</code> 전체를 빠짐없이 붙여넣었는지 확인(일부만 붙여넣으면 실패)</td></tr>
-      <tr><td>방에서 완료 승인·보완 요청 버튼을 못 찾겠다</td><td>정상입니다 — 그 두 버튼은 방이 아니라 <b>현황판</b>에 있고, 이름도 <code>승인</code>·<code>보완 요청</code>입니다. 방에 고정된 [작업 현황판 열기] 버튼이나 <code>/tasks</code> 명령으로 현황판을 여세요(탭 04 참고)</td></tr>
-      <tr><td>승인은 됐는데 실행이 안 되거나 이상한 에러가 난다</td><td>이 PC에 Claude Code·Codex·Antigravity CLI가 로그인돼 있는지 확인(탭 03의 8단계). 로그인 세션이 끊기면 실행이 실패합니다</td></tr>
+      <tr><td>방에서 완료 승인·보완 요청 버튼을 못 찾겠다</td><td>정상입니다 — 그 두 버튼은 방이 아니라 <b>협업 운영센터</b>에 있습니다. 봇 메뉴의 <code>/center</code> 또는 작업 메시지 링크로 여세요(탭 04 참고)</td></tr>
+      <tr><td>승인은 됐는데 실행이 안 되거나 이상한 에러가 난다</td><td>이 PC의 Claude Code·Codex 로그인과 Gemini 전용 Chrome 세션 상태를 확인(탭 03의 8단계)</td></tr>
     </table></div>
     <div class="tip-box">이 표에 없는 문제는 탭 07 참고자료의 <code>GITHUB_QUICKSTART.md</code>(더 기술적인 버전)와 <code>OPERATION_STATUS.md</code>(현재 알려진 이슈 목록)를 참고하세요.</div>
   </section>
@@ -597,7 +595,7 @@ node scripts/start-services.mjs</code></pre>
       <tr><th>무엇</th><th>주소</th></tr>
       <tr><td>이 설명서(배포본)</td><td><a href="https://huai-collab-system.vercel.app" target="_blank" rel="noopener">https://huai-collab-system.vercel.app</a></td></tr>
       <tr><td>GitHub 소스 저장소</td><td><a href="https://github.com/SUNWOONGKYU/HuAIChatroomSystem" target="_blank" rel="noopener">https://github.com/SUNWOONGKYU/HuAIChatroomSystem</a></td></tr>
-      <tr><td>작업 현황판 (Mini App)</td><td>Vercel 프로젝트 <code>huai-board</code></td></tr>
+      <tr><td>협업 운영센터 (Mini App)</td><td>Vercel 프로젝트 <code>huai-board</code></td></tr>
       <tr><td>웹 산출물 배포처</td><td>Vercel 프로젝트 <code>huai-artifacts</code></td></tr>
     </table></div>
 
@@ -629,7 +627,7 @@ node scripts/start-services.mjs</code></pre>
 
 </main>
 
-<footer>HuAI Collab Chatroom System<br>설치 및 사용 설명서<br>최신 갱신일 2026-08-24</footer>
+<footer>HuAI Collab Chatroom System<br>설치 및 사용 설명서<br>최신 갱신일 2026-08-28</footer>
 
 <script>
   var buttons = document.querySelectorAll('.tab-btn');

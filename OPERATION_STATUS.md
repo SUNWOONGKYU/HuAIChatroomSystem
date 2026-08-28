@@ -26,7 +26,8 @@ Do not treat older Gate setup documents as proof that operation is still incompl
 
 ## 2026-08-17 KST — Live verification across all four rooms
 
-- Three engines are in use: Claude Code, Codex, Antigravity (`agy`). A quota-blocked engine hands
+- Three engines are in use: Claude Code, Codex, Gemini web. Legacy Antigravity (`agy`) records are
+  routed to Gemini web for compatibility. A quota-blocked engine hands
   off to another, up to two hops, so each of the three gets one turn. Engines already tried travel
   with the request so a second hop cannot land back on the one that just failed.
 - Audits run on an engine other than the worker's. If only the worker's engine remains, the audit
@@ -49,10 +50,10 @@ Do not treat older Gate setup documents as proof that operation is still incompl
 
 Known gaps as of this update:
 
-- Antigravity has no Telegram bot of its own; its messages are sent under ClaudeBot's account while
-  the text names AntigravityBot.
-- Antigravity has no read-only mode, so an audit running there is constrained by prompt only, unlike
-  Claude's dontAsk and Codex's read-only sandbox.
+- Gemini web has no Telegram bot of its own; its messages are sent under ClaudeBot's account while
+  the text identifies the Gemini web engine.
+- Gemini web is response-only and cannot edit local files. File-changing work remains on Claude
+  Code or Codex; Gemini is suitable for plans, reviews, and textual results.
 - bot-service and local-gateway must share a machine: room memory reading and document upload both
   use the local disk.
 - The 60-day prune has never been run with `--apply`; nothing is old enough yet.
@@ -166,3 +167,12 @@ Built and shipped:
 ## Required Reporting Rule
 
 When asked for current project progress, first report the verified live-operation state above, then distinguish remaining product-development work from already connected runtime infrastructure.
+
+## 2026-08-28 KST — Documentation and verification baseline
+
+- User-facing name is `협업 운영센터`. The legacy pinned room-board message is no longer generated; cleanup is explicit and narrow through `scripts/remove-room-board-message.mjs --apply`.
+- Telegram is limited to instructions, intake, progress/result notifications, and links. Approval, revision, and cancellation are Mini App-only. `/center` preserves the current `roomId` and forum `threadId`.
+- Roles remain separated: LeaderBot plans/routes, ClaudeBot/CodexBot execute, Gemini web provides response-only plan/review/text through `GEMINI_WEB_SESSION_SCRIPT`, and AuditBot independently verifies. Legacy Antigravity/agy values normalize to Gemini web because the CLI has lower usage limits and compatibility constraints.
+- Quiz policy is risk-based: only high-risk deploy/delete/permission-auth/env-secret/important-setting/DB-schema changes get the existing three-question gate. Read/analyze/explain/review and simple low-risk file changes create no quiz rows.
+- Synthetic planning test: `apps/bot-service/test/synthetic-leader-planning-webhook.test.ts`; run after `npm run build` with `node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js`. It uses fake webhook transport/fetch, room-local users 5001 and 9001, and never writes Telegram/Supabase operations data.
+- Game test caveat: local start/keyboard/drag/collision/restart/responsive checks passed for `star-dodge-game-v2.html`; 30-second survival used a test hook and the public-URL browser click journey remains unverified in the test environment.

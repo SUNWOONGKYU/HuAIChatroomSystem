@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1820" height="1100" viewBox="0 0 1820 1100" role="img" aria-labelledby="t d">
-  <title id="t">HuAI Collab Chatroom System 관계도 (2026-08-23)</title>
+  <title id="t">HuAI Collab Chatroom System 관계도 (2026-08-28)</title>
   <desc id="d">방장의 텔레그램 주제, 작업 PC의 bot-service와 방별 게이트웨이, Supabase와 Vercel의 관계. 무엇이 어디에 저장되고 무엇이 무엇에 기대는지를 보여준다.</desc>
 
   <style>
@@ -38,7 +38,7 @@
   <rect class="bg" x="0" y="0" width="1820" height="1100"/>
 
   <text class="title" x="60" y="70">HuAI Collab Chatroom System — 관계도</text>
-  <text class="sub" x="60" y="104">사람은 텔레그램만 쓰고, 실행은 작업 PC에서만 일어나며, 공개되는 것은 현황판과 결과물뿐이다</text>
+  <text class="sub" x="60" y="104">사람은 텔레그램만 쓰고, 실행은 작업 PC에서만 일어나며, 공개되는 것은 협업 운영센터와 결과물뿐이다</text>
 
   <!-- 왼쪽: 사람과 텔레그램 -->
   <rect class="panel" x="60" y="140" width="470" height="500" rx="10"/>
@@ -47,12 +47,12 @@
 
   <rect class="cardGreen" x="90" y="220" width="410" height="96" rx="8"/>
   <text class="cardHead" x="114" y="254">방장 (폰)</text>
-  <text class="body" x="114" y="288">지시하고, 승인하고, 결과물을 연다</text>
+<text class="body" x="114" y="288">지시하고, 알림을 받고, 결과물을 연다</text>
 
   <rect class="card" x="90" y="340" width="410" height="130" rx="8"/>
   <text class="cardHead" x="114" y="374">텔레그램 프로젝트방 (포럼)</text>
   <text class="body" x="114" y="408">주제(topic)마다 작업이 따로 흐른다</text>
-  <text class="body" x="114" y="440">주제마다 현황판이 따로 고정된다</text>
+  <text class="body" x="114" y="440">메뉴 /center로 주제별 협업 운영센터를 연다</text>
 
   <rect class="card" x="90" y="494" width="410" height="122" rx="8"/>
   <text class="cardHead" x="114" y="528">역할 봇 4개</text>
@@ -79,7 +79,7 @@
 
   <rect class="card" x="630" y="594" width="440" height="130" rx="8"/>
   <text class="cardHead" x="654" y="628">실행 엔진 3종</text>
-  <text class="body" x="654" y="662">Claude Code · Codex · Antigravity</text>
+  <text class="body" x="654" y="662">Claude Code · Codex · Gemini 웹</text>
   <text class="body" x="654" y="694">한도에 걸리면 최대 3회 인계</text>
 
   <rect class="card" x="630" y="748" width="440" height="200" rx="8"/>
@@ -108,7 +108,7 @@
 
   <rect class="cardGold" x="1320" y="590" width="410" height="130" rx="8"/>
   <text class="cardHead" x="1344" y="624">Vercel — huai-board</text>
-  <text class="body" x="1344" y="658">작업 현황판 (Mini App)</text>
+  <text class="body" x="1344" y="658">협업 운영센터 (Mini App)</text>
   <text class="body" x="1344" y="690">전문 보기 · 완료 승인</text>
 
   <rect class="cardGold" x="1320" y="744" width="410" height="186" rx="8"/>
@@ -128,14 +128,14 @@
   <path class="flowGray" d="M 500 290 L 512 290 L 512 995 L 1264 995 L 1264 640 L 1320 640"/>
   <path class="flowGray" d="M 1264 995 L 1264 912 L 1320 912"/>
 
-  <text class="edgeLabel" x="516" y="275">지시·승인</text>
+<text class="edgeLabel" x="516" y="275">지시·알림</text>
   <text class="edgeLabel" x="1082" y="297">작업·승인 기록</text>
   <text class="edgeLabel" x="1082" y="437">자기 방 일만</text>
   <text class="edgeLabel" x="1082" y="507">프리뷰 배포</text>
   <text class="edgeLabel" x="1082" y="547">승인 후 승격</text>
   <text class="edgeLabel" x="1082" y="873">대화 원본 보관</text>
   <text class="edgeLabel" x="524" y="567">폴링·발신</text>
-  <text class="edgeLabel" x="900" y="1002" text-anchor="middle">현황판 열기 · 결과물 실행</text>
+  <text class="edgeLabel" x="900" y="1002" text-anchor="middle">Telegram 메뉴 /center · 결과물 실행</text>
 
   <text class="note" x="60" y="700">저장 위치가 갈린 이유</text>
   <text class="body" x="60" y="736">원본은 무손실이라 지우기 전 필수 —</text>
@@ -146,5 +146,5 @@
   <text class="body" x="60" y="912">개인회생 방의 실행이 회계 폴더를</text>
   <text class="body" x="60" y="944">열 수 없게 하기 위해서다.</text>
 
-  <text class="note" x="60" y="1050">2026-08-23 기준 · 실행 엔진 3종 · 방 4개 운영 · 수신 기본 polling · 승인 카테고리 분리 · 배포 전 승인 게이트</text>
+  <text class="note" x="60" y="1050">2026-08-28 기준 · 실행 엔진 3종 · 메뉴 /center · 고정 메시지 제거 · 수신 기본 polling · 배포 전 승인 게이트</text>
 </svg>
