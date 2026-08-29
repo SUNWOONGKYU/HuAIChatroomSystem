@@ -30,7 +30,8 @@ _WorkLog/
 *.docx
 *.jpg
 *.jpeg
-*.pnglogs/
+*.png
+logs/
 
 .vercel
 
