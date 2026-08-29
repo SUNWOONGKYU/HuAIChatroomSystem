@@ -345,9 +345,24 @@ async function discoverServicePids() {
 async function readWindowsProcessEnv(pid) {
   if (!pid || process.platform !== "win32") return {};
   const script = resolve(ROOT, "scripts", "read-windows-process-env.ps1");
-  const output = await runPwsh(script, String(pid));
+  // 물려받기는 편의일 뿐 필수가 아니다 — 설정 파일이 어차피 마지막에 덮어쓴다.
+  // 서비스가 죽은 뒤 PID 파일만 남으면 OpenProcess 가 open-process-failed 로 실패하는데,
+  // 예전에는 그 예외가 재기동 전체를 멈춰 세웠다("서비스가 꺼져 있을수록 못 켜는" 상태).
+  // 못 읽으면 그냥 안 물려받는다.
+  let output = "";
+  try {
+    output = await runPwsh(script, String(pid));
+  } catch (error) {
+    console.warn(`process-env-inherit-skipped pid=${pid} reason=${error instanceof Error ? error.message.split(String.fromCharCode(10))[0] : String(error)}`);
+    return {};
+  }
   if (!output.trim()) return {};
-  return JSON.parse(output);
+  try {
+    return JSON.parse(output);
+  } catch {
+    console.warn(`process-env-inherit-skipped pid=${pid} reason=unparsable-output`);
+    return {};
+  }
 }
 
 function runPwshCommand(command) {
