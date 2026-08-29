@@ -4,8 +4,12 @@ import { writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { applyOperationEnvFile } from "./operation-env-loader.mjs";
 import { applyTelegramWebhooks, formatWebhookApplyResults } from "./apply-telegram-webhooks.mjs";
 import { validateOperationEnv } from "./verify-operation-env.mjs";
+import { fileURLToPath as __fileURLToPath } from "node:url";
+// 이 저장소의 루트. 개발자 PC 의 절대경로를 박아 두면 다른 PC·다른 체크아웃에서 조용히
+// 엉뚱한 곳을 가리킨다 — 스크립트 위치(scripts/)에서 한 단계 올라간 곳이 루트다.
+const REPO_ROOT = __fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]+$/, "");
 
-const ROOT = "C:\\Dev\\HuAIChatroomSystem";
+const ROOT = REPO_ROOT;
 const BOT_PID = "C:\\tmp\\huai-bot-service.pid";
 const GATEWAY_PID = "C:\\tmp\\huai-local-gateway.pid";
 

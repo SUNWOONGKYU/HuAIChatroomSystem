@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 
+// 협업 운영센터 본체가 맨 앞이다 — 미니게임은 부속이고, 방장이 실제로 누르는 화면은 이것이다.
 const tests = [
+  "supabase/miniapp-web/index.browser-test.mjs",
   "supabase/miniapp-web/breakout-game.browser-test.mjs",
   "supabase/miniapp-web/egg-crack-sound-game.browser-test.mjs",
   "supabase/miniapp-web/egg-game.browser-test.mjs",

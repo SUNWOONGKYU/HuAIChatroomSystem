@@ -2,8 +2,12 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { applyOperationEnvAliases } from "./operation-env-loader.mjs";
+import { fileURLToPath as __fileURLToPath } from "node:url";
+// 이 저장소의 루트. 개발자 PC 의 절대경로를 박아 두면 다른 PC·다른 체크아웃에서 조용히
+// 엉뚱한 곳을 가리킨다 — 스크립트 위치(scripts/)에서 한 단계 올라간 곳이 루트다.
+const REPO_ROOT = __fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]+$/, "");
 
-const ROOT = "C:\\Dev\\HuAIChatroomSystem";
+const ROOT = REPO_ROOT;
 const proposalId = process.argv[2];
 if (!proposalId) throw new Error("usage: node scripts/live-approve-proposal.mjs <proposal_id>");
 

@@ -10,7 +10,9 @@ export async function startBrowserGameFixture({ envName, fileName }) {
 
   const fileUrl = new URL(`./${fileName}`, import.meta.url);
   const server = createServer((request, response) => {
-    if (request.url !== `/${fileName}`) {
+    // 쿼리스트링(?fn=…)이 붙어도 같은 파일이다 — 운영센터 페이지는 함수 베이스를 쿼리로 받는다.
+    const pathname = new URL(request.url, "http://127.0.0.1").pathname;
+    if (pathname !== `/${fileName}`) {
       response.writeHead(404).end();
       return;
     }

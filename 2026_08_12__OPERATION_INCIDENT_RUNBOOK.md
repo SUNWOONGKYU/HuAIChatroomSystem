@@ -40,6 +40,40 @@ Then run the first check again.
 node scripts/operation-status-report.mjs
 ```
 
+## Gemini Web Executor Health
+
+Gemini is the third execution engine (`adapter_type=gemini_web`; legacy `antigravity`
+rows take the same path). Unlike Claude and Codex it is not a CLI — it drives a logged-in
+Gemini tab through the dedicated automation Chrome (CDP port 9222) via
+`scripts/gemini-web-adapter.mjs` and the `웹세션-자동화` skill's `session.js`.
+
+Check the bridge from the gateway machine:
+
+```powershell
+curl http://127.0.0.1:9222/json/version
+echo ping | node scripts/gemini-web-adapter.mjs --timeout 20
+```
+
+The adapter prints one classified reason on stderr and exits 1 when it cannot answer.
+Act on the reason, not on the raw stack:
+
+| stderr reason | Meaning | Fix |
+|---|---|---|
+| `gemini-web-cdp-unavailable` | Automation Chrome is not listening on 9222 | Start the automation Chrome (`웹세션-자동화` skill README) |
+| `gemini-web-login-required` | Gemini tab lost its session | Log in manually in the automation Chrome; never automate 2FA |
+| `gemini-web-submit-failed` | Prompt could not be inserted/submitted | Gemini UI changed — update `session.js` selectors |
+| `gemini-web-response-timeout` | No answer within `--timeout` | Retry with a longer timeout; check the tab is not stuck on a dialog |
+| `gemini-web-new-response-missing` | Page answered but no new message was detected | Same as submit-failed |
+| `gemini-web-session-failed` | Anything else from `session.js` | Read `session.js` stdout JSON (last line) |
+
+Tasks that fail this way land in `huai_execution_attempts` with the reason in `last_error`;
+the room receives the failure report as usual. Gemini never edits project files, so a
+failed Gemini attempt leaves no partial worktree to clean up.
+
+`node scripts/operation-status-report.mjs` reports `gemini_web cdp=ok|down` when
+`LOCAL_GATEWAY_ALLOWED_ADAPTERS` includes `gemini_web`; `down` sets the overall status to
+`attention` (Claude/Codex keep running).
+
 ## Outbox Diagnosis
 
 Use the outbox inspector before changing any database row.

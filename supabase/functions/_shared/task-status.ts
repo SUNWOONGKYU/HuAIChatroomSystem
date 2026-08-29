@@ -1,4 +1,4 @@
-// huai_tasks.status 값 23개를 작업 현황판 칸반 칼럼으로 묶는다.
+// huai_tasks.status 값 23개를 협업 운영센터 칸반 칼럼으로 묶는다.
 // 값 목록은 supabase/schema.sql 의 huai_tasks_status_check 제약을 그대로 옮긴 것이다 —
 // 추측하지 않고 그 파일을 직접 읽어 확인했다. 새 상태가 추가되면 이 파일도 같이 갱신해야 한다.
 //

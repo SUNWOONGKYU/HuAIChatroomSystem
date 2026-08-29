@@ -782,3 +782,59 @@ test("이미 결정된 건에 다른 결정이 와도 처리 전체가 죽지 �
   assert.ok(notice, "조용히 버리면 방장은 버튼이 고장난 줄 안다");
   assert.match(String(notice.payload.text), /이미 결정이 끝난 건/);
 });
+
+// 운영센터 링크(BOT_SERVICE_MINIAPP_DIRECT_LINK)가 없는 설치에서, 방장 결정을 요구하는
+// 메시지의 callback 버튼을 지우기만 하면 방장은 버튼도 갈 곳도 없이 "운영센터에서 처리해
+// 주세요"만 받는다. 왜 안 되는지와 무엇을 설정해야 하는지가 본문에 있어야 한다 —
+// supabase-runtime 의 중간승인·리더계획 메시지와 같은 문구다.
+test("운영센터 링크가 없으면 결정 요청 메시지에 설정 안내를 붙이고 버튼은 만들지 않는다", async () => {
+  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, [])]);
+  const store = makeStore(calls.fetchImpl); // miniAppDirectLinkBaseUrl 없음
+
+  await store.commitTelegramInputResult(
+    makeOutboxCommit("telegram:owner-action-redirect:bot:9", { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }, {
+      botRole: "leader",
+      telegramChatId: "1001",
+      text: "방장 액션(/approve · t1)은 협업 운영센터에서만 처리합니다.",
+      ownerActionRedirect: true
+    })
+  );
+
+  const inserted = calls.requests
+    .filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url))
+    .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
+  const row = inserted.find((r: any) => r?.idempotency_key === "telegram:owner-action-redirect:bot:9");
+  assert.ok(row, "리다이렉트 메시지가 outbox 에 남아야 한다");
+  assert.equal(row.payload.keyboard, undefined, "링크가 없으면 어떤 버튼도 만들면 안 된다");
+  assert.match(String(row.payload.text), /BOT_SERVICE_MINIAPP_DIRECT_LINK/);
+  assert.match(String(row.payload.text), /승인 UI가 비활성화/);
+});
+
+test("운영센터 링크가 있으면 결정 요청 메시지에 운영센터 열기 URL 버튼만 붙는다", async () => {
+  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, [])]);
+  const store = new SupabaseBotServiceStore({
+    url: "https://example.supabase.co",
+    serviceRoleKey: "service-role-key-for-test",
+    fetchImpl: calls.fetchImpl,
+    miniAppDirectLinkBaseUrl: "https://t.me/leader_chatroom_bot/board"
+  });
+
+  await store.commitTelegramInputResult(
+    makeOutboxCommit("telegram:owner-action-redirect:bot:10", { kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }, {
+      botRole: "leader",
+      telegramChatId: "1001",
+      text: "방장 액션(/approve · t1)은 협업 운영센터에서만 처리합니다.",
+      ownerActionRedirect: true
+    })
+  );
+
+  const inserted = calls.requests
+    .filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url))
+    .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
+  const row = inserted.find((r: any) => r?.idempotency_key === "telegram:owner-action-redirect:bot:10");
+  const buttons = (row?.payload?.keyboard?.inline_keyboard ?? []).flat();
+  assert.equal(buttons.length, 1);
+  assert.match(String(buttons[0]?.url ?? ""), /^https:\/\/t\.me\/leader_chatroom_bot\/board\?startapp=/);
+  assert.equal("callback_data" in (buttons[0] ?? {}), false, "callback 버튼이 남으면 Telegram 에서 결정이 가능해진다");
+  assert.equal(String(row.payload.text).includes("BOT_SERVICE_MINIAPP_DIRECT_LINK"), false, "링크가 있는데 설정 안내가 붙으면 안 된다");
+});

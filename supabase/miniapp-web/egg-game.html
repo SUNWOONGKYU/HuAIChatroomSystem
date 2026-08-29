@@ -161,7 +161,7 @@
   var score = document.getElementById("score");
   var stage = 0;
   var crackedCount = 0;
-  var ignoreClickUntil = 0;
+  var pointerHandled = false;
   var audioContext = null;
 
   function playTapSound(nextStage) {
@@ -213,14 +213,19 @@
     });
   }
 
+  // 손가락·마우스는 pointerdown 에서 바로 반응하고(지연 없는 입력), 그 뒤에 브라우저가
+  // 합성하는 click 은 버린다. 시간 창(500ms)으로 거르면 기기가 느릴 때 합성 click 이
+  // 창 밖에 떨어져 한 번 탭이 두 번으로 먹힌다 — 브라우저 테스트가 병렬 실행 중 실제로
+  // 그렇게 실패했다(소리 2회). pointerdown 이 있었는지 플래그로 짝을 맞추면 시간과 무관하다.
+  // 키보드(Enter/Space)는 pointerdown 없이 click 만 오므로 플래그가 없어 그대로 진행된다.
   egg.addEventListener("pointerdown", function (event) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    ignoreClickUntil = performance.now() + 500;
+    pointerHandled = true;
     advance(performance.now());
   }, { passive: true });
 
   egg.addEventListener("click", function () {
-    if (performance.now() < ignoreClickUntil) return;
+    if (pointerHandled) { pointerHandled = false; return; }
     advance(performance.now());
   });
 

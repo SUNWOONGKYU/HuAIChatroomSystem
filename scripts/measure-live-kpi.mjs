@@ -7,6 +7,10 @@
 // 이 스크립트는 실제 방에 실행을 걸어 잰다. 파일을 바꾸지 않는 프롬프트만 쓴다 —
 // 측정하려고 저장소를 흔들면 안 된다.
 import { writeFileSync } from "node:fs";
+import { fileURLToPath as __fileURLToPath } from "node:url";
+// 이 저장소의 루트. 개발자 PC 의 절대경로를 박아 두면 다른 PC·다른 체크아웃에서 조용히
+// 엉뚱한 곳을 가리킨다 — 스크립트 위치(scripts/)에서 한 단계 올라간 곳이 루트다.
+const REPO_ROOT = __fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]+$/, "");
 
 const APPLY = process.argv.includes("--apply");
 const OUT = argValue("--out") ?? "docs/kpi-measurement.json";
@@ -83,7 +87,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
         executionRequest: {
           roomId: s.roomId, taskId: s.attemptId, attemptId: s.attemptId, actorId: s.actorId,
           requestedBy: "kpi-measure", adapterType: "claude_code",
-          projectPath: "C:\\Dev\\HuAIChatroomSystem",
+          projectPath: REPO_ROOT,
           prompt: "파일을 절대 수정하지 마라. `node --version` 만 실행하고 그 출력 한 줄만 답하라.",
           timeoutMs: 180000, idempotencyKey: `kpi-measure:${s.attemptId}`, createdAt: new Date().toISOString()
         }

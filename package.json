@@ -125,7 +125,8 @@
     "verify:task-quiz": "npm run build && node --test dist/packages/supabase-runtime/test/task-quiz.test.js",
     "verify:gate48": "npm run verify:task-quiz && npm run verify:gateway-report-rendering && npm run verify:supabase-store",
     "verify:artifact-promotion": "npm run build && node --test dist/apps/local-gateway/test/artifact-promotion.test.js",
-    "verify:gate49": "npm run verify:artifact-promotion && npm run verify:artifact-publisher"
+    "verify:gate49": "npm run verify:artifact-promotion && npm run verify:artifact-publisher && npm run verify:gemini-web-adapter",
+    "verify:gemini-web-adapter": "node --test scripts/gemini-web-adapter.test.mjs"
   },
   "workspaces": [
     "apps/*",

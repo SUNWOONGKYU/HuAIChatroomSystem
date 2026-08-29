@@ -117,6 +117,9 @@ test("S26: structured midpoint checkpoint is parsed and persists an approval gat
   const approvalMessage = calls.requests.find((request) => String(request.body?.payload?.text ?? "").includes("데이터 모델 변경안을 확정했습니다."));
   assert.equal(approvalMessage?.body.payload.keyboard, undefined, "운영센터 링크가 없는 경우 Telegram callback keyboard로 fallback하면 안 된다");
   assert.match(String(approvalMessage?.body.payload.text ?? ""), /협업 운영센터/);
+  // 버튼만 지우면 방장은 갈 곳 없는 안내만 받는다 — 무엇을 설정해야 하는지가 본문에 있어야 한다.
+  assert.match(String(approvalMessage?.body.payload.text ?? ""), /BOT_SERVICE_MINIAPP_DIRECT_LINK/);
+  assert.match(String(approvalMessage?.body.payload.text ?? ""), /승인 UI가 비활성화/);
 });
 
 test("S27/S33: content revision emits submission and queues scoped re-verification", async () => {

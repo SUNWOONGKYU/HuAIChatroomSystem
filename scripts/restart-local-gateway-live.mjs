@@ -1,6 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { spawn } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath as __fileURLToPath } from "node:url";
+// 이 저장소의 루트. 개발자 PC 의 절대경로를 박아 두면 다른 PC·다른 체크아웃에서 조용히
+// 엉뚱한 곳을 가리킨다 — 스크립트 위치(scripts/)에서 한 단계 올라간 곳이 루트다.
+const REPO_ROOT = __fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]+$/, "");
 
 const projectRef = "smxtewoijwelmmpyogwt";
 const raw = execFileSync("supabase", ["projects", "api-keys", "--project-ref", projectRef, "-o", "json"], {
@@ -16,7 +20,7 @@ stopExistingLocalGateways(pidFile);
 rmSync(pidFile, { force: true });
 
 const child = spawn("node", ["dist/apps/local-gateway/src/cli.js"], {
-  cwd: "C:\\Dev\\HuAIChatroomSystem",
+  cwd: REPO_ROOT,
   detached: true,
   stdio: "ignore",
   windowsHide: true,
@@ -24,7 +28,7 @@ const child = spawn("node", ["dist/apps/local-gateway/src/cli.js"], {
     ...process.env,
     SUPABASE_URL: `https://${projectRef}.supabase.co`,
     SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
-    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\Dev\\HuAIChatroomSystem",
+    LOCAL_GATEWAY_ALLOWED_ROOTS: REPO_ROOT,
     LOCAL_GATEWAY_ALLOWED_ADAPTERS: "codex,claude_code",
     LOCAL_GATEWAY_HEALTH_PORT: "8797",
     LOCAL_GATEWAY_MAX_ATTEMPTS: "3",

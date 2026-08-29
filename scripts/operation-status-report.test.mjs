@@ -124,3 +124,49 @@ test("승인 원장 조회 실패는 은폐되지 않고 상태에 드러난다"
   assert.equal(report.status, "attention");
   assert.match(formatOperationStatusReport(report), /approvals .*error=/);
 });
+
+// Gemini 웹 실행기는 전용 Chrome(CDP 9222)이 없으면 그 엔진만 죽는다 — Claude·Codex 는
+// 멀쩡하므로 down 이 아니라 attention 이고, 상태 리포트 한 줄로 원인이 바로 보여야 한다.
+test("gemini_web 을 허용한 머신에서 CDP 가 안 붙으면 attention 으로 드러난다", async () => {
+  const report = await buildOperationStatusReport({ ...env(), LOCAL_GATEWAY_ALLOWED_ADAPTERS: "codex,claude_code,gemini_web" }, { now: "2026-08-29T00:00:00.000Z" }, async (url) => {
+    const href = String(url);
+    if (href.includes("9222")) throw new Error("connect ECONNREFUSED 127.0.0.1:9222");
+    if (href.includes("127.0.0.1")) return jsonResponse(200, { ok: true, service: "test" });
+    if (href.includes("huai_telegram_updates")) return jsonResponse(200, []);
+    if (href.includes("huai_outbox")) return jsonResponse(200, []);
+    if (href.includes("huai_approvals")) return jsonResponse(200, []);
+    throw new Error("unexpected-url:" + href);
+  });
+
+  assert.equal(report.geminiWeb.enabled, true);
+  assert.equal(report.geminiWeb.ok, false);
+  assert.equal(report.status, "attention");
+  const text = formatOperationStatusReport(report);
+  assert.match(text, /gemini_web cdp=down/);
+  assert.match(text, /Gemini Web Executor Health/);
+});
+
+test("gemini_web 을 허용하지 않은 머신은 CDP 를 보지 않는다", async () => {
+  const report = await buildOperationStatusReport(env(), { now: "2026-08-29T00:00:00.000Z" }, fakeFetch({
+    healthOk: true,
+    updates: [],
+    outbox: []
+  }));
+  assert.equal(report.geminiWeb.enabled, false);
+  assert.equal(report.status, "ok");
+  assert.equal(formatOperationStatusReport(report).includes("gemini_web"), false);
+});
+
+test("gemini_web 허용 + CDP 정상이면 브라우저 버전과 함께 ok 로 보고한다", async () => {
+  const report = await buildOperationStatusReport({ ...env(), LOCAL_GATEWAY_ALLOWED_ADAPTERS: "gemini_web" }, { now: "2026-08-29T00:00:00.000Z" }, async (url) => {
+    const href = String(url);
+    if (href.includes("9222")) return jsonResponse(200, { Browser: "Chrome/128.0" });
+    if (href.includes("127.0.0.1")) return jsonResponse(200, { ok: true, service: "test" });
+    if (href.includes("huai_telegram_updates")) return jsonResponse(200, []);
+    if (href.includes("huai_outbox")) return jsonResponse(200, []);
+    if (href.includes("huai_approvals")) return jsonResponse(200, []);
+    throw new Error("unexpected-url:" + href);
+  });
+  assert.equal(report.status, "ok");
+  assert.match(formatOperationStatusReport(report), /gemini_web cdp=ok browser=Chrome\/128\.0/);
+});

@@ -73,8 +73,11 @@ async function tap(selector) {
 }
 
 await tap("#egg");
-assert.equal(await evaluate(`document.querySelector('#egg').dataset.stage`), "1");
-assert.equal(await evaluate(`window.__eggAudioStarts`), 1, "first tap did not start its sound");
+// 두 값을 한 번에 읽는다 — 따로 읽으면 그 사이에 늦게 도착한 합성 click 이 끼어들어
+// stage 는 1, 소리는 2 로 어긋나게 보일 수 있다(병렬 실행에서 실측).
+const firstTap = await evaluate(`({ stage: document.querySelector('#egg').dataset.stage, audioStarts: window.__eggAudioStarts })`);
+assert.equal(firstTap.stage, "1");
+assert.equal(firstTap.audioStarts, 1, "first tap did not start exactly one sound");
 await tap("#egg");
 const broken = await evaluate(`({
   stage: document.querySelector('#egg').dataset.stage,

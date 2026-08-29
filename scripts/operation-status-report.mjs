@@ -8,16 +8,23 @@ export async function buildOperationStatusReport(env, options = {}, fetchImpl = 
   const botHealthUrl = options.botHealthUrl ?? env.BOT_SERVICE_HEALTH_URL ?? "http://127.0.0.1:8787/healthz";
   const gatewayHealthUrl = options.gatewayHealthUrl ?? env.LOCAL_GATEWAY_HEALTH_URL ?? "http://127.0.0.1:8797/healthz";
 
-  const [botService, localGateway, updates, outbox, approvals] = await Promise.all([
+  // Gemini 웹 실행기는 CLI 가 아니라 전용 Chrome(CDP 9222)에 붙는다. 그 Chrome 이 없으면
+  // gemini_web 실행만 전부 gemini-web-cdp-unavailable 로 죽고 Claude·Codex 는 멀쩡하다 —
+  // 그래서 "down" 이 아니라 "attention" 이다. 이 머신이 gemini_web 을 허용할 때만 본다.
+  const geminiWebEnabled = String(env.LOCAL_GATEWAY_ALLOWED_ADAPTERS ?? "").split(/[;,]/).map((s) => s.trim()).includes("gemini_web");
+  const geminiCdpUrl = options.geminiCdpUrl ?? env.GEMINI_WEB_CDP_URL ?? "http://127.0.0.1:9222/json/version";
+
+  const [botService, localGateway, updates, outbox, approvals, geminiWeb] = await Promise.all([
     fetchHealth(fetchImpl, botHealthUrl),
     fetchHealth(fetchImpl, gatewayHealthUrl),
     fetchTelegramUpdateSummary(fetchImpl, baseUrl, serviceRoleKey),
     inspectOutbox(env, fetchImpl),
-    fetchApprovalLedgerSummary(fetchImpl, baseUrl, serviceRoleKey)
+    fetchApprovalLedgerSummary(fetchImpl, baseUrl, serviceRoleKey),
+    geminiWebEnabled ? fetchGeminiCdpHealth(fetchImpl, geminiCdpUrl) : Promise.resolve({ enabled: false, ok: true })
   ]);
 
-  const status = decideOverallStatus({ botService, localGateway, updates, outbox, approvals });
-  return { generatedAt: now, status, botService, localGateway, updates, outbox, approvals };
+  const status = decideOverallStatus({ botService, localGateway, updates, outbox, approvals, geminiWeb });
+  return { generatedAt: now, status, botService, localGateway, updates, outbox, approvals, geminiWeb };
 }
 
 export function formatOperationStatusReport(report) {
@@ -28,6 +35,9 @@ export function formatOperationStatusReport(report) {
     `outbox scanned=${report.outbox.scanned} sent=${report.outbox.counts.sent ?? 0} dead=${report.outbox.counts.dead ?? 0} retry_pending=${report.outbox.counts.retry_pending ?? 0} processing=${report.outbox.counts.processing ?? 0} stale_processing=${report.outbox.staleProcessing}`,
     `approvals scanned=${report.approvals.scanned} task_approved=${report.approvals.taskApproved} orphaned=${report.approvals.orphaned}${report.approvals.error ? ` error=${report.approvals.error}` : ""}`
   ];
+  if (report.geminiWeb?.enabled) {
+    lines.push(`gemini_web cdp=${report.geminiWeb.ok ? "ok" : "down"}${report.geminiWeb.browser ? ` browser=${report.geminiWeb.browser}` : ""}${report.geminiWeb.error ? ` error=${report.geminiWeb.error}` : ""}${report.geminiWeb.ok ? "" : " action=자동화 Chrome(CDP 9222)을 띄워라. 런북 'Gemini Web Executor Health' 참조."}`);
+  }
   for (const row of report.approvals.orphanRows ?? []) {
     lines.push(`approval_orphan entity_ref=${row.entityRef} decided_at=${row.decidedAt} action=승인은 기록됐으나 대응 task 가 없다. 아웃박스 hydration 실패 여부를 확인하라.`);
   }
@@ -122,11 +132,22 @@ async function fetchApprovalLedgerSummary(fetchImpl, baseUrl, serviceRoleKey) {
   return summary;
 }
 
-function decideOverallStatus({ botService, localGateway, updates, outbox, approvals }) {
+async function fetchGeminiCdpHealth(fetchImpl, url) {
+  try {
+    const response = await fetchImpl(url, { method: "GET" });
+    const body = await response.json().catch(() => ({}));
+    return { enabled: true, ok: response.ok, status: response.status, browser: typeof body.Browser === "string" ? body.Browser : undefined };
+  } catch (error) {
+    return { enabled: true, ok: false, status: 0, error: sanitize(error instanceof Error ? error.message : String(error)) };
+  }
+}
+
+function decideOverallStatus({ botService, localGateway, updates, outbox, approvals, geminiWeb }) {
   if (!botService.ok || !localGateway.ok) return "down";
   if (localGateway.hasLastError || (localGateway.consecutiveErrors ?? 0) > 0 || outbox.staleProcessing > 0) return "attention";
   if ((outbox.counts.dead ?? 0) > 0 || updates.failed > 0 || updates.pending > 0) return "attention";
   if ((approvals?.orphaned ?? 0) > 0 || approvals?.error) return "attention";
+  if (geminiWeb?.enabled && !geminiWeb.ok) return "attention";
   return "ok";
 }
 

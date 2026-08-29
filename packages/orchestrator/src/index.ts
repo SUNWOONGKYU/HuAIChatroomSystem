@@ -612,7 +612,7 @@ function buildMiniAppDecisionOutbox(
         botRole: "leader",
         telegramChatId: input.envelope.telegramChatId,
         idempotencyKey: `telegram:supplement-requested:${taskOrProposalId}:${input.envelope.updateId}`,
-        // 완료·보완 결정은 작업 현황판에서 한다. 방에 버튼을 다시 붙이면 결정 창구가
+        // 완료·보완 결정은 협업 운영센터에서 한다. 방에 버튼을 다시 붙이면 결정 창구가
         // 둘로 갈라지고, 대화 공간도 버튼 줄로 계속 잠식된다. 사유는 이제 방 메시지에도
         // 실린다(Mini App 사유 입력란 → huai_approvals.reason → 여기) — 버튼만 눌러서는
         // 아무것도 전달되지 않던 예전 상태를 고친 것이다.
@@ -1399,7 +1399,7 @@ function stripRequestFiller(text: string): string {
 //
 // 예전에는 한글 키워드 사다리로 요청을 13개 고정 라벨 중 하나에 떨어뜨렸다. 그 결과가
 // 라이브에서 드러났다 — 한 방의 제안 150건이 제목 66개로 뭉쳤고, "요청 처리" 25건,
-// "Telegram 사용자 경험 개선" 6건처럼 서로 구분이 안 되는 덩어리가 생겼다. 작업 현황판이
+// "Telegram 사용자 경험 개선" 6건처럼 서로 구분이 안 되는 덩어리가 생겼다. 협업 운영센터가
 // 생겨서 제안이 목록으로 쌓이기 전까지는 안 보이던 문제다(Telegram 은 한 건씩 흘러가서
 // 같은 제목이 25개 있다는 걸 알 수 없었다).
 //

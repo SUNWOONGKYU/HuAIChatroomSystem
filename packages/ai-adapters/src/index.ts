@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeAiAdapterType, type ExecutionRequest } from "../../contracts/src/index.js";
 
@@ -148,12 +149,21 @@ function platformPlan(command: string, args: readonly string[], cwd: string, tim
   return { executable: command, args, cwd, timeoutMs, stdinInput };
 }
 
+// npm -g 로 깐 CLI 의 위치. Windows 는 %APPDATA%\npm\node_modules, 그 외는 홈 아래 .npm-global
+// 을 흔히 쓴다 — 어느 쪽이든 env 로 바꿀 수 있고, 여기는 개발자 PC 의 절대경로를 박지 않는다.
+function npmGlobalModulePath(...segments: string[]): string {
+  const base = process.env.APPDATA
+    ? path.join(process.env.APPDATA, "npm", "node_modules")
+    : path.join(os.homedir(), ".npm-global", "lib", "node_modules");
+  return path.join(base, ...segments);
+}
+
 function codexEntrypoint(): string {
-  return process.env.CODEX_JS_ENTRYPOINT ?? "C:\\Users\\home\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js";
+  return process.env.CODEX_JS_ENTRYPOINT ?? npmGlobalModulePath("@openai", "codex", "bin", "codex.js");
 }
 
 function claudeExecutable(): string {
-  return process.env.CLAUDE_CODE_EXECUTABLE ?? "C:\\Users\\home\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe";
+  return process.env.CLAUDE_CODE_EXECUTABLE ?? npmGlobalModulePath("@anthropic-ai", "claude-code", "bin", process.platform === "win32" ? "claude.exe" : "claude");
 }
 
 // 브리지는 이 저장소 안에 있다. 절대경로를 박으면 다른 PC·다른 체크아웃에서 조용히

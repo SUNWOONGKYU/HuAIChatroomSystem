@@ -2,7 +2,7 @@
 // fetch() 로 호출된다. 같은 오리진이 아니므로 CORS 프리플라이트 응답이 필요하다.
 //
 // 참고(구조만): buzzlab-nextjs supabase/functions/decrypt-api-key/index.ts:27-37 의
-// Deno.serve + OPTIONS 프리플라이트 골격을 채택했다 (하는 일은 무관 — 이쪽은 initData 검증/작업 현황판 API).
+// Deno.serve + OPTIONS 프리플라이트 골격을 채택했다 (하는 일은 무관 — 이쪽은 initData 검증/협업 운영센터 API).
 
 export const MINIAPP_CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",

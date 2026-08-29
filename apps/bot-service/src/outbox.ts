@@ -350,7 +350,7 @@ async function sendTelegramOutbox(row: OutboxRecord, sender: TelegramMessageSend
     keyboard
   });
 
-  // 고정까지가 이 메시지의 목적인 경우가 있다(작업 현황판). 고정에 실패해도 메시지는
+  // 고정까지가 이 메시지의 목적인 경우가 있다(협업 운영센터). 고정에 실패해도 메시지는
   // 이미 나갔으므로 발신 자체를 실패로 되돌리지 않는다 — 재시도하면 같은 글이 또 올라간다.
   if (row.payload.pinMessage === true && sender.pinMessage && sent.telegramMessageId) {
     try {

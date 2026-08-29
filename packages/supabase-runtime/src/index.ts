@@ -450,7 +450,7 @@ export class SupabaseOutboxStore {
   // 예전에는 감사 "요청" 메시지만 방에 올리고 실제 실행은 방장이 검증 버튼을 눌러야
   // 걸렸다. 라이브에서 단일 작업자 자동감사로 실제 실행된 건수는 0이었다(게이트웨이
   // 실행요청 172건 중 감사 9건은 전부 다중 AI 경로였다) — 즉 자동 검증은 이름뿐이고
-  // 아무것도 검증되지 않고 있었다. 수동 결정(완료·보완)은 작업 현황판이 맡는다.
+  // 아무것도 검증되지 않고 있었다. 수동 결정(완료·보완)은 협업 운영센터가 맡는다.
   // 한도에 걸린 실행을 다른 엔진으로 다시 건다.
   private async enqueueEngineFallback(
     request: ExecutionRequest,
@@ -1062,9 +1062,9 @@ export class SupabaseOutboxStore {
           botRole: "leader",
           messageThreadId: input.request.telegramMessageThreadId,
           telegramChatId,
-          // 결정 버튼은 방에 붙이지 않는다 — 완료·보완 결정은 작업 현황판이 맡는다.
+          // 결정 버튼은 방에 붙이지 않는다 — 완료·보완 결정은 협업 운영센터가 맡는다.
           // 이 상태(completion_approval_pending·commander_completion_pending)는
-          // 작업 현황판에서 decidable 이라(supabase/functions/_shared/task-status.ts) 방장이
+          // 협업 운영센터에서 decidable 이라(supabase/functions/_shared/task-status.ts) 방장이
           // 갇히지 않는다. 방에는 알림만 남겨 대화 공간을 버튼으로 채우지 않는다.
           text: "검증이 통과되었습니다.\n완료 승인 또는 보완 요청은 고정된 협업 운영센터에서 결정해 주세요.",
           binding: { kind: "verification", verificationId: sourceEventId },
@@ -2314,7 +2314,7 @@ function isLowValueHumanLine(line: string): boolean {
 // 버렸다. 그래서 답이 파일 이름을 언급하는 순간 통째로 사라졌다 — 라이브에서
 // ClaudeBot 이 낸
 //   조사 결과: `package.json` name 필드 값 = `"hu-ai-chatroom-system"`.
-//   근거: `C:\Dev\HuAIChatroomSystem\package.json` 2번째 줄 직접 읽음.
+//   근거: `<프로젝트 루트>\package.json` 2번째 줄 직접 읽음.
 // 두 줄이 `.json` 때문에 버려지고 방에는 "결과:" 만 갔다. 소프트웨어 작업에서
 // 답이 파일 이름을 말하는 건 정상이고, 오히려 그게 답의 핵심인 경우가 많다.
 //
