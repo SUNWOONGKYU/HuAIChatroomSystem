@@ -67,7 +67,7 @@ export const TASK_STATUS_META: Record<TaskStatus, TaskStatusMeta> = {
     bucket: "needs_decision",
     label: "중간 승인 필요",
     decidable: false,
-    hint: "이 단계는 아직 Mini App 결정 창구가 없습니다. Telegram 방에서 결정해주세요."
+    hint: "이 단계의 결정은 협업 운영센터에서 처리합니다. 협업 운영센터를 열어 확인해 주세요."
   },
   // completion_approval_pending 과 stage='final_approval' 로 통합됐다(팀장님 확정 — 같은
   // 결정, 상태 이름만 다르다). 방장에게도 같은 종류의 결정임을 알 수 있게 라벨을 맞췄다.

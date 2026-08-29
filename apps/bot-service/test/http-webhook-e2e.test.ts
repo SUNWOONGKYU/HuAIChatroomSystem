@@ -283,7 +283,7 @@ test("returns malformed-update for invalid json body", async () => {
   } finally { await close(server); }
 });
 
-test("owner approve command creates local gateway outbox when execution defaults exist", async () => {
+test("owner approve command redirects to the collaboration operations center", async () => {
   const queued: TelegramInboundQueueMessage[] = [];
   const server = createTelegramWebhookHttpServer({
     config: botConfig(),
@@ -308,11 +308,14 @@ test("owner approve command creates local gateway outbox when execution defaults
       persistence: store
     });
     assert.equal(processed.accepted, true);
-    assert.equal(store.snapshot().events[0]?.eventType, "owner_task_approved");
-    const gatewayOutbox = store.snapshot().outbox.find((item) => item.target.kind === "local_gateway");
-    assert.equal(gatewayOutbox?.target.kind, "local_gateway");
-    const payload = gatewayOutbox?.payload as Record<string, unknown>;
-    assert.equal(typeof payload.executionRequest, "object");
+    assert.deepEqual(store.snapshot().events, []);
+    assert.equal(store.snapshot().outbox.length, 1);
+    const redirectOutbox = store.snapshot().outbox[0];
+    assert.equal(redirectOutbox?.target.kind, "telegram_bot");
+    const payload = redirectOutbox?.payload as Record<string, unknown>;
+    assert.equal(payload.ownerActionRedirect, true);
+    assert.equal(String(payload.text).includes("협업 운영센터에서만 처리합니다"), true);
+    assert.equal(store.snapshot().outbox.some((item) => item.target.kind === "local_gateway"), false);
     assert.equal(JSON.stringify(payload).includes("leader-secret"), false);
   } finally { await close(server); }
 });

@@ -6,7 +6,7 @@ import {
   rewritePayloadCallbacks
 } from "./repair-button-callback-outbox.mjs";
 
-test("rewrites only long completion callback actions", () => {
+test("removes owner-control callback keyboards and marks the operations-center redirect", () => {
   const { payload, changedCallbacks } = rewritePayloadCallbacks({
     keyboard: {
       inline_keyboard: [[
@@ -18,9 +18,9 @@ test("rewrites only long completion callback actions", () => {
     }
   });
 
-  assert.equal(changedCallbacks, 3);
-  const callbacks = payload.keyboard.inline_keyboard.flat().map((button) => button.callback_data);
-  assert.deepEqual(callbacks, ["task:proposal_123:rv", "task:proposal_123:rr", "task:proposal_123:fa", "proposal:proposal_123:approve"]);
+  assert.equal(changedCallbacks, 4);
+  assert.equal("keyboard" in payload, false);
+  assert.equal(payload.ownerActionRedirect, true);
 });
 
 test("dry-run lists candidates without patching", async () => {
@@ -59,8 +59,8 @@ test("apply patches only selected candidate", async () => {
   assert.match(patch.url, /row-2/);
   assert.equal(patch.body.status, "retry_pending");
   assert.equal(patch.body.last_error, "manual-retry-after-short-callback-fix");
-  assert.equal(JSON.stringify(patch.body.payload).includes(":request_revision"), false);
-  assert.equal(JSON.stringify(patch.body.payload).includes(":rr"), true);
+  assert.equal(JSON.stringify(patch.body.payload).includes("callback_data"), false);
+  assert.equal(patch.body.payload.ownerActionRedirect, true);
 });
 
 function env() {

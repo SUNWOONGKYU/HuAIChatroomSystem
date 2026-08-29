@@ -19,7 +19,7 @@ import {
   type TelegramBotRole,
   type TelegramCommand
 } from "../../../packages/contracts/src/index.js";
-import { buildCommandHelp, buildProposalKeyboard } from "../../../packages/telegram-ui/src/index.js";
+import { buildCommandHelp } from "../../../packages/telegram-ui/src/index.js";
 
 export type BotServiceConfig = {
   allowedChatIds: readonly string[];
@@ -265,10 +265,6 @@ export function routeTelegramWebhookSafe(
 
 export function renderHelpMessage(): string {
   return buildCommandHelp();
-}
-
-export function renderNewTaskActions(taskProposalId: string) {
-  return buildProposalKeyboard(taskProposalId);
 }
 
 export function makeTelegramUpdateIdempotencyKey(envelope: TelegramUpdateEnvelope): string {

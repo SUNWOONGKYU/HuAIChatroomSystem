@@ -17,6 +17,7 @@ const ROLE_COMMANDS = {
     { command: "verify", description: "검증 요청" },
     { command: "done", description: "최종 승인" },
     { command: "cancel", description: "작업 취소" },
+    { command: "center", description: "협업 운영센터 열기" },
     { command: "help", description: "도움말" }
   ],
   CLAUDE: [

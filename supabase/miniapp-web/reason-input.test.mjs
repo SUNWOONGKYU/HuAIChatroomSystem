@@ -37,7 +37,7 @@ test("decisionSuccessNote: proposal 경로(제안 '수정')는 여전히 사유�
   const body = extractFunction(html, "decisionSuccessNote\\(action, res, kind\\)");
   const decisionSuccessNote = new Function("action", "res", "kind", body);
 
-  assert.match(decisionSuccessNote("request_revision", {}, "proposal"), /Telegram 방에 직접 남겨주세요/);
+  assert.match(decisionSuccessNote("request_revision", {}, "proposal"), /협업 운영센터에서 확인하고 처리합니다/);
 });
 
 test("decisionSuccessNote: 그 외 액션은 서버 note 를 그대로 쓰거나 기본 문구로 떨어진다", () => {

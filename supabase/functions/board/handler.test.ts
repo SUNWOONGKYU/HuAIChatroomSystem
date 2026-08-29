@@ -21,7 +21,7 @@ import { handleBoardRequest, type BoardHandlerDeps, type FetchHtmlResult } from 
 // ESNext 계열일 때만 허용돼 여기선 못 쓴다.
 declare const __dirname: string;
 
-const SAMPLE_HTML = "<!doctype html><html><body>테스트 작업 현황판</body></html>";
+const SAMPLE_HTML = "<!doctype html><html><body>테스트 협업 운영센터</body></html>";
 
 // 실측 버그를 그대로 재현하는 "적대적" 업스트림 응답 — Storage 가 실제로 이 헤더를 보낸다.
 // nosniff 가 붙으면 브라우저가 절대 HTML 로 추론하지 않으므로, 이게 최종 응답에 안 섞이는

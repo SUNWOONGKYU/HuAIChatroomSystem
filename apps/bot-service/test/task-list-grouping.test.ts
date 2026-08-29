@@ -42,9 +42,9 @@ function outboxRow(payload: Record<string, unknown>) {
   return { huai_outbox_id: "outbox-query", event_id: null, idempotency_key: "telegram:query", target_kind: "telegram_bot", target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId: "1001" }), payload, status: "pending", attempts: 0, created_at: "2026-08-13T00:00:00.000Z" };
 }
 
-function makeOutboxCommit(idempotencyKey: string, payload: Record<string, unknown>) {
+function makeOutboxCommit(idempotencyKey: string, payload: Record<string, unknown>, commandName: "/tasks" | "/center" = "/tasks", messageThreadId?: string) {
   return {
-    message: { input: { kind: "command" as const, envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "1", "1001", "10", "2001", false, "/tasks", undefined), command: { name: "/tasks" as const, args: [] } }, idempotencyKey: "telegram-update:bot:1", receivedAt: "2026-08-13T00:00:00.000Z" },
+    message: { input: { kind: "command" as const, envelope: new TelegramUpdateEnvelope("bot", "leader_bot", "leader", "1", "1001", "10", "2001", false, commandName, undefined, undefined, undefined, undefined, [], undefined, messageThreadId), command: { name: commandName, args: [] } }, idempotencyKey: "telegram-update:bot:1", receivedAt: "2026-08-13T00:00:00.000Z" },
     result: { accepted: true as const, authorization: { allowed: true as const }, events: [], outbox: [{ target: { kind: "telegram_bot" as const, botRole: "leader" as const, telegramChatId: "1001" }, idempotencyKey, payload }] }
   };
 }
@@ -245,11 +245,11 @@ test("표시된 것이 방의 전부일 때는 여전히 '총 N건'으로 정확
   assert.equal(text.includes("더 있음"), false);
 });
 
-// "작업 현황판 열기" 버튼(Direct Link Mini App). web_app 타입이 아니라 url 타입 — Telegram 공식
+// "협업 운영센터 열기" 버튼(Direct Link Mini App). web_app 타입이 아니라 url 타입 — Telegram 공식
 // 문서(InlineKeyboardButton.web_app: "Available only in private chats")상 web_app 버튼은
 // 그룹에서 안 눌린다. BOT_SERVICE_MINIAPP_DIRECT_LINK 로 베이스 링크를 받아 ?startapp=<roomId>
 // 를 붙인다.
-test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '작업 현황판 열기' url 버튼이 붙는다", async () => {
+test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '협업 운영센터 열기' url 버튼이 붙는다", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
     jsonResponseWithRange(200, [
@@ -265,10 +265,28 @@ test("BOT_SERVICE_MINIAPP_DIRECT_LINK 가 설정되면 /tasks 응답에 '작업 
   const keyboard = calls.requests[3]?.body[0].payload.keyboard;
   assert.ok(keyboard, "keyboard 필드가 있어야 한다");
   const button = keyboard.inline_keyboard[0][0];
-  assert.equal(button.text, "작업 현황판 열기");
+  assert.equal(button.text, "협업 운영센터 열기");
   assert.equal(button.url, `https://t.me/leader_chatroom_bot/board?startapp=${ROOM_ID}`);
   assert.equal("callback_data" in button, false);
   assert.equal("web_app" in button, false);
+});
+
+test("포럼 주제의 /center 링크는 roomId와 현재 message_thread_id를 함께 전달한다", async () => {
+  const calls = makeSupabaseFetch([
+    roomResolutionResponse(),
+    jsonResponse(201, [outboxRow({ text: "placeholder" })])
+  ]);
+  const store = makeStore(calls.fetchImpl, undefined, "https://t.me/leader_chatroom_bot/board");
+
+  await store.commitTelegramInputResult(makeOutboxCommit(
+    "telegram:query:center",
+    { text: "placeholder", query: { kind: "center" }, messageThreadId: "613" },
+    "/center",
+    "613"
+  ));
+
+  const button = calls.requests[1]?.body[0].payload.keyboard.inline_keyboard[0][0];
+  assert.equal(button.url, `https://t.me/leader_chatroom_bot/board?startapp=${ROOM_ID}__t613`);
 });
 
 // V1 스타일 요구사항: 미설정 시 기존 동작과 완전히 동일해야 한다 — payload 에 keyboard

@@ -1,4 +1,4 @@
-// 방마다 "작업 현황판 열기" 메시지를 하나 보내 고정한다.
+// 방마다 "협업 운영센터 열기" 메시지를 하나 보내 고정한다.
 //
 // 왜 필요한가: 작업 현황판 버튼은 /tasks 응답에 붙는데, 그 메시지는 대화가 쌓이면 위로
 // 밀려 올라가 찾을 수 없다. 방장이 작업 현황판을 열 때마다 /tasks 를 다시 쳐야 한다.
@@ -16,10 +16,37 @@ import { buildMiniAppDirectLink } from "../dist/packages/telegram-ui/src/index.j
 
 const APPLY = process.argv.includes("--apply");
 
-export const BOARD_MESSAGE_TEXT = "📋 작업 현황판 — 이 방의 작업과 승인 대기를 한 화면에서 봅니다.";
+// 고정 메시지 생성 경로는 폐기했다. 기존 메시지 정리는 별도 안전 스크립트로 한다.
+if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
+  console.log("협업 운영센터 고정 메시지 생성은 비활성화되었습니다. 기존 메시지 삭제는 scripts/remove-room-board-message.mjs 를 사용하세요.");
+  process.exit(0);
+}
+
+export const BOARD_MESSAGE_TEXT = "📋 협업 운영센터 — 이 방의 작업과 승인 대기를 한 화면에서 봅니다.";
 
 // 우리 봇이 올린 현황판 메시지는 앞머리 기호로 알아본다.
 export const BOARD_MESSAGE_MARKER = "📋";
+
+// 이미 방에 고정되어 있는 우리 메시지의 옛 문구들. 문구는 여러 번 바뀌었고("작업 현황판"
+// → "협업 운영센터", 방 단위 → 주제 단위), 운영 방에 남아 있는 것은 대부분 옛 문구다.
+// 최신 문구 하나만 알고 있으면 정작 지워야 할 것을 남의 메시지로 오인해 손도 못 댄다.
+// 실제로 방에 나간 문구만 넣는다. 나가지 않은 문구를 넣으면 삭제 대상을 넓히기만 하고
+// 대조 목록의 근거를 흐린다 — "협업 운영센터 — 이 주제" 판은 그 문구를 보내던 코드
+// (ensureTopicBoardRows)가 같은 변경에서 삭제돼 한 번도 전송된 적이 없어 제외한다.
+export const LEGACY_BOARD_MESSAGE_TEXTS = [
+  // 방 단위 고정 — scripts/pin-room-board-message.mjs (50e75b1)
+  "📋 작업 현황판 — 이 방의 작업과 승인 대기를 한 화면에서 봅니다.",
+  // 주제 단위 고정 — apps/bot-service/src/supabase-store.ts TOPIC_BOARD_MESSAGE_TEXT (d35293b)
+  "📋 작업 현황판 — 이 주제의 작업과 승인 대기를 한 화면에서 봅니다."
+];
+
+export const KNOWN_BOARD_MESSAGE_TEXTS = [BOARD_MESSAGE_TEXT, ...LEGACY_BOARD_MESSAGE_TEXTS];
+
+// 우리가 올린 현황판 메시지인지 판정한다. 마커만 보면 방장이 올린 다른 📋 공지까지
+// 삼키므로, 우리가 실제로 써 온 문구 목록과 대조한다.
+export function isKnownBoardMessageText(text) {
+  return KNOWN_BOARD_MESSAGE_TEXTS.includes(String(text ?? "").trim());
+}
 
 // 이미 우리가 고정해 둔 메시지인지 판정한다. 방장이 직접 고정한 다른 메시지를
 // 덮어쓰면 안 되고, 실행할 때마다 새 메시지를 만들어 방을 어지럽혀도 안 된다.
@@ -48,7 +75,7 @@ export function buildBoardMessagePayload(chatId, roomId, directLinkBaseUrl) {
     // 고정 메시지에 링크 미리보기가 붙으면 고정 바가 불필요하게 커진다.
     disable_web_page_preview: true,
     reply_markup: {
-      inline_keyboard: [[{ text: "작업 현황판 열기", url: buildMiniAppDirectLink(directLinkBaseUrl, roomId) }]]
+      inline_keyboard: [[{ text: "협업 운영센터 열기", url: buildMiniAppDirectLink(directLinkBaseUrl, roomId) }]]
     }
   };
 }

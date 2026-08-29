@@ -195,12 +195,8 @@ export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxD
         payload: {
           botRole: "auditor",
           telegramChatId: "1001",
-          text: "검증 요청: " + input.request.taskId,
-          keyboard: { inline_keyboard: [[
-            { text: "검증", callback_data: "task:" + input.request.taskId + ":rv" },
-            { text: "보완", callback_data: "task:" + input.request.taskId + ":rr" },
-            { text: "완료", callback_data: "task:" + input.request.taskId + ":fa" }
-          ]] },
+          text: "검증 요청: " + input.request.taskId + "\n승인·통제는 협업 운영센터에서 처리해 주세요.",
+          ownerActionRedirect: true,
           binding: { kind: "verification", verificationId: eventId },
           idempotencyKey: "telegram-audit:" + input.request.attemptId + ":completed"
         },

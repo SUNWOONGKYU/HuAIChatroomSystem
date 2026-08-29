@@ -185,7 +185,9 @@ test("한 배치 안에서 막힌 작업만 대기하고 무관한 작업은 그
     jsonResponse(200, [{ predecessor_task_id: predecessorId, dependency_type: "blocks", is_blocking: true }]),
     jsonResponse(200, [{ task_id: predecessorId, status: "in_progress" }]),
     jsonResponse(200, [{ huai_outbox_id: "outbox-blocked" }]),
-    jsonResponse(200, []) // readyTaskId 는 의존 행이 아예 없다.
+    jsonResponse(200, []), // readyTaskId 는 의존 행이 아예 없다.
+    jsonResponse(200, [{ status: "scheduled" }]),
+    jsonResponse(204, null)
   ]);
   const store = makeStore(calls.fetchImpl);
 
@@ -193,6 +195,10 @@ test("한 배치 안에서 막힌 작업만 대기하고 무관한 작업은 그
 
   assert.equal(rows.length, 1, "막힌 작업 하나 빼고 나머지는 이번 배치에서 그대로 나가야 한다");
   assert.equal(rows[0]?.outboxId, "outbox-ready");
+  assert.match(calls.requests[5]?.url ?? "", /huai_tasks\?task_id=eq\.44444444-4444-4444-8444-444444444444&select=status/);
+  assert.match(calls.requests[6]?.url ?? "", /huai_tasks\?task_id=eq\.44444444-4444-4444-8444-444444444444$/);
+  assert.equal(calls.requests[6]?.method, "PATCH");
+  assert.equal(calls.requests[6]?.body.status, "queued_for_gateway");
 });
 // 라이브 결함 회귀 — 방마다 게이트웨이를 하나씩 띄우자 서로 남의 일을 집어갔다.
 // 개발방 작업을 상증세법·DCF 게이트웨이가 먼저 집고 project-path-not-allowed 로 실패시켰다.

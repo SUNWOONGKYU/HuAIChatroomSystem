@@ -68,7 +68,7 @@ export async function handleBoardRequest(req: Request, deps: BoardHandlerDeps): 
     // 방장에게 원인을 노출하지 않되(Storage 경로·버킷 구조 등), 완전한 침묵보다는 나은
     // 최소한의 안내를 준다. Content-Type 을 text/html 로 유지해 WebView 가 빈 화면 대신
     // 이 문구를 실제로 렌더링하게 한다.
-    return new Response("<!doctype html><meta charset=utf-8><p>작업 현황판을 잠시 불러올 수 없습니다. 잠시 후 다시 열어주세요.</p>", {
+    return new Response("<!doctype html><meta charset=utf-8><p>협업 운영센터를 잠시 불러올 수 없습니다. 잠시 후 다시 열어주세요.</p>", {
       status: 502,
       headers: boardResponseHeaders()
     });

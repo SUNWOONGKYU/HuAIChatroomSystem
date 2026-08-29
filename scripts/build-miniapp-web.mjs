@@ -14,6 +14,8 @@ export const FUNCTIONS_BASE_URL_PLACEHOLDER = "__MINIAPP_FUNCTIONS_BASE_URL__";
 
 // 이 목록에 없는 파일은 배포되지 않는다. miniapp-web/ 에는 테스트 스크립트(.mjs)와
 // 디버그 스크린샷(.png)도 같이 있는데, 그것들이 공개 호스팅에 딸려 올라가면 안 된다.
+// treasure-collector-runner.html 은 합성 개발 흐름 검증용 fixture 다 — 공개 호스팅 대상이
+// 아니므로 이 목록에 넣지 않는다. 실제 서비스할 게임으로 승격하려면 방장 승인이 먼저다.
 export const MINIAPP_WEB_ASSETS = ["index.html", "egg-game.html", "robots.txt"];
 
 export function resolveFunctionsBaseUrl(env = {}) {

@@ -114,8 +114,9 @@ test("S26: structured midpoint checkpoint is parsed and persists an approval gat
   assert.equal(calls.requests.some((request) => request.method === "POST" && /huai_reports$/.test(request.url)), true);
   assert.equal(calls.requests.some((request) => request.method === "POST" && /huai_task_dependencies$/.test(request.url)), true);
   assert.equal(calls.currentTaskStatus(), "mid_approval_pending");
-  const approvalMessage = calls.requests.find((request) => request.body?.payload?.keyboard?.inline_keyboard);
-  assert.match(JSON.stringify(approvalMessage?.body.payload.keyboard), /mid_approve/);
+  const approvalMessage = calls.requests.find((request) => String(request.body?.payload?.text ?? "").includes("데이터 모델 변경안을 확정했습니다."));
+  assert.equal(approvalMessage?.body.payload.keyboard, undefined, "운영센터 링크가 없는 경우 Telegram callback keyboard로 fallback하면 안 된다");
+  assert.match(String(approvalMessage?.body.payload.text ?? ""), /협업 운영센터/);
 });
 
 test("S27/S33: content revision emits submission and queues scoped re-verification", async () => {
@@ -313,9 +314,9 @@ test("검증 통과는 완료 승인 대기까지 스스로 이동한다 (마지
   assert.ok(review, "방장에게 완료 승인 요청이 올라가야 한다");
 
   // 이 테스트가 지키는 것은 "마지막 한 번은 방장이 결정한다"이지 버튼이 어디 있느냐가
-  // 아니다. 완료·보완 결정 창구는 작업 현황판으로 옮겼으므로 방에는 버튼을 붙이지 않는다.
+  // 아니다. 완료·보완 결정 창구는 협업 운영센터로 옮겼으므로 방에는 버튼을 붙이지 않는다.
   // 대신 어디서 결정하는지는 반드시 알려줘야 한다 — 안내 없이 버튼만 사라지면
   // 방장은 완료시킬 방법을 못 찾고, 작업이 승인 대기로 영원히 남는다.
   assert.equal(review.body.payload.keyboard, undefined, "방에 완료 버튼이 다시 붙었다");
-  assert.match(String(review.body.payload.text), /작업 현황판/, "어디서 결정하는지 안내가 없다");
+  assert.match(String(review.body.payload.text), /협업 운영센터/, "어디서 결정하는지 안내가 없다");
 });

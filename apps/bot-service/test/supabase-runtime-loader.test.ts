@@ -12,6 +12,28 @@ const chatIdB = "1002";
 const codexActorIdA = "00000000-0000-0000-0000-000000000103";
 const codexActorIdB = "00000000-0000-0000-0000-000000000203";
 
+test("normalizes legacy antigravity actor and gateway values to gemini_web", async () => {
+  const loaded = await loadSupabaseBotServiceRuntimeConfig({
+    url: "https://example.supabase.co",
+    serviceRoleKey: "test-service-role-key",
+    env: secretEnv(),
+    fetchImpl: fakeRuntimeFetch([], {
+      roomAActors: [actor(roomIdA, "legacy-gemini-actor", "claude_leader", "antigravity")],
+      roomAGateways: [{
+        room_id: roomIdA,
+        gateway_id: "legacy-gemini-gateway",
+        status: "online",
+        allowed_project_roots: ["C:\\repo"],
+        allowed_adapters: ["antigravity", "gemini_web"]
+      }]
+    })
+  });
+
+  const room = loaded.rooms.find((candidate) => candidate.roomId === roomIdA);
+  assert.equal(room?.actors[0]?.adapterType, "gemini_web");
+  assert.deepEqual(room?.gateways[0]?.allowedAdapters, ["gemini_web", "gemini_web"]);
+});
+
 test("loads every active room in one call, not just one", async () => {
   const fetchCalls: string[] = [];
   const loaded = await loadSupabaseBotServiceRuntimeConfig({
@@ -300,7 +322,7 @@ test("keeps room A's execution defaults intact when room B is missing the config
 // 정상 처리(processed)다 — 다만 실행 대신 안내만 나간다. "처리됐다"만 확인하면 조용히
 // 아무 것도 안 보낸 것과 구분이 안 되므로, 실제로 안내 텍스트가 huai_outbox 로 나갔는지
 // 까지 확인한다. 핵심 취지(방 B 때문에 방 A 메시지가 유실되지 않는다)는 그대로 유지한다.
-test("a room without execution defaults still processes normally and sends a visible not-configured notice, without losing a sibling room's message", async () => {
+test("a room approval command sends a visible operations-center notice without losing a sibling room's message", async () => {
   const roomBActorsWithoutCodex = [
     actor(roomIdB, "00000000-0000-0000-0000-000000000201", "leader", "orchestrator"),
     actor(roomIdB, "00000000-0000-0000-0000-000000000202", "claude_leader", "claude_code")
@@ -330,8 +352,8 @@ test("a room without execution defaults still processes normally and sends a vis
 
   const noticeTexts = outboxInserts.map((row) => (row.payload as { text?: string } | undefined)?.text ?? "");
   assert.ok(
-    noticeTexts.some((text) => text.includes("실행 준비가 되지 않았습니다")),
-    "room B must actually receive a visible notice, not just a silent 'processed' status"
+    noticeTexts.some((text) => text.includes("협업 운영센터에서만 처리합니다")),
+    "room B must receive the operations-center notice"
   );
 });
 
@@ -360,7 +382,7 @@ test("a network failure processing one room's message does not swallow a sibling
 
   // 방 B(huai_events insert 가 장애나는 방)의 승인 명령을 먼저 큐에 넣고, 방 A(정상)의
   // 관측 메시지를 그 뒤에 줄 세운다 — 배치 중단 버그가 있었다면 방 A 는 절대 처리되지 못한다.
-  await runtime.webhookPorts.inboundQueue.enqueue(approveCommandQueueItem(chatIdB, "2002", "task-x"));
+  await runtime.webhookPorts.inboundQueue.enqueue(newTaskCommandQueueItem(chatIdB, "2002", "task-x"));
   await runtime.webhookPorts.inboundQueue.enqueue(observationQueueItem(chatIdA, "2001"));
 
   const processed = await runtime.processQueuedInputs();
@@ -379,9 +401,28 @@ test("a network failure processing one room's message does not swallow a sibling
 // 비어 있으면 huai_events·huai_outbox 하이드레이션 단계는 전부 조기 반환한다. 그래서 이
 // 파일의 fakeRuntimeFetch 에 그 하이드레이션 전체를 갖추지 않고도 드레인 파이프라인을
 // 안전하게 왕복시킬 수 있다.
-// 승인류 명령(kind: "command", /approve)을 만든다. 이 fixture 의 방장(owner)
-// 멤버십을 쓰는 telegramUserId 로 보내야 authorizeTelegramInput 을 통과해
-// enqueueExecutionAfterApproval 까지 도달한다.
+function newTaskCommandQueueItem(chatId: string, telegramUserId: string, taskText: string): TelegramInboundQueueMessage {
+  const envelope = TelegramUpdateEnvelope.parse(
+    "00000000-0000-0000-0000-000000000201-shared",
+    "leader_bot",
+    "leader",
+    {
+      update_id: Number(`${chatId}2`),
+      message: {
+        message_id: 2,
+        chat: { id: Number(chatId) },
+        from: { id: Number(telegramUserId), is_bot: false, username: "owner" },
+        text: `/newtask ${taskText}`
+      }
+    }
+  );
+  return {
+    input: { kind: "command", envelope, command: { name: "/newtask", args: [taskText] } },
+    idempotencyKey: makeTelegramUpdateIdempotencyKey(envelope),
+    receivedAt: new Date().toISOString()
+  };
+}
+
 function approveCommandQueueItem(chatId: string, telegramUserId: string, taskId: string): TelegramInboundQueueMessage {
   const envelope = TelegramUpdateEnvelope.parse(
     "00000000-0000-0000-0000-000000000201-shared",

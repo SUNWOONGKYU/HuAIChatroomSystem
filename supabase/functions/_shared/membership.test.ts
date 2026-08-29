@@ -1,8 +1,8 @@
 // assertRoomReadAccess 회귀. 실행 방법은 proposal-payload.test.ts 상단 주석 참고
 // (스크래치 복사 + .ts 확장자 제거 + tsc + node --test).
 //
-// 방장이 초대한 사람이 현황판을 못 봤다. huai_room_members 에 손으로 넣기 전까지는
-// "이 방의 작업 현황판을 볼 권한이 없습니다"만 봤다 — 라이브에서 실제로 그렇게 막혔다.
+// 방장이 초대한 사람이 협업 운영센터를 못 봤다. huai_room_members 에 손으로 넣기 전까지는
+// "이 방의 협업 운영센터를 볼 권한이 없습니다"만 봤다 — 라이브에서 실제로 그렇게 막혔다.
 // 방에 초대하는 것 자체가 "이 방 일을 봐도 된다"는 뜻이므로 그 사실을 그대로 쓴다.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +24,7 @@ test("등록은 없어도 방 참가자면 볼 수 있다", async () => {
     "7002"
   );
 
-  assert.equal(result.ok, true, "초대된 사람이 현황판을 못 본다");
+  assert.equal(result.ok, true, "초대된 사람이 협업 운영센터를 못 본다");
   if (result.ok) assert.equal(result.viewerRole, "human_member", "열람자는 방장이 아니다");
 });
 

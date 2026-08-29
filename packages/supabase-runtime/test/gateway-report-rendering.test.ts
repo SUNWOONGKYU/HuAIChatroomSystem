@@ -42,8 +42,8 @@ test("완료 보고에 실제 실행 엔진이 명시된다 (안티그래비티 
     status: "completed",
     events: [{ type: "stdout", taskId: "task-1", attemptId: "attempt-1", text: "파일을 만들었습니다." }]
   });
-  assert.match(text, /엔진: Antigravity/, "안티그래비티가 실제로 일했다는 사실이 문구에 있어야 한다");
-  assert.equal(text.includes("AntigravityBot"), false, "등록 안 된 봇 이름처럼 보이면 안 된다");
+  assert.match(text, /엔진: GeminiWeb/, "레거시 Antigravity 값도 Gemini 웹으로 표시되어야 한다");
+  assert.equal(text.includes("AntigravityBot"), false, "폐기된 엔진 봇 이름이 보이면 안 된다");
 });
 
 test("실패 보고에도 실제 실행 엔진이 명시된다", () => {
@@ -266,7 +266,7 @@ test("완료 보고의 QUIZ 블록은 huai_task_quizzes 에 저장되고 방 보
   const taskId = "11111111-1111-4111-8111-111111111111";
   const roomId = "22222222-2222-4222-8222-222222222222";
   await store.recordGatewayExecutionResult({
-    request: { ...makeRequest(), taskId, roomId, reportBotRole: "codex_leader" },
+    request: { ...makeRequest(), taskId, roomId, prompt: "운영 환경변수를 변경하고 배포해줘", reportBotRole: "codex_leader" },
     status: "completed",
     events: [
       { type: "stdout", taskId, attemptId: "attempt-1", text: stdoutText },
@@ -344,6 +344,34 @@ test("파일을 바꾸지 않은(조회성) 완료 실행에서는 QUIZ 블록�
 
   const quizInsert = calls.requests.find((request) => request.method === "POST" && request.url.includes("/huai_task_quizzes"));
   assert.equal(quizInsert, undefined, "바꾼 파일이 없으면 이해도를 확인할 diff 자체가 없다");
+});
+
+test("단순 저위험 파일 변경은 산출물이 있어도 QUIZ 블록을 저장하지 않는다", async () => {
+  const quiz = {
+    summary: "README를 정리했습니다.",
+    questions: [
+      { q: "q1", choices: ["a", "b", "c", "d"], correct: 0 },
+      { q: "q2", choices: ["a", "b", "c", "d"], correct: 0 },
+      { q: "q3", choices: ["a", "b", "c", "d"], correct: 0 }
+    ]
+  };
+  const taskId = "77777777-7777-4777-8777-777777777777";
+  const stdoutText = ["README를 수정했습니다.", "QUIZ_START", JSON.stringify(quiz), "QUIZ_END"].join("\n");
+  const calls = makeFetchSequence();
+  const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+  await store.recordGatewayExecutionResult({
+    request: { ...makeRequest(), taskId, prompt: "README.md의 오탈자를 수정해줘" },
+    status: "completed",
+    events: [
+      { type: "stdout", taskId, attemptId: "attempt-1", text: stdoutText },
+      { type: "artifact_collected", taskId, attemptId: "attempt-1", artifact: { path: "README.md", sizeBytes: 10, checksum: "abc", version: "attempt-1" } }
+    ],
+    occurredAt: "2026-08-22T00:00:00.000Z"
+  });
+
+  const quizInsert = calls.requests.find((request) => request.method === "POST" && request.url.includes("/huai_task_quizzes"));
+  assert.equal(quizInsert, undefined, "저위험 파일 변경은 퀴즈 행을 만들지 않는다");
 });
 
 function makeRequest(): ExecutionRequest {
@@ -665,11 +693,11 @@ test("auditor completion persists verification and asks leader for completion re
   assert.equal(completionOutbox?.body.target_kind, "telegram_bot");
   assert.match(completionOutbox?.body.payload.text, /검증이 통과/);
 
-  // 완료·보완 결정은 작업 현황판이 맡는다. 방에 버튼을 붙이면 결정 창구가 둘로 갈라지고
+  // 완료·보완 결정은 협업 운영센터가 맡는다. 방에 버튼을 붙이면 결정 창구가 둘로 갈라지고
   // 대화 공간도 버튼 줄로 잠식된다. 대신 어디서 결정하는지는 본문이 알려줘야 한다 —
   // 안내 없이 버튼만 사라지면 방장은 완료시킬 방법을 못 찾는다.
   assert.equal(completionOutbox?.body.payload.keyboard, undefined, "방에 완료 버튼이 다시 붙었다");
-  assert.match(completionOutbox?.body.payload.text, /작업 현황판/);
+  assert.match(completionOutbox?.body.payload.text, /협업 운영센터/);
 });
 
 // 라이브 결함 회귀 — 작업 결과가 방에 안 뜬 사건.
@@ -981,7 +1009,7 @@ test("감사 성공도 작업 완료로 읽히지 않는다", () => {
 });
 
 // 방장 요청 — 감사 보고 하나가 화면 여러 장을 채워 방의 다른 대화가 밀려났다.
-// 방에는 앞부분만, 나머지는 현황판에서 읽는다.
+// 방에는 앞부분만, 나머지는 협업 운영센터에서 읽는다.
 test("긴 보고는 앞부분만 방에 나가고 전문 길이를 밝힌다", () => {
   const body = ["판정: 통과", "근거:", "가".repeat(1200)].join("\n");
   const result = buildRoomMessageWithPreview(body, 300);
@@ -1025,6 +1053,6 @@ test("전문 보기 버튼은 보고 id 를 딥링크로 싣는다", () => {
   assert.equal(startParam.length <= 64, true);
 });
 
-test("현황판 링크가 없으면 버튼 없이 앞부분만 보낸다", () => {
+test("협업 운영센터 링크가 없으면 버튼 없이 앞부분만 보낸다", () => {
   assert.equal(buildReportOpenKeyboard("11111111-1111-4111-8111-111111111111", undefined), undefined);
 });

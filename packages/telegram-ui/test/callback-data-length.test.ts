@@ -1,40 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseTelegramCallbackData } from "../../contracts/src/index.js";
-import { buildCompletionKeyboard, buildProposalKeyboard, buildTaskDecisionKeyboard, buildWorkProposalMessage } from "../src/index.js";
-
-test("all action keyboards use one compact Korean-label row", () => {
-  const keyboards = [
-    buildProposalKeyboard("proposal-1"),
-    buildTaskDecisionKeyboard("task-1"),
-    buildCompletionKeyboard("task-1")
-  ];
-
-  assert.deepEqual(keyboards.map((keyboard) => keyboard.inline_keyboard.length), [1, 1, 1]);
-  assert.deepEqual(keyboards.map((keyboard) => keyboard.inline_keyboard[0]?.map((button) => button.text)), [
-    ["실행", "수정", "반려"],
-    ["승인", "반려", "취소"],
-    ["검증", "보완", "완료"]
-  ]);
-});
-
-// 라이브 실측(2026-08-23): 자동허용 제안에 "실행" 버튼이 그대로 뜨자 방장이 "안 눌렀는데
-// 왜 실행됐지" 하고 헷갈렸다. 이미 시작된 일에 "시작하라" 버튼이 남아있으면 안 된다 —
-// 개입 수단(수정·반려)만 남긴다.
-test("자동허용 제안은 실행 버튼 없이 수정·반려만 남는다", () => {
-  const keyboard = buildProposalKeyboard("proposal-1", { autoAllowed: true });
-  assert.deepEqual(keyboard.inline_keyboard[0]?.map((button) => button.text), ["수정", "반려"]);
-});
-
-test("completion keyboard callback_data stays within Telegram 64-byte limit", () => {
-  const keyboard = buildCompletionKeyboard("proposal_e066640b-b1f5-4aad-ad9e-b42a6f3654e8");
-  const buttons = keyboard.inline_keyboard.flat();
-
-  assert.equal(buttons.length, 3);
-  for (const button of buttons) {
-    assert.ok(Buffer.byteLength(button.callback_data, "utf8") <= 64, button.callback_data);
-  }
-});
+import { buildWorkProposalMessage } from "../src/index.js";
 
 test("short completion callback aliases parse to canonical actions", () => {
   assert.deepEqual(parseTelegramCallbackData("task:proposal_e066640b-b1f5-4aad-ad9e-b42a6f3654e8:rv"), {

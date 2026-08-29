@@ -268,7 +268,7 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     { label: "read:huai_approvals", behaviour: true, run: (p) => p.readsTable("huai_approvals") }
   ]);
   add("FR-020", "알림·현황 메시지", [
-    { label: "priority-notification", run: (p) => p.sourceMatches("buildCompletionKeyboard") },
+    { label: "priority-notification", run: (p) => p.sourceMatches("ownerActionRedirect|buildMiniAppOpenKeyboard") },
     { label: "status-message-component-wired", behaviour: true, run: (p) => p.calledOutsideDefinition("buildProjectStatusMessage", "packages/telegram-ui/src/index.ts") },
     { label: "pinned-status-edit-producer", run: (p) => p.sourceMatches("editMessageId:\\s*") }
   ]);
@@ -315,7 +315,7 @@ export function evaluateSpecCoverage(sources = loadSources()) {
     { label: "verification_passed-emitted", behaviour: true, run: (p) => p.emitsEvent("verification_passed") }
   ]);
   add("H-10", "리더 완료 결정 훅", [
-    { label: "completion-keyboard-3-options", run: (p) => p.sourceMatches("buildCompletionKeyboard") },
+    { label: "completion-operations-center-redirect", run: (p) => p.sourceMatches("ownerActionRedirect|협업 운영센터") },
     { label: "commander_completion_decision-emitted", behaviour: true, run: (p) => p.emitsEvent("commander_completion_approved") }
   ]);
   add("H-11", "방장 최종 승인 훅", [

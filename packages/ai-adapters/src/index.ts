@@ -1,4 +1,6 @@
-import { type ExecutionRequest } from "../../contracts/src/index.js";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { normalizeAiAdapterType, type ExecutionRequest } from "../../contracts/src/index.js";
 
 export type CommandPlan = {
   executable: string;
@@ -30,7 +32,8 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
   const isAudit = request.reportBotRole === "auditor";
   const isPlanning = request.attemptId.startsWith("leader-planning-");
   const readOnly = isAudit || isPlanning;
-  if (request.adapterType === "claude_code") {
+  const adapterType = normalizeAiAdapterType(request.adapterType);
+  if (adapterType === "claude_code") {
     return platformPlan(
       "claude",
       [
@@ -71,38 +74,19 @@ export function resolveAdapterPlan(request: ExecutionRequest): CommandPlan {
     );
   }
 
-  // Antigravity 터미널판(agy). IDE 실행기(antigravity)와 다른 별도 CLI이고, 이쪽에만
-  // --print 비대화형 모드가 있다.
-  //
-  // 세 번째 엔진이 있으면 한 엔진이 사용 한도에 걸려도 감사를 작업자와 다른 엔진에
-  // 맡길 수 있다 — 둘뿐일 때는 Codex 가 막히면 Claude 가 자기 일을 검사하게 된다.
-  if (request.adapterType === "antigravity") {
+  // Gemini 웹 실행기. antigravity 는 기존 DB/메시지의 레거시 값이므로 같은 경로로
+  // 해석한다. Gemini 웹은 로컬 파일을 수정하지 않고 답변만 반환한다.
+  if (adapterType === "gemini_web") {
     return platformPlan(
-      "agy",
+      process.execPath,
       [
-        // 프롬프트는 --print 의 값이다. agy 는 Go 플래그를 쓰므로 --print 다음에 다른
-        // 플래그를 두면 그게 프롬프트로 먹히고, 첫 비플래그 인자에서 파싱이 멈춰 뒤의
-        // 플래그가 통째로 무시된다. 라이브에서 그 탓에 권한 플래그가 사라져 감사가
-        // "no output produced — 권한이 자동 거부됨" 으로 빈손으로 끝났다.
-        "--print",
-        request.prompt,
-        "--output-format",
-        "text",
-        // agy 에는 읽기 전용 모드가 없다. --mode plan 은 계획서만 쓰고 승인을 기다려
-        // 비대화형에서 아무것도 하지 않고, --sandbox 는 5분 자체 타임아웃까지 응답이
-        // 없었다(둘 다 실측). 그래서 감사도 같은 권한으로 돌린다 — Claude 의 dontAsk,
-        // Codex 의 --sandbox read-only 에 해당하는 자리가 이 CLI 에는 비어 있다.
-        // 감사가 파일을 고치지 않아야 한다는 요구(AC-07)는 여기서는 프롬프트로만
-        // 지켜지므로, 읽기 전용이 강제되는 Claude·Codex 보다 약하다.
-        "--dangerously-skip-permissions",
-        `--add-dir=${request.projectPath}`,
-        // agy 의 기본 대기는 5분이다. 게이트웨이가 더 길게 기다려도 CLI 가 먼저 끊는다.
-        "--print-timeout",
-        `${Math.ceil(request.timeoutMs / 1000)}s`,
-        ...(request.model ? ["--model", request.model] : [])
+        geminiWebBridgeEntrypoint(),
+        "--timeout",
+        String(Math.max(10, Math.ceil(request.timeoutMs / 1000)))
       ],
       request.projectPath,
-      request.timeoutMs
+      request.timeoutMs,
+      request.prompt
     );
   }
 
@@ -170,4 +154,26 @@ function codexEntrypoint(): string {
 
 function claudeExecutable(): string {
   return process.env.CLAUDE_CODE_EXECUTABLE ?? "C:\\Users\\home\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe";
+}
+
+// 브리지는 이 저장소 안에 있다. 절대경로를 박으면 다른 PC·다른 체크아웃에서 조용히
+// 없는 파일을 가리키고, 실행은 "no output produced" 로만 실패해 원인이 안 보인다.
+// 빌드 산출물(dist/…)에서도 같은 저장소 루트를 찾아 올라간다.
+const GEMINI_WEB_BRIDGE_RELATIVE_PATH = path.join("scripts", "gemini-web-adapter.mjs");
+
+function geminiWebBridgeEntrypoint(): string {
+  const configured = process.env.GEMINI_WEB_BRIDGE_ENTRYPOINT;
+  if (configured) return configured;
+
+  let dir = import.meta.dirname;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const candidate = path.join(dir, GEMINI_WEB_BRIDGE_RELATIVE_PATH);
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // 없는 경로로 조용히 실행해 "no output produced" 로 끝나는 것보다, 무엇을 못 찾았는지
+  // 이름을 달고 즉시 실패하는 편이 원인 추적이 된다.
+  throw new Error("gemini-web-bridge-entrypoint-not-found:" + GEMINI_WEB_BRIDGE_RELATIVE_PATH);
 }

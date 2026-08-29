@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_TELEGRAM_CALLBACK_BYTES, SupabaseOutboxStore, extractAgentResultText, renderLeaderPlanMessage, sessionIdFromGatewayEvents, shortProposalId } from "../src/index.js";
-import { buildProposalKeyboard } from "../../telegram-ui/src/index.js";
+import { SupabaseOutboxStore, extractAgentResultText, renderLeaderPlanMessage, sessionIdFromGatewayEvents } from "../src/index.js";
 import { type ExecutionRequest, type GatewayEvent } from "../../contracts/src/index.js";
 
-// 리더가 대화를 읽고 내린 판단이 방장에게 승인 버튼과 함께 올라가는가.
+// 리더가 대화를 읽고 내린 판단이 방장에게 운영센터 안내와 함께 올라가는가.
 
 const ROOM = "11111111-1111-4111-8111-111111111111";
 const LEADER_ACTOR = "22222222-2222-4222-8222-222222222222";
@@ -19,7 +18,7 @@ const PLAN = {
   reason: "분석은 Claude, 수정·테스트는 Codex"
 };
 
-test("리더 판단이 제안 이벤트와 승인 버튼으로 올라간다", async () => {
+test("리더 판단이 제안 이벤트와 운영센터 설정 안내로 올라간다", async () => {
   const calls = makeFetchSequence([
     jsonResponse(200, [{ telegram_chat_id: "1001" }]),
     jsonResponse(201, [eventRow("gateway-result:" + ATTEMPT + ":completed")]),
@@ -44,13 +43,14 @@ test("리더 판단이 제안 이벤트와 승인 버튼으로 올라간다", as
 
   const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
   assert.equal(message?.body.payload.botRole, "leader");
-  assert.ok(message?.body.payload.keyboard, "방장이 누를 승인 버튼이 있어야 한다");
+  assert.equal(message?.body.payload.keyboard, undefined, "링크가 없을 때 Telegram 승인 버튼이 생기면 안 된다");
+  assert.match(message?.body.payload.text, /BOT_SERVICE_MINIAPP_DIRECT_LINK/);
   assert.match(message?.body.payload.text, /결제 실패율 상승 원인/);
   assert.match(message?.body.payload.text, /완료 조건:/);
 });
 
 // Grok Bot 벤치마크 "승인 카테고리 분리(필수승인/자동허용)" 반영 — 2026-08-23.
-// 리더가 MUTATES: no(파일 변경 없음)로 판단하면, 제안 카드·승인 버튼은 그대로 나가되
+// 리더가 MUTATES: no(파일 변경 없음)로 판단하면, 제안 카드·운영센터 안내는 그대로 나가되
 // huai_approvals 에 자동승인 행도 함께 기록된다(miniapp-decision-poller.ts 가 그 행을
 // 집어 기존 승인 경로 그대로 실행을 큐에 올린다 — 이 파일은 그 재생까지는 검증하지 않는다,
 // miniapp-decision-poller.test.ts 의 몫이다. 여기선 "행이 올바른 모양으로 남는가"만 본다).
@@ -77,10 +77,11 @@ test("파일을 안 바꾸는 작업은 승인 카드와 함께 자동승인 행
   const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
   assert.match(message?.body.payload.text, /🟢 조회성 작업/);
   assert.deepEqual(
-    message?.body.payload.keyboard?.inline_keyboard?.[0]?.map((b: { text: string }) => b.text),
-    ["수정", "반려"],
-    "이미 시작된 제안에 '실행' 버튼이 남아있으면 안 된다"
+    message?.body.payload.keyboard,
+    undefined,
+    "링크가 없으면 기존 Telegram callback 버튼으로 fallback 하면 안 된다"
   );
+  assert.match(message?.body.payload.text, /BOT_SERVICE_MINIAPP_DIRECT_LINK/);
 
   const approvalCall = calls.requests.find((request) => request.url.includes("/huai_approvals"));
   assert.ok(approvalCall, "자동승인 행이 huai_approvals 에 남아야 한다");
@@ -111,10 +112,11 @@ test("파일을 바꾸는 작업(기본값)은 자동승인 행을 남기지 않
 
   const message = calls.requests.find((request) => request.body?.idempotency_key === "telegram-leader-plan:" + ATTEMPT);
   assert.deepEqual(
-    message?.body.payload.keyboard?.inline_keyboard?.[0]?.map((b: { text: string }) => b.text),
-    ["실행", "수정", "반려"],
-    "승인이 필요한 제안은 실행 버튼이 그대로 있어야 한다"
+    message?.body.payload.keyboard,
+    undefined,
+    "링크가 없으면 승인용 Telegram callback 버튼으로 fallback 하면 안 된다"
   );
+  assert.match(message?.body.payload.text, /BOT_SERVICE_MINIAPP_DIRECT_LINK/);
 });
 
 // "버전 3개 만들어줘" — 리더 판단 1번이 제안 3개로 나뉜다. 각 제안은 독립적으로
@@ -158,7 +160,8 @@ test("VARIANTS 를 요청하면 제안이 N개로 나뉘고 각각 격리 워크
   const messages = calls.requests.filter((request) => String(request.body?.payload?.text ?? "").includes("📋 작업 제안입니다"));
   assert.equal(messages.length, 3, "제안마다 독립된 승인 메시지가 나가야 한다");
   for (const message of messages) {
-    assert.ok(message.body.payload.keyboard, "제안마다 독립된 승인 버튼이 있어야 한다");
+    assert.equal(message.body.payload.keyboard, undefined, "링크가 없으면 제안마다 승인용 callback 버튼이 생기면 안 된다");
+    assert.match(message.body.payload.text, /BOT_SERVICE_MINIAPP_DIRECT_LINK/);
   }
 });
 
@@ -320,19 +323,6 @@ test("다음 호출에서 이어받도록 세션을 기억한다", async () => {
 
   const patch = calls.requests.find((request) => request.method === "PATCH" && /huai_ai_actors/.test(request.url));
   assert.equal(patch?.body.cli_session_id, "3bf2d064-e882-4abe-920e-5893ce0a4e59");
-});
-
-test("승인 버튼의 callback_data 가 Telegram 한계를 넘지 않는다", () => {
-  // 실전에서 71바이트가 나가 BUTTON_DATA_INVALID 로 죽었다.
-  // 리더 제안이 방장에게 도달하지 못한 원인이었다.
-  const attempt = "leader-planning-planning_3dc08364-5a93-4dab-9c2d-875f18cd352f";
-  const keyboard = buildProposalKeyboard(shortProposalId(attempt));
-  for (const row of keyboard.inline_keyboard) {
-    for (const button of row) {
-      const bytes = Buffer.byteLength(String((button as { callback_data: string }).callback_data), "utf8");
-      assert.equal(bytes <= MAX_TELEGRAM_CALLBACK_BYTES, true, `callback_data ${bytes}바이트: ${(button as { callback_data: string }).callback_data}`);
-    }
-  }
 });
 
 test("판단 실행은 작업 실행 보고를 내보내지 않는다", async () => {

@@ -331,6 +331,12 @@ export function looksLikeUsageLimitNotice(text: string): boolean {
 
 function classifyFailureText(text: string, options: { allowUsageLimit: boolean }): string | undefined {
   if (!text) return undefined;
+  if (/gemini-web-cdp-unavailable/i.test(text)) return "gemini-web-cdp-unavailable";
+  if (/gemini-web-login-required/i.test(text)) return "gemini-web-login-required";
+  if (/gemini-web-submit-failed/i.test(text)) return "gemini-web-submit-failed";
+  if (/gemini-web-response-timeout/i.test(text)) return "gemini-web-response-timeout";
+  if (/gemini-web-new-response-missing/i.test(text)) return "gemini-web-new-response-missing";
+  if (/gemini-web-session-failed/i.test(text)) return "gemini-web-session-failed";
   if (options.allowUsageLimit && looksLikeUsageLimitNotice(text)) return "agent-usage-limit";
   if (/read-only sandbox|workspace is read-only|writing is blocked|patch rejected/i.test(text)) return "agent-write-blocked";
   if (/rejected by user approval settings/i.test(text)) return "agent-approval-blocked";

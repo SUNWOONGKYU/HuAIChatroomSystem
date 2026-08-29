@@ -3,6 +3,9 @@ import nodePath from "node:path";
 import { maskTelegramSensitiveText as maskSensitiveText, safeTelegramTraceUri } from "../../telegram-ui/src/sanitize.js";
 import {
   AI_ADAPTER_TYPES,
+  isAiAdapterType,
+  classifyTaskRisk,
+  normalizeAiAdapterType,
   type AiAdapterType,
   type ArtifactManifest,
   type ExecutionRequest,
@@ -11,7 +14,7 @@ import {
   type OutboxTarget,
   type TelegramSendResult
 } from "../../contracts/src/index.js";
-import { buildMidApprovalKeyboard, buildProposalKeyboard } from "../../telegram-ui/src/index.js";
+import { buildMiniAppOpenKeyboard } from "../../telegram-ui/src/index.js";
 import { isLeaderPlanningAttempt, LEADER_PLANNING_ATTEMPT_PREFIX } from "../../orchestrator/src/index.js";
 import { parseLeaderDecision, type LeaderPlan } from "../../orchestrator/src/leader-planning.js";
 import {
@@ -97,6 +100,10 @@ export class SupabaseOutboxStore {
     for (const row of leased) {
       const request = executionRequestFromOutbox(row);
       if (!request || await this.isTaskRunnable(request.taskId)) {
+        // 승인 직후 task 는 scheduled 로 materialize 된다. 실제 gateway가 이
+        // outbox 를 인수한 시점에 queued_for_gateway 를 기록해야, gateway가
+        // 잠시 재시작되거나 실행 결과가 늦어져도 예약 상태에 고착되지 않는다.
+        if (request) await this.advanceTaskStatus(request.taskId, "dependencies_satisfied", {});
         runnable.push(row);
         continue;
       }
@@ -212,9 +219,13 @@ export class SupabaseOutboxStore {
     // 버튼이 가리킬 곳이 생긴다 — 저장 전에 버튼을 보내면 눌렀을 때 빈 화면이 된다.
     const report = await this.saveTaskReport(input.request, botRole, fullText);
     const preview = buildRoomMessageWithPreview(fullText, roomMessagePreviewLimit());
-    const text = preview.text;
+    const text = preview.text + (midApproval && !this.miniAppDirectLinkBaseUrl
+      ? "\n협업 운영센터 링크가 설정되지 않아 승인 UI가 비활성화되었습니다. 운영 담당자에게 BOT_SERVICE_MINIAPP_DIRECT_LINK 설정을 요청하세요."
+      : "");
     const reportKeyboard = midApproval
-      ? buildMidApprovalKeyboard(input.request.taskId)
+      ? this.miniAppDirectLinkBaseUrl
+        ? buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId: input.request.roomId, messageThreadId: input.request.telegramMessageThreadId })
+        : undefined
       : preview.truncated && report ? buildReportOpenKeyboard(report.report_id, this.miniAppDirectLinkBaseUrl) : undefined;
 
     await this.insertOutboxIdempotently({
@@ -278,12 +289,14 @@ export class SupabaseOutboxStore {
 
     if (!isAudit && input.request.revisionContext && input.status === "completed") return;
 
-    // 인지부채 방지 퀴즈 — 작업자(감사·리더 판단 아님)가 실제로 파일을 바꾼 실행에서만
+    // 인지부채 방지 퀴즈 — 고위험 작업의 작업자(감사·리더 판단 아님)가 실제로 파일을
+    // 바꾼 실행에서만
     // 저장한다. 감사는 검증이지 방장이 이해해야 할 변경이 아니고, 리더 판단은 애초에
     // 이 지점에 도달하지 않는다(위 isLeaderPlanningAttempt 체크에서 이미 return 함).
     if (
       input.status === "completed" &&
       input.request.reportBotRole !== "auditor" &&
+      classifyTaskRisk(input.request.prompt) === "high" &&
       producedRealArtifacts(input.events)
     ) {
       const quiz = extractTaskQuizFromEvents(input.events);
@@ -424,7 +437,7 @@ export class SupabaseOutboxStore {
         botRole: "leader",
         messageThreadId: request.telegramMessageThreadId,
         telegramChatId,
-        text: "파일 수정 작업이 아니어서 검증 없이 마쳤습니다.\n완료 승인은 고정된 작업 현황판에서 결정해 주세요.",
+        text: "파일 수정 작업이 아니어서 검증 없이 마쳤습니다.\n완료 승인은 고정된 협업 운영센터에서 결정해 주세요.",
         binding: { kind: "event", eventId: sourceEventId },
         idempotencyKey
       },
@@ -759,8 +772,12 @@ export class SupabaseOutboxStore {
         botRole: "leader",
         messageThreadId: input.request.telegramMessageThreadId,
         telegramChatId: input.telegramChatId,
-        text: renderLeaderPlanMessage({ ...plan, title }),
-        keyboard: buildProposalKeyboard(proposalId, { autoAllowed: plan.mutatesFiles === false }),
+        text: renderLeaderPlanMessage({ ...plan, title }) + (this.miniAppDirectLinkBaseUrl
+          ? ""
+          : "\n협업 운영센터 링크가 설정되지 않아 승인 UI가 비활성화되었습니다. 운영 담당자에게 BOT_SERVICE_MINIAPP_DIRECT_LINK 설정을 요청하세요."),
+        keyboard: this.miniAppDirectLinkBaseUrl
+           ? buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId: input.request.roomId, messageThreadId: input.request.telegramMessageThreadId })
+           : undefined,
         binding: { kind: "event", eventId: input.sourceEventId },
         idempotencyKey: input.idempotencyKey
       },
@@ -776,7 +793,7 @@ export class SupabaseOutboxStore {
   // 방장의 실행 버튼 클릭 없이 시작을 승인한 것으로 기록만 남긴다. 실제 실행 큐잉은
   // 새로 만들지 않는다 — miniapp-decision-poller.ts 가 huai_approvals 를 이미 채널
   // 구분 없이(텔레그램 버튼이든 미니앱이든) 감시하다가 정확히 이 모양의 행을 만나면
-  // applyOwnerCallback 을 그대로 재생해 기존 승인 경로와 100% 같은 실행을 큐에 올린다.
+  // applyMiniAppDecision 을 그대로 재생해 기존 승인 경로와 100% 같은 실행을 큐에 올린다.
   // 그 재생이 권한 검사(requiresOwner)도 그대로 통과해야 하므로, 요청자가 실제로
   // 시작 승인 권한이 없으면 이 행은 조용히 무시된다(skipped_unauthorized) — 승인 카테고리
   // 분리가 새 권한 상승 경로가 되지 않는다. 승인 버튼은 그대로 살려 둔다: 판단이
@@ -1049,7 +1066,7 @@ export class SupabaseOutboxStore {
           // 이 상태(completion_approval_pending·commander_completion_pending)는
           // 작업 현황판에서 decidable 이라(supabase/functions/_shared/task-status.ts) 방장이
           // 갇히지 않는다. 방에는 알림만 남겨 대화 공간을 버튼으로 채우지 않는다.
-          text: "검증이 통과되었습니다.\n완료 승인 또는 보완 요청은 고정된 작업 현황판에서 결정해 주세요.",
+          text: "검증이 통과되었습니다.\n완료 승인 또는 보완 요청은 고정된 협업 운영센터에서 결정해 주세요.",
           binding: { kind: "verification", verificationId: sourceEventId },
           idempotencyKey: "telegram-completion-review:" + input.request.attemptId
         },
@@ -1783,7 +1800,17 @@ type OutboxInsertRow = {
 function executionRequestFromOutbox(row: OutboxRecord): ExecutionRequest | undefined {
   const value = row.payload.executionRequest ?? row.payload;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  return value as ExecutionRequest;
+  const request = value as ExecutionRequest;
+  return {
+    ...request,
+    ...(isAiAdapterType(request.adapterType) ? { adapterType: normalizeAiAdapterType(request.adapterType) } : {}),
+    ...(isAiAdapterType(request.workerAdapterType)
+      ? { workerAdapterType: normalizeAiAdapterType(request.workerAdapterType) }
+      : {}),
+    ...(Array.isArray(request.triedAdapterTypes)
+      ? { triedAdapterTypes: request.triedAdapterTypes.filter(isAiAdapterType).map(normalizeAiAdapterType) }
+      : {})
+  };
 }
 
 function isDependencySatisfiedStatus(status: string): boolean {
@@ -1921,7 +1948,7 @@ export function reportBotRoleForAdapter(adapterType: AiAdapterType): "claude_lea
 
 export function engineActorName(adapterType: AiAdapterType): string {
   if (adapterType === "codex") return "CodexBot";
-  if (adapterType === "antigravity") return "AntigravityBot";
+  if (adapterType === "gemini_web" || adapterType === "antigravity") return "GeminiWeb";
   return "ClaudeBot";
 }
 
@@ -2321,6 +2348,12 @@ function isInternalOutputLine(line: string): boolean {
 function humanReadableGatewayError(error: string, outputSummary?: string, adapterType = "codex"): string {
   const masked = maskSensitiveText(error);
   const combined = masked + (outputSummary ? "\n" + outputSummary : "");
+  if (/gemini-web-cdp-unavailable/i.test(combined)) return "Gemini 웹 연결 실패: 전용 Chrome CDP(9222)가 실행 중인지 확인해 주세요.";
+  if (/gemini-web-login-required/i.test(combined)) return "Gemini 웹 로그인 필요: 전용 자동화 Chrome에서 Gemini에 직접 로그인해 주세요.";
+  if (/gemini-web-submit-failed/i.test(combined)) return "Gemini 웹 제출 실패: 프롬프트가 전송되지 않았습니다.";
+  if (/gemini-web-response-timeout/i.test(combined)) return "Gemini 웹 응답 시간 초과: 새 응답을 받지 못했습니다.";
+  if (/gemini-web-new-response-missing/i.test(combined)) return "Gemini 웹 신규 응답 없음: 이전 답변을 결과로 인정하지 않았습니다.";
+  if (/gemini-web-session-failed/i.test(combined)) return "Gemini 웹 세션 오류: 웹 자동화 결과를 확정하지 못했습니다.";
   if (adapterType === "claude_code" && /agent-usage-limit|hit your (?:session |usage |weekly )?limit|usage limit|session limit|weekly limit|rate limit|limit reached|resets?\s+(?:at\s+)?\d/i.test(combined)) {
     return "ClaudeBot 현재 상태: 사용 한도 초과. Claude Code 한도가 초기화된 뒤 다시 시도하거나 CodexBot으로 작업해야 합니다.";
   }
@@ -2337,8 +2370,8 @@ function humanReadableGatewayError(error: string, outputSummary?: string, adapte
   }
   // 세 번째 엔진도 자기 한도에 걸린다. 안 알아보면 그냥 "실행 중 오류"로 끝나고 폴백도
   // 안 걸린다 — 남은 두 엔진이 멀쩡한데 작업이 거기서 멈춘다.
-  if (adapterType === "antigravity" && /usage limit|quota|rate limit|too many requests|limit reached|resource[- ]exhausted/i.test(combined)) {
-    return "AntigravityBot 현재 상태: 사용 한도 초과. 다른 엔진으로 작업해야 합니다.";
+  if ((adapterType === "antigravity" || adapterType === "gemini_web") && /usage limit|quota|rate limit|too many requests|limit reached|resource[- ]exhausted/i.test(combined)) {
+    return "Gemini 웹 현재 상태: 사용 한도 또는 요청 제한입니다. 다른 엔진으로 작업해야 합니다.";
   }
   if (/BUTTON_DATA_INVALID/i.test(masked)) return "텔레그램 버튼 데이터가 너무 길어 전송이 실패했습니다.";
   if (/process-timeout/i.test(masked)) return "작업 시간이 초과되었습니다.";

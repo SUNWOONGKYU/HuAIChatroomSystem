@@ -92,3 +92,19 @@ test("claude_code 는 --output-format json 을 쓴다 (session_id 캡처를 위�
   assert.ok(formatIndex >= 0);
   assert.equal(plan.args[formatIndex + 1], "json");
 });
+
+test("gemini_web은 웹세션 브리지에 프롬프트를 stdin으로 전달한다", () => {
+  const plan = resolveAdapterPlan(baseRequest({ adapterType: "gemini_web" }));
+  assert.equal(plan.executable, process.execPath);
+  assert.match(plan.args[0] ?? "", /gemini-web-adapter\.mjs$/);
+  assert.deepEqual(plan.args.slice(1, 3), ["--timeout", "60"]);
+  assert.equal(plan.stdinInput, "작업을 진행해줘");
+});
+
+test("antigravity 레거시 값은 Gemini 웹과 같은 실행 계획을 사용한다", () => {
+  const legacy = resolveAdapterPlan(baseRequest({ adapterType: "antigravity" }));
+  const current = resolveAdapterPlan(baseRequest({ adapterType: "gemini_web" }));
+  assert.deepEqual(legacy.executable, current.executable);
+  assert.deepEqual(legacy.args, current.args);
+  assert.equal(legacy.stdinInput, current.stdinInput);
+});

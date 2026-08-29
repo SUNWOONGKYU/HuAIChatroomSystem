@@ -6,6 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@10.0.0",
   "scripts": {
+    "verify:game-browser": "node scripts/verify-game-browser.mjs",
     "verify:structure": "node scripts/verify-structure.mjs",
     "verify:secrets": "node scripts/verify-no-secrets.mjs",
     "verify:outbox-consumer": "npm run build && node --test dist/apps/bot-service/test/outbox-consumer.test.js",
@@ -101,7 +102,7 @@
     "verify:stale-proposal-cleanup": "node --test scripts/cancel-stale-proposals.test.mjs",
     "verify:operation-restart": "node --test scripts/restart-operation-services-from-live-env.test.mjs",
     "verify:gate42": "npm run verify:stale-proposal-cleanup && npm run verify:operation-restart && npm run verify:room-archive && npm run verify:archive-prune",
-    "verify:room-board-pin": "npm run build && node --test scripts/pin-room-board-message.test.mjs",
+    "verify:room-board-pin": "npm run build && node --test scripts/pin-room-board-message.test.mjs scripts/remove-room-board-message.test.mjs",
     "verify:migrated-chat-ids": "node --test scripts/repair-migrated-chat-ids.test.mjs",
     "verify:gate43": "npm run verify:room-board-pin && npm run verify:migrated-chat-ids",
     "verify:automatic-audit": "npm run build && node --test dist/packages/supabase-runtime/test/automatic-audit.test.js",

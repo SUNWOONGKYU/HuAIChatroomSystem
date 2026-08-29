@@ -6,7 +6,7 @@ import { MINIAPP_WEB_ASSETS } from "../../scripts/build-miniapp-web.mjs";
 const html = await readFile(new URL("./egg-game.html", import.meta.url), "utf8");
 const board = await readFile(new URL("./index.html", import.meta.url), "utf8");
 
-test("게임은 배포되지만 모든 방이 공유하는 작업 현황판에는 하드코딩하지 않는다", () => {
+test("게임은 배포되지만 모든 방이 공유하는 협업 운영센터에는 하드코딩하지 않는다", () => {
   assert.ok(MINIAPP_WEB_ASSETS.includes("egg-game.html"));
   assert.doesNotMatch(board, /href="\.\/egg-game\.html"/);
   assert.match(html, /href="\.\/index\.html"/);

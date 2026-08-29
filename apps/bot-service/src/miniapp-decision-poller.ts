@@ -5,7 +5,7 @@ import {
   type TelegramCallbackAction
 } from "../../../packages/contracts/src/index.js";
 import {
-  handleTelegramInput,
+  applyMiniAppDecision,
   type ExecutionRequestDefaults,
   type RoomAuthorizationContext,
   type TelegramInputHandlingPorts
@@ -17,7 +17,7 @@ import { type OrchestratorPersistencePort } from "./persistence.js";
 // target_kind='local_gateway' pending 행이 들어가는 것이고, 그건
 // SupabaseBotServiceStore.commitTelegramInputResult 안의 hydrateExecutionOutboxPrompts
 // 가 만든다. 이 폴러는 그 경로를 그대로 재사용한다 — Telegram 이 만드는 것과
-// 똑같은 합성 콜백 입력을 만들어 handleTelegramInput → commitTelegramInputResult 로
+// 똑같은 합성 결정 입력을 만들어 applyMiniAppDecision → commitTelegramInputResult 로
 // 태우는 것 말고는 아무 로직도 새로 만들지 않는다. 승인/실행 판단 로직을 여기
 // 복제하면 Telegram 승인과 Mini App 승인이 다른 프롬프트로 다른 결과를 낼 위험이
 // 생긴다 — 그게 이 파일이 존재하는 유일한 이유(0 복제)를 깨는 것이다.
@@ -77,10 +77,10 @@ export type MiniAppDecisionPollerHandle = {
   stop(): void;
 };
 
-// huai_approvals.(stage, decision) -> Telegram 콜백 액션. applyOwnerCallback 이
+// huai_approvals.(stage, decision) -> 내부 재생 액션. applyMiniAppDecision 이
 // 이미 처리하는 7개 액션으로만 매핑한다 — 매핑이 없는 조합(예: midpoint_approval,
 // commander_completion, final_approval/rejected)은 Mini App 이 아직 안 쓰거나
-// applyOwnerCallback 바깥의 다른 경로에서만 나오는 이벤트로 보고 일부러 미지원
+// applyMiniAppDecision 바깥의 다른 경로에서만 나오는 이벤트로 보고 일부러 미지원
 // 처리한다(skipped_unsupported_stage). 여기서 새 분기를 만들면 그게 곧 로직
 // 복제이므로, 지원 범위를 넓혀야 하면 orchestrator 쪽에 콜백 액션을 먼저 추가해야 한다.
 const CALLBACK_ACTION_BY_STAGE_DECISION: Readonly<Record<string, Readonly<Record<string, TelegramCallbackAction>>>> = {
@@ -269,7 +269,7 @@ async function resolveDecision(
       entityId: row.entity_ref,
       action,
       // huai_approvals.reason — Mini App [보완 요청] 사유 입력란 값. Telegram 인라인 버튼
-      // 콜백에는 이 필드가 절대 채워지지 않는다(64바이트 제한). applyOwnerCallback 이 이
+      // 콜백에는 이 필드가 절대 채워지지 않는다(64바이트 제한). applyMiniAppDecision 이 이
       // 값을 owner_supplement_requested 알림 본문에 포함시킨다.
       reason: row.reason ?? undefined
     }
@@ -286,7 +286,7 @@ async function resolveDecision(
     approvalEventIdempotencyKey: row.idempotency_key ?? undefined
   };
 
-  let result: ReturnType<typeof handleTelegramInput>;
+  let result: ReturnType<typeof applyMiniAppDecision>;
   try {
     // 승인/거절/실행 판단은 전부 여기서 Telegram 과 동일한 함수가 그대로 한다.
     // executionDefaults 가 없는 방이면(A-5) orchestrator 가 (Delta 분대의 수정 이후)
@@ -294,7 +294,7 @@ async function resolveDecision(
     // accepted:true 로 돌려준다 — 그래서 그 경우도 여기선 정상적으로 재생(replayed)
     // 처리된다. 이 try/catch 는 그 경로가 아니라, 인가 판정 로직 자체가 예기치 않게
     // 던지는 등 orchestrator 의 진짜 버그/예외를 방 하나로 격리하기 위한 안전망이다.
-    result = handleTelegramInput(input, options.authorization, ports);
+    result = applyMiniAppDecision(input, options.authorization, ports);
   } catch (error) {
     return { ...base, outcome: "failed", reason: maskMiniAppError(error) };
   }

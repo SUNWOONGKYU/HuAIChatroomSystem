@@ -7,7 +7,7 @@ import {
   type TelegramBotRole,
   type WorkflowEventName
 } from "../../contracts/src/index.js";
-import { buildCommandHelp, buildCompletionKeyboard, buildProposalKeyboard, buildWorkProposalMessage } from "../../telegram-ui/src/index.js";
+import { buildCommandHelp, buildWorkProposalMessage } from "../../telegram-ui/src/index.js";
 import { buildAcknowledgementAnswerText, buildInformationalAnswerText, classifyFreeformIntent } from "./intent-router.js";
 
 export type AuthorizationDecision =
@@ -80,7 +80,7 @@ export type TelegramInputHandlingPorts = {
   now(): string;
   executionDefaults?: ExecutionRequestDefaults;
   // Mini App 결정 폴러처럼 huai_approvals 원본 행을 "재생"하는 호출자를 위한 훅.
-  // applyOwnerCallback 이 만드는 승인 이벤트의 idempotencyKey 를 이 값으로 강제한다.
+  // applyMiniAppDecision 이 만드는 승인 이벤트의 idempotencyKey 를 이 값으로 강제한다.
   // 원본 huai_approvals 행의 idempotency_key 를 그대로 넘기면, 재생이 만드는 이벤트가
   // recordApprovals 에서 원본과 같은 키로 INSERT 를 시도해 409 로 흡수되고(이미 그
   // 경로가 409 를 삼킨다 — supabase-store.ts:218-225 참고, 이 파일에서 손 안 댐)
@@ -192,6 +192,7 @@ function routeTelegramInput(
       case "/task":
       case "/search":
       case "/trace":
+      case "/center":
       case "/help":
         return renderTelegramQuery(input);
       case "/approve":
@@ -199,7 +200,7 @@ function routeTelegramInput(
       case "/done":
       case "/cancel":
       case "/verify":
-        return applyOwnerTaskCommand(input, ports);
+        return renderOwnerActionRedirect(input);
       case "/newagent":
         return createAgentPersonaFromTelegram(input);
       case "/agents":
@@ -217,7 +218,37 @@ function routeTelegramInput(
     }
   }
 
-  return applyOwnerCallback(input, ports);
+  return renderOwnerActionRedirect(input);
+}
+
+// 승인·통제는 협업 운영센터 단일 창구다. Telegram 명령/콜백은 업데이트와
+// 감사 추적은 유지하되, 상태 전이·실행·취소 이벤트를 만들지 않고 안내만 보낸다.
+// 실제 링크/키보드는 roomId를 알고 있는 Supabase store가 최종 hydration 단계에서 붙인다.
+export function renderOwnerActionRedirect(
+  input: Extract<NormalizedTelegramInput, { kind: "command" | "callback" }>
+): Extract<TelegramInputHandlingResult, { accepted: true }> {
+  const targetId = input.kind === "command"
+    ? input.command.args[0]
+    : input.callback.entityId;
+  const actionLabel = input.kind === "command" ? input.command.name : input.callback.action;
+  const callbackQueryId = input.kind === "callback" ? input.envelope.callbackQueryId : undefined;
+  return {
+    accepted: true,
+    authorization: { allowed: true },
+    events: [],
+    outbox: [{
+      target: makeOutboxTargetForRole("leader", input.envelope.telegramChatId),
+      idempotencyKey: `telegram:owner-action-redirect:${input.envelope.telegramBotId}:${input.envelope.updateId}`,
+      payload: {
+        botRole: "leader",
+        telegramChatId: input.envelope.telegramChatId,
+        text: `방장 액션(${actionLabel}${targetId ? ` · ${targetId}` : ""})은 협업 운영센터에서만 처리합니다.`,
+        ...(callbackQueryId ? { callbackQueryId } : {}),
+        ownerActionRedirect: true,
+        binding: { kind: "event", eventId: `owner-action-redirect:${input.envelope.updateId}` }
+      }
+    }]
+  };
 }
 
 export function createProposalFromTelegram(
@@ -262,7 +293,7 @@ export function createProposalFromTelegram(
         idempotencyKey: `telegram:proposal:${proposalId}`,
         payload: {
           text: buildWorkProposalMessage({ kind: routed.intent, title }),
-          keyboard: buildProposalKeyboard(proposalId),
+          ownerActionRedirect: true,
           binding: { kind: "event", eventId: event.idempotencyKey }
         }
       }
@@ -434,40 +465,15 @@ export function createDirectAuditRequest(
   };
 }
 
-export function applyOwnerTaskCommand(
-  input: Extract<NormalizedTelegramInput, { kind: "command" }>,
-  ports: TelegramInputHandlingPorts
-): Extract<TelegramInputHandlingResult, { accepted: true }> {
-  const targetId = input.command.args[0] ?? "";
-  if (!isOwnerCommandName(input.command.name)) {
-    throw new Error("not-owner-command");
-  }
-  const action = commandNameToOwnerAction(input.command.name);
-  const event: OrchestratorEvent = {
-    eventType: action,
-    idempotencyKey: `${action}:${input.envelope.telegramBotId}:${input.envelope.updateId}:${targetId}`,
-    payload: {
-      targetId,
-      telegramChatId: input.envelope.telegramChatId,
-      telegramUserId: input.envelope.telegramUserId,
-      decidedAt: ports.now()
-    }
-  };
-
-  const outbox = buildOwnerActionOutbox(action, targetId, input, ports);
-
-  return {
-    accepted: true,
-    authorization: { allowed: true },
-    events: [event],
-    outbox
-  };
-}
-
-export function applyOwnerCallback(
+// Telegram 경로에서는 사용하지 않는다. Mini App 승인 원장 폴러가 이미 기록된
+// 결정을 실행 흐름으로 재생할 때만 호출하는 내부 호환 경로다.
+export function applyMiniAppDecision(
   input: Extract<NormalizedTelegramInput, { kind: "callback" }>,
+  context: RoomAuthorizationContext,
   ports: TelegramInputHandlingPorts
-): Extract<TelegramInputHandlingResult, { accepted: true }> {
+): TelegramInputHandlingResult {
+  const authorization = authorizeTelegramInput(input, context);
+  if (!authorization.allowed) return { accepted: false, authorization };
   const action = callbackActionToOwnerEvent(input.callback.action);
   const event: OrchestratorEvent = {
     eventType: action,
@@ -483,7 +489,7 @@ export function applyOwnerCallback(
 
   const outbox = [
     ...buildCallbackAckOutbox(input),
-    ...buildOwnerActionOutbox(action, input.callback.entityId, input, ports, input.callback.reason)
+    ...buildMiniAppDecisionOutbox(action, input.callback.entityId, input, ports, input.callback.reason)
   ];
 
   return {
@@ -509,15 +515,14 @@ function buildCallbackAckOutbox(
     }
   ];
 }
-export function buildOwnerActionOutbox(
+function buildMiniAppDecisionOutbox(
   action: WorkflowEventName,
   taskOrProposalId: string,
   input: NormalizedTelegramInput,
   ports: TelegramInputHandlingPorts,
-  // Mini App [보완 요청] 사유. 이 함수는 콜백 경로(applyOwnerCallback)와 커맨드 경로
-  // (applyOwnerTaskCommand) 양쪽에서 호출되는데, NormalizedTelegramInput 은 kind==="command"
-  // 일 땐 callback 필드 자체가 없어 input 에서 꺼낼 수 없다 — 그래서 호출자가 명시적으로
-  // 넘긴다. 커맨드 경로는 항상 undefined 를 넘긴다(사유를 실을 수 없는 창구).
+  // Mini App [보완 요청] 사유. 이 함수는 내부 결정 재생 경로에서만 호출된다.
+  // Telegram 명령·콜백 경로는 renderOwnerActionRedirect 로 분리되어 상태 변경 outbox를
+  // 만들 수 없다.
   reason?: string
 ): OrchestratorOutboxItem[] {
   if (action === "owner_task_approved") {
@@ -632,11 +637,11 @@ function buildSupplementRequestedText(taskOrProposalId: string, reason: string |
   if (!trimmedReason) {
     // 사유 없이 들어온 결정(구버전 Mini App, 또는 사유 없이도 보낼 수 있었던 과거 호출부와의
     // 하위호환)은 예전 문구를 그대로 유지한다.
-    return `${base}\n이후 결정은 고정된 작업 현황판에서 진행해 주세요.`;
+    return `${base}\n이후 결정은 고정된 협업 운영센터에서 진행해 주세요.`;
   }
   const truncated = trimmedReason.length > SUPPLEMENT_REASON_DISPLAY_MAX;
   const shown = truncated ? `${trimmedReason.slice(0, SUPPLEMENT_REASON_DISPLAY_MAX)}…` : trimmedReason;
-  return `${base}\n사유: ${shown}${truncated ? " (길어서 잘렸습니다 — 전체는 작업 현황판에서 확인하세요)" : ""}\n이후 결정은 고정된 작업 현황판에서 진행해 주세요.`;
+  return `${base}\n사유: ${shown}${truncated ? " (길어서 잘렸습니다 — 전체는 협업 운영센터에서 확인하세요)" : ""}\n이후 결정은 고정된 협업 운영센터에서 진행해 주세요.`;
 }
 
 export function enqueueExecutionAfterApproval(
@@ -798,9 +803,11 @@ export function renderTelegramQuery(
       ? { kind: "task" as const, taskId: input.command.args[0] ?? "" }
       : input.command.name === "/search"
         ? { kind: "search" as const, term: input.command.args.join(" ") }
-        : input.command.name === "/trace"
-          ? { kind: "trace" as const, taskId: input.command.args[0] ?? "" }
-          : undefined;
+          : input.command.name === "/trace"
+            ? { kind: "trace" as const, taskId: input.command.args[0] ?? "" }
+            : input.command.name === "/center"
+              ? { kind: "center" as const }
+              : undefined;
   const text =
     input.command.name === "/help"
       ? buildCommandHelp()
@@ -810,7 +817,9 @@ export function renderTelegramQuery(
           ? `작업 검색 요청을 접수했습니다: ${input.command.args.join(" ")}`
           : input.command.name === "/trace"
             ? `작업 이력 조회 요청을 접수했습니다: ${input.command.args[0] ?? ""}`
-            : `작업 상세 조회 요청을 접수했습니다: ${input.command.args[0] ?? ""}`;
+            : input.command.name === "/center"
+              ? "협업 운영센터를 여는 링크를 준비했습니다."
+              : `작업 상세 조회 요청을 접수했습니다: ${input.command.args[0] ?? ""}`;
   const payload: Record<string, unknown> = {
     text,
     binding: { kind: "event", eventId: `query:${input.envelope.updateId}` }
@@ -1316,6 +1325,7 @@ function requiredPermissionForInput(input: NormalizedTelegramInput): RoomPermiss
       case "/task":
       case "/search":
       case "/trace":
+      case "/center":
       case "/help":
       case "/agents":
         return "task:read";

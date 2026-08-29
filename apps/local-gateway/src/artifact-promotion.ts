@@ -3,10 +3,10 @@
 // artifact-publisher.ts 가 실행 직후 올리는 건 프리뷰뿐이다(방장 승인 전 프로덕션
 // 노출 방지, Grok Bot 사례 반영·2026-08-23). 그 프리뷰가 실제로 프로덕션이 되는
 // 시점은 huai_tasks.status 가 'completed' 로 바뀐 뒤뿐이다 — Telegram 버튼과 Mini App
-// 버튼 둘 다 결국 이 컬럼을 그렇게 바꾸므로(applyOwnerCallback, packages/orchestrator),
+// 버튼 둘 다 결국 이 컬럼을 그렇게 바꾸므로(applyMiniAppDecision, packages/orchestrator),
 // 승인 채널이 무엇이었는지 여기서 신경 쓸 필요가 없다. huai_tasks.status 하나만 본다.
 //
-// 왜 오케스트레이터 안에 안 넣는가: applyOwnerCallback 은 순수 함수(네트워크 호출 없이
+// 왜 오케스트레이터 안에 안 넣는가: applyMiniAppDecision 은 순수 함수(네트워크 호출 없이
 // outbox 항목만 만든다)다. vercel promote 는 실제 네트워크 호출이라 거기 넣으면 그
 // 함수의 순수성이 깨지고, 미니앱 승인 경로(miniapp-decision-poller.ts)와 텔레그램
 // 실시간 경로 양쪽에 각각 신경 써서 다시 걸어야 한다. 대신 이 파일은 DB 상태

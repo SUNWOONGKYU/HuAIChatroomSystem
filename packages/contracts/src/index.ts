@@ -6,14 +6,18 @@ export type ActorRole =
   | "human_owner"
   | "human_member";
 
-// 세 번째 엔진 antigravity(agy CLI). 한 엔진이 사용 한도에 걸려도 나머지 둘이 남아,
-// 감사를 작업자와 다른 엔진에 맡긴다는 원칙을 지킬 여지가 생긴다.
-export type AiAdapterType = "claude_code" | "codex" | "antigravity";
+// gemini_web 이 표준 Gemini 웹 실행기다. antigravity 는 기존 Supabase 행과
+// 혼합 버전 메시지를 읽기 위한 레거시 별칭으로만 남기고, 실행 시 Gemini 웹으로 보낸다.
+export type AiAdapterType = "claude_code" | "codex" | "gemini_web" | "antigravity";
 
-export const AI_ADAPTER_TYPES: readonly AiAdapterType[] = ["claude_code", "codex", "antigravity"];
+export const AI_ADAPTER_TYPES: readonly AiAdapterType[] = ["claude_code", "codex", "gemini_web"];
+
+export function normalizeAiAdapterType(value: AiAdapterType): Exclude<AiAdapterType, "antigravity"> {
+  return value === "antigravity" ? "gemini_web" : value;
+}
 
 export function isAiAdapterType(value: unknown): value is AiAdapterType {
-  return typeof value === "string" && (AI_ADAPTER_TYPES as readonly string[]).includes(value);
+  return (typeof value === "string" && (AI_ADAPTER_TYPES as readonly string[]).includes(value)) || value === "antigravity";
 }
 
 export type TelegramBotRole = Extract<ActorRole, "leader" | "claude_leader" | "codex_leader" | "auditor">;
@@ -35,6 +39,7 @@ export type TelegramCommandName =
   | "/task"
   | "/search"
   | "/trace"
+  | "/center"
   | "/approve"
   | "/reject"
   | "/verify"
@@ -425,6 +430,23 @@ export type ExecutionRequest = {
   };
 };
 
+export type TaskRiskLevel = "low" | "high";
+
+// 작업 설명만으로 퀴즈 필요 여부를 결정한다. 조회·분석·설명은 저위험으로 보고,
+// 배포·삭제·권한/인증·환경/중요 설정·DB 스키마 변경처럼 운영 영향이 큰 요청만 고위험으로 본다.
+// 읽기 전용 문맥(예: "배포 방법 설명")은 변이 동사가 없으면 저위험으로 유지한다.
+export function classifyTaskRisk(text: string): TaskRiskLevel {
+  const normalized = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return "low";
+
+  const highRisk = /(배포|프로덕션|production|deploy|삭제|delete|remove|환경\s*변수|\benv\b|시크릿|\bsecret\b|권한|permission|인증|\bauth\b|마이그레이션|\bmigration\b|스키마|\bschema\b|데이터베이스|\bdatabase\b|웹훅|\bwebhook\b|중요\s*설정|\bconfig(?:uration)?\b)/i.test(normalized);
+  if (!highRisk) return "low";
+
+  const readOnly = /(조회|분석|설명|검토|조사|확인|알려|읽기\s*전용|\bread[- ]?only\b|\banaly[sz]e\b|\bexplain\b|\breview\b|\binspect\b|\blist\b|\bstatus\b)/i.test(normalized);
+  const mutation = /(배포\s*(해|하|하라|한다|적용)|삭제\s*(해|하|하라|한다)|변경|수정|적용|실행|제거|deploy|delete|change|modify|apply|remove|publish|migrat)/i.test(normalized);
+  return readOnly && !mutation ? "low" : "high";
+}
+
 export function assertExecutionRequestPayload(value: unknown): ExecutionRequest {
   const request = value as ExecutionRequest;
   if (
@@ -448,7 +470,16 @@ export function assertExecutionRequestPayload(value: unknown): ExecutionRequest 
   ) {
     throw new Error("invalid-execution-request-payload");
   }
-  return request;
+  return {
+    ...request,
+    adapterType: normalizeAiAdapterType(request.adapterType),
+    ...(request.workerAdapterType === undefined
+      ? {}
+      : { workerAdapterType: normalizeAiAdapterType(request.workerAdapterType) }),
+    ...(Array.isArray(request.triedAdapterTypes)
+      ? { triedAdapterTypes: request.triedAdapterTypes!.map(normalizeAiAdapterType) }
+      : {})
+  };
 }
 
 function isRevisionExecutionContext(value: unknown): value is NonNullable<ExecutionRequest["revisionContext"]> {
@@ -581,6 +612,7 @@ export const knownCommands: readonly TelegramCommandName[] = [
   "/task",
   "/search",
   "/trace",
+  "/center",
   "/approve",
   "/reject",
   "/verify",

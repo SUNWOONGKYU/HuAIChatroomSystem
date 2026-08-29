@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { maskTelegramSensitiveText as maskSensitiveText, safeTelegramTraceUri } from "../../../packages/telegram-ui/src/sanitize.js";
 import {
+  classifyTaskRisk,
   type OutboxRecord,
   type OutboxTarget,
   type TelegramSendResult,
@@ -36,7 +37,7 @@ export type SupabaseStoreConfig = {
   // /tasks 의 경과시간 표시(Phase 3)를 테스트에서 고정 시각으로 검증할 수 있도록 주입 가능하게 뺐다.
   // 운영에서는 기본값(실제 시각)을 그대로 쓴다.
   now?: () => Date;
-  // "작업 현황판 열기" 버튼(Direct Link Mini App, BOT_SERVICE_MINIAPP_DIRECT_LINK)의 베이스 링크.
+  // "협업 운영센터 열기" 버튼(Direct Link Mini App, BOT_SERVICE_MINIAPP_DIRECT_LINK)의 베이스 링크.
   // 예: https://t.me/leader_chatroom_bot/board — 미설정이면 /tasks 에 버튼을 안 붙인다
   // (기존 동작 그대로). 값이 있는데 https://t.me/ 로 시작하지 않으면 생성자에서 던진다 —
   // web_app 이 아니라 t.me 딥링크여야만 그룹에서 Mini App 으로 열린다(core.telegram.org/
@@ -56,7 +57,9 @@ export type SupabaseStoreConfig = {
 const ROOM_MEMORY_DAYS = 5;
 const ROOM_MEMORY_MAX_CHARS = 2_000;
 
-export const TOPIC_BOARD_MESSAGE_TEXT = "📋 작업 현황판 — 이 주제의 작업과 승인 대기를 한 화면에서 봅니다.";
+// 주제별 현황판 고정 메시지 생성은 제거됐다(ensureTopicBoardRows). 이미 방에 남아 있는
+// 옛 고정 메시지의 문구는 지우는 쪽이 알아야 하므로 scripts/pin-room-board-message.mjs 의
+// LEGACY_BOARD_MESSAGE_TEXTS 가 들고 있다.
 
 function optionalPayloadString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -192,16 +195,52 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     const hydratedOutboxRows = await this.hydrateAiActorRows(personaHydratedRows, roomId);
     const roomHydratedRows = await this.hydrateRoomCommandRows(hydratedOutboxRows, roomId);
     const memberHydratedRows = await this.hydrateRoomMemberRows(roomHydratedRows, roomId);
+    const controlHydratedRows = this.hydrateOwnerControlRows(memberHydratedRows, roomId);
     // 현황판 행은 주제당 하나뿐이라 두 번째 메시지부터는 반드시 이미 존재한다. 아래 배치
     // 삽입은 "행 하나라도 이미 있으면 전체 실패"라서, 같이 넣으면 그 주제의 모든 처리가
     // 멎는다(라이브에서 outbox-idempotency-conflict 로 제안 메시지가 통째로 안 나갔다).
-    await this.ensureTopicBoardRows(memberHydratedRows, roomId);
-    const insertedOutbox = await this.insertOutboxRowsIdempotently(memberHydratedRows);
+    const insertedOutbox = await this.insertOutboxRowsIdempotently(controlHydratedRows);
 
     return {
       events: persistedEvents.map((event) => ({ ...event, createdAt: event.createdAt ?? createdAt })),
       outbox: insertedOutbox.map(toPersistedOutboxItem)
     };
+  }
+
+  // Telegram은 알림·운영센터 열기만 제공한다. 기존 코드 경로와 과거 보고가
+  // callback_data 키보드를 만들어도 실제 전송 직전에 URL 버튼으로 바꿔
+  // Telegram에서 상태 변경이 일어날 수 없게 한다.
+  //
+  // 슬래시 명령 쪽도 이미 닫혀 있다 — /approve·/reject·/done·/cancel·/verify 는
+  // orchestrator 의 renderOwnerActionRedirect 로 빠져 events: [] 만 돌려준다.
+  // 여기서 버튼을 바꾸는 것은 그 단일 창구 원칙의 나머지 절반이다.
+  private hydrateOwnerControlRows(rows: OutboxInsertRow[], roomId: string): OutboxInsertRow[] {
+    return rows.map((row) => {
+      if (row.target_kind !== "telegram_bot") return row;
+      const payload = row.payload;
+      const redirect = payload.ownerActionRedirect === true;
+      const hasOwnerCallback = isOwnerControlKeyboard(payload.keyboard);
+      if (!redirect && !hasOwnerCallback) return row;
+      const threadId = optionalPayloadString(payload.messageThreadId);
+      // 링크가 없으면 버튼을 지운 자리에 아무것도 남지 않는다. 그대로 두면 방장은
+      // 결정 수단을 잃은 채 "운영센터에서 처리하세요"라는 갈 곳 없는 안내만 받는다.
+      // supabase-runtime 의 중간승인 보고와 같은 문구로 원인을 알린다.
+      const guidance = this.miniAppDirectLinkBaseUrl
+        ? "\n협업 운영센터에서 작업을 확인하고 처리해 주세요."
+        : "\n협업 운영센터 링크가 설정되지 않아 승인 UI가 비활성화되었습니다. 운영 담당자에게 BOT_SERVICE_MINIAPP_DIRECT_LINK 설정을 요청하세요.";
+      return {
+        ...row,
+        payload: {
+          ...payload,
+          keyboard: this.miniAppDirectLinkBaseUrl
+            ? buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId, messageThreadId: threadId })
+            : undefined,
+          text: redirect || !this.miniAppDirectLinkBaseUrl
+            ? `${String(payload.text ?? "")}${guidance}`
+            : payload.text
+        }
+      };
+    });
   }
 
   private async hydrateFinalApprovalRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
@@ -392,61 +431,6 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .then((rows) => {
         if (rows.length !== 1) throw new Error("task-state-conflict:patch");
       });
-  }
-
-  // 주제마다 작업 현황판을 하나 고정한다.
-  //
-  // 포럼 그룹은 주제마다 고정 바가 따로다. 그룹에 하나 고정해 둔 현황판은 다른 주제에서는
-  // 보이지 않아서, 방장이 그 주제에서 일을 시키고도 결과를 확인할 창구가 없었다.
-  //
-  // 한 주제에 한 번만 올린다 — 아웃박스의 idempotency_key 가 그 보증이다(같은 키는 두 번
-  // 안 들어간다). 별도 표를 두고 "이미 고정했는가"를 관리하지 않는 이유이기도 하다.
-  private async ensureTopicBoardRows(rows: OutboxInsertRow[], roomId: string): Promise<void> {
-    for (const row of this.buildTopicBoardRows(rows, roomId)) {
-      // 이미 있으면 그대로 둔다 — 현황판은 주제마다 하나면 된다.
-      const response = await this.client.request("POST", "/huai_outbox", {
-        body: { ...row, event_id: row.event_id ?? null },
-        prefer: "return=minimal"
-      });
-      if (response.status !== 409) await response.expectOk();
-    }
-  }
-
-  private buildTopicBoardRows(rows: OutboxInsertRow[], roomId: string): OutboxInsertRow[] {
-    // 현황판 링크를 만들 수 없으면 올릴 것도 없다.
-    if (!this.miniAppDirectLinkBaseUrl) return [];
-
-    const seeded = new Set<string>();
-    const boardRows: OutboxInsertRow[] = [];
-    for (const row of rows) {
-      if (row.target_kind !== "telegram_bot") continue;
-      const threadId = optionalPayloadString(row.payload.messageThreadId);
-      const telegramChatId = outboxTargetChatId(row.target);
-      if (!threadId || !telegramChatId || seeded.has(threadId)) continue;
-      seeded.add(threadId);
-
-      boardRows.push({
-        room_id: roomId,
-        event_id: row.event_id,
-        idempotency_key: `telegram:topic-board:${roomId}:${threadId}`,
-        target_kind: "telegram_bot",
-        target: JSON.stringify({ kind: "telegram_bot", botRole: "leader", telegramChatId }),
-        payload: {
-          botRole: "leader",
-          telegramChatId,
-          messageThreadId: threadId,
-          text: TOPIC_BOARD_MESSAGE_TEXT,
-          // 이 주제에 고정하는 현황판이므로 이 주제 작업만 열리게 한다.
-          keyboard: buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId, messageThreadId: threadId }),
-          // 보내고 나서 고정한다. 고정하지 않으면 대화가 쌓이는 순간 위로 밀려 사라진다.
-          pinMessage: true,
-          binding: { kind: "task", taskId: roomId },
-          idempotencyKey: `telegram:topic-board:${roomId}:${threadId}`
-        }
-      });
-    }
-
-    return boardRows;
   }
 
   // "작업 실행을 시작했습니다: p_032d2db2..." 처럼 내부 id 만 보여주면
@@ -682,7 +666,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
           executionRequest: {
             ...taskExecutionRequest,
             ...(actor ? { actorId: actor.actor_id, adapterType: actor.adapter_type, reportBotRole: actor.role } : {}),
-            prompt: appendQuizInstruction(hint.prompt)
+            prompt: promptWithRiskQuiz(hint.prompt, hint.rawText ?? hint.prompt)
           }
         }
       });
@@ -819,18 +803,24 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
         continue;
       }
 
-      const text = query.kind === "tasks"
+      const text = query.kind === "center"
+        ? String(row.payload.text ?? "협업 운영센터 링크입니다.")
+        : query.kind === "tasks"
         ? await this.renderTaskListQuery(query.limit, roomId)
         : query.kind === "search"
           ? await this.renderTaskSearchQuery(query.term, roomId)
           : query.kind === "trace"
             ? await this.renderTaskTraceQuery(query.taskId, roomId)
             : await this.renderTaskDetailQuery(query.taskId, roomId);
-      // "작업 현황판 열기" 버튼은 /tasks 에만 붙인다(/search·/task·/trace 는 이번 범위가 아니다).
+      // "협업 운영센터 열기" 버튼은 /tasks 에만 붙인다(/search·/task·/trace 는 이번 범위가 아니다).
       // BOT_SERVICE_MINIAPP_DIRECT_LINK 미설정 시 keyboard 필드 자체를 안 만든다 —
       // 기존 payload 에 keyboard 가 없던 것과 완전히 동일하게 유지한다.
-      const keyboard = query.kind === "tasks" && this.miniAppDirectLinkBaseUrl
-        ? buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId })
+      const keyboard = (query.kind === "tasks" || query.kind === "center") && this.miniAppDirectLinkBaseUrl
+        ? buildMiniAppOpenKeyboard({
+          directLinkBaseUrl: this.miniAppDirectLinkBaseUrl,
+          roomId,
+          messageThreadId: optionalPayloadString(row.payload.messageThreadId)
+        })
         : undefined;
       hydrated.push({ ...row, payload: { ...row.payload, text, ...(keyboard ? { keyboard } : {}) } });
     }
@@ -1550,6 +1540,7 @@ type TaskTraceVerificationRow = {
 };
 
 type TaskQueryPayload =
+  | { kind: "center" }
   | { kind: "tasks"; limit: number }
   | { kind: "task"; taskId: string }
   | { kind: "search"; term: string }
@@ -1558,6 +1549,7 @@ function taskQueryPayload(payload: Record<string, unknown>): TaskQueryPayload | 
   const value = payload.query;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const query = value as Record<string, unknown>;
+  if (query.kind === "center") return { kind: "center" };
   if (query.kind === "tasks") {
     const limit = typeof query.limit === "number" && Number.isFinite(query.limit) ? Math.trunc(query.limit) : 10;
     return { kind: "tasks", limit };
@@ -1747,9 +1739,9 @@ function buildMultiAiExecutionRows(row: OutboxInsertRow, executionRequest: Recor
   const claude = actorsByRole.get("claude_leader");
   const codex = actorsByRole.get("codex_leader");
   const requestText = hint.rawText ?? hint.prompt;
-  if (claude) rows.push(buildRoleExecutionRow(row, executionRequest, "claude", claude, appendQuizInstruction(buildRoleSpecificPrompt("claude_leader", requestText)), `${baseAttemptId}-claude`));
-  if (codex) rows.push(buildRoleExecutionRow(row, executionRequest, "codex", codex, appendQuizInstruction(buildRoleSpecificPrompt("codex_leader", requestText)), `${baseAttemptId}-codex`));
-  return rows.length > 0 ? rows : [{ ...row, payload: { ...row.payload, executionRequest: { ...executionRequest, prompt: appendQuizInstruction(hint.prompt) } } }];
+  if (claude) rows.push(buildRoleExecutionRow(row, executionRequest, "claude", claude, promptWithRiskQuiz(buildRoleSpecificPrompt("claude_leader", requestText), requestText), `${baseAttemptId}-claude`));
+  if (codex) rows.push(buildRoleExecutionRow(row, executionRequest, "codex", codex, promptWithRiskQuiz(buildRoleSpecificPrompt("codex_leader", requestText), requestText), `${baseAttemptId}-codex`));
+  return rows.length > 0 ? rows : [{ ...row, payload: { ...row.payload, executionRequest: { ...executionRequest, prompt: promptWithRiskQuiz(hint.prompt, requestText) } } }];
 }
 
 function buildRoleExecutionRow(row: OutboxInsertRow, executionRequest: Record<string, unknown>, suffix: string, actor: ExecutionActorRow, prompt: string, attemptId: string): OutboxInsertRow {
@@ -1757,17 +1749,17 @@ function buildRoleExecutionRow(row: OutboxInsertRow, executionRequest: Record<st
 }
 
 // 파일을 실제로 바꾼 작업만, 완료 보고 끝에 이해도 확인용 객관식 3문항을 실어 달라고
-// 요청한다 — 방장이 "완료" 버튼을 누르기 전에 무엇이 바뀌었는지 실제로 이해했는지
-// 확인하기 위함(인지부채 방지, Orca/Buzz 벤치마킹). packages/supabase-runtime 의
+// 고위험 작업에만 요청한다 — 방장이 "완료" 버튼을 누르기 전에 무엇이 바뀌었는지 실제로
+// 이해했는지 확인하기 위함(인지부채 방지, Orca/Buzz 벤치마킹). packages/supabase-runtime 의
 // extractTaskQuizFromEvents 가 이 블록을 파싱하고, huai_task_quizzes 로 저장돼
 // miniapp-approve 가 통과 여부를 강제한다. 조회성 작업(파일 변경 없음)에는 의미가
-// 없어 생략을 허용한다 — 어차피 저장 쪽도 producedRealArtifacts 로 한 번 더 거른다.
+// 없어 생략한다 — 저장 쪽도 같은 위험도 함수를 한 번 더 적용한다.
 function appendQuizInstruction(prompt: string): string {
   return [
     prompt,
     "",
     "---",
-    "파일을 실제로 만들거나 바꿨다면(조회·설명뿐이었다면 이 블록은 생략하세요), 보고의",
+    "고위험 작업에서 파일을 실제로 만들거나 바꿨다면(조회·설명 또는 단순 저위험 변경이면 이 블록은 생략하세요), 보고의",
     "맨 끝에 아래 형식 그대로 한 블록을 추가하세요. 방장이 변경 내용을 이해했는지",
     "확인하는 객관식 3문항입니다 — 방장에게 그대로 보이는 문장이니 자연스러운 한국어로",
     "쓰세요.",
@@ -1781,6 +1773,10 @@ function appendQuizInstruction(prompt: string): string {
     "correct 는 0부터 시작하는 정답 인덱스입니다. QUIZ_START 와 QUIZ_END 사이에는",
     "유효한 JSON 외에 다른 말을 넣지 마세요."
   ].join("\n");
+}
+
+function promptWithRiskQuiz(prompt: string, taskText: string): string {
+  return classifyTaskRisk(taskText) === "high" ? appendQuizInstruction(prompt) : prompt;
 }
 
 function buildRoleSpecificPrompt(role: "claude_leader" | "codex_leader" | "auditor", requestText: string): string {
@@ -2186,4 +2182,16 @@ function requireMiniAppDirectLinkBaseUrl(value: string): string {
     throw new Error(`invalid-env:BOT_SERVICE_MINIAPP_DIRECT_LINK must start with https://t.me/ (got: ${maskSensitiveText(value)})`);
   }
   return value;
+}
+
+function isOwnerControlKeyboard(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const rows = (value as { inline_keyboard?: unknown }).inline_keyboard;
+  if (!Array.isArray(rows)) return false;
+  return rows.some((row) => Array.isArray(row) && row.some((button) => {
+    if (!button || typeof button !== "object") return false;
+    const callback = (button as { callback_data?: unknown }).callback_data;
+    if (typeof callback !== "string") return false;
+    return /^(proposal|task):[^:]+:(approve|reject|revise|request_revision|mid_approve|mid_reject|reverify|final_approve|cancel|rv|rr|fa)$/.test(callback);
+  }));
 }

@@ -358,7 +358,7 @@ test("records masked stdout stderr and retryable failure on non-zero exit", asyn
 });
 
 
-test("executes actual orchestrator approval payload", async () => {
+test("does not execute Telegram approval payload outside the collaboration operations center", async () => {
   const envelope = new TelegramUpdateEnvelope(
     "bot-leader",
     "leader_bot",
@@ -414,25 +414,10 @@ test("executes actual orchestrator approval payload", async () => {
     },
     result: handled
   });
-  const plans: CommandPlan[] = [];
-
-  const result = await runLocalGatewayConsumerOnce({
-    store,
-    policy: makePolicy(),
-    runner: {
-      async run(plan) {
-        plans.push(plan);
-        return { exitCode: 0, stdout: "ok", stderr: "" };
-      }
-    },
-    sink: { async publish() {} },
-    limit: 10,
-    leaseUntil: "2026-08-10T00:01:00.000Z",
-    maxAttempts: 3
-  });
-
-  assert.equal(result.completed, 1);
-  assert.equal(plans[0]?.args.at(-1), "run task-actual");
+  assert.deepEqual(handled.events, []);
+  assert.equal(handled.outbox.some((item) => item.target.kind === "local_gateway"), false);
+  assert.equal(handled.outbox[0]?.payload.ownerActionRedirect, true);
+  assert.match(String(handled.outbox[0]?.payload.text), /협업 운영센터/);
 });
 async function seedLocalGatewayOutbox(store: FakeBotServiceStore, request: ExecutionRequest): Promise<void> {
   await store.commitTelegramInputResult({
@@ -618,11 +603,8 @@ test("리더 판단과 감사는 읽기 전용으로 실행된다", () => {
   assert.equal(writable({ ...base, attemptId: "a2", adapterType: "claude_code", reportBotRole: "claude_leader" }), true, "승인된 작업은 쓸 수 있어야 한다");
 });
 
-// 라이브 결함 회귀 — Antigravity 감사가 "no output produced: 권한이 자동 거부됨" 으로
-// 빈손으로 끝났다. agy 는 Go 플래그를 써서 --print 가 프롬프트를 값으로 받는데, 우리가
-// --print 다음에 --output-format 을 두는 바람에 그게 프롬프트가 되고 첫 비플래그 인자에서
-// 파싱이 멈춰 권한 플래그가 통째로 사라졌다.
-test("antigravity 실행은 프롬프트를 --print 값으로 넘기고 권한 플래그를 잃지 않는다", () => {
+// 혼합 버전 DB의 antigravity 행도 실제로는 Gemini 웹 브리지로 라우팅한다.
+test("antigravity 레거시 값과 gemini_web은 Gemini 웹 브리지를 사용한다", () => {
   const request: ExecutionRequest = {
     roomId: "r", taskId: "t", attemptId: "a1-audit", actorId: "a", requestedBy: "1",
     adapterType: "antigravity", projectPath: process.cwd(), prompt: "감사해줘",
@@ -631,15 +613,16 @@ test("antigravity 실행은 프롬프트를 --print 값으로 넘기고 권한 �
   };
   const args = resolveAdapterPlan(request).args;
 
-  assert.equal(args[0], "--print");
-  assert.equal(args[1], "감사해줘", "프롬프트가 --print 바로 뒤에 오지 않으면 뒤 플래그가 전부 무시된다");
-  assert.equal(args.includes("--dangerously-skip-permissions"), true);
-  // 계획서만 쓰고 승인을 기다리는 모드라 비대화형에서는 아무것도 하지 않는다.
-  assert.equal(args.includes("plan"), false);
-  // agy 기본 대기는 5분이라, 더 긴 실행은 CLI 가 먼저 끊는다.
-  assert.equal(args.includes("--print-timeout"), true);
-  assert.equal(args[args.indexOf("--print-timeout") + 1], "900s");
+  assert.equal(args[0], "C:\\Dev\\HuAIChatroomSystem\\scripts\\gemini-web-adapter.mjs");
+  assert.equal(args.includes("--timeout"), true);
+  assert.equal(planInput(request), "감사해줘");
+  const geminiPlan = resolveAdapterPlan({ ...request, adapterType: "gemini_web" });
+  assert.deepEqual(geminiPlan.args, args);
 });
+
+function planInput(request: ExecutionRequest): string | undefined {
+  return resolveAdapterPlan(request).stdinInput;
+}
 
 // 라이브 결함 — 벽돌깨기 게임이 만들어졌는데 공개 주소가 안 붙었다. 런타임은
 // LOCAL_GATEWAY_ARTIFACT_VERCEL_PROJECT 를 읽었지만 cli.ts 가 그 값을 루프에 넘기지 않아

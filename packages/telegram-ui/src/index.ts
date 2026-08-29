@@ -3,10 +3,6 @@ export type InlineKeyboardButton = {
   callback_data: string;
 };
 
-export type InlineKeyboardMarkup = {
-  inline_keyboard: InlineKeyboardButton[][];
-};
-
 export function buildCommandHelp(): string {
   return [
     "사용 가능한 명령:",
@@ -15,11 +11,8 @@ export function buildCommandHelp(): string {
     "/task <id> 작업 상세",
     "/search <단어> 작업 검색",
     "/trace <id> 작업 이력",
-    "/approve <id> 승인",
-    "/reject <id> 반려",
-    "/verify <id> 검증 요청",
-    "/done <id> 승인 요청/처리",
-    "/cancel <id> 취소 요청",
+    "/center 협업 운영센터 열기",
+    "승인·반려·검증·완료·취소: 협업 운영센터에서 처리",
     "/newagent <이름> <claude_leader|codex_leader> <할 일> 페르소나 추가",
     "/agents 등록된 페르소나 목록",
     "/help 사용법"
@@ -31,51 +24,7 @@ export function buildCommandHelp(): string {
 // 뜨자 방장이 "안 눌렀는데 왜 실행됐지" 하고 헷갈렸다 — 이미 끝난 일을 다시 "시작하라"는
 // 버튼이 남아있는 게 문제였다. "수정"·"반려"(막거나 고치는 용도)는 자동허용 뒤에도 여전히
 // 의미가 있으므로 남긴다 — 판단이 틀렸을 때의 유일한 개입 수단이다.
-export function buildProposalKeyboard(proposalId: string, options?: { autoAllowed?: boolean }): InlineKeyboardMarkup {
-  const approveButton = { text: "실행", callback_data: `proposal:${proposalId}:approve` };
-  const rest = [
-    { text: "수정", callback_data: `proposal:${proposalId}:revise` },
-    { text: "반려", callback_data: `proposal:${proposalId}:reject` }
-  ];
-  return {
-    inline_keyboard: [options?.autoAllowed ? rest : [approveButton, ...rest]]
-  };
-}
-
-export function buildTaskDecisionKeyboard(taskId: string): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [
-        { text: "승인", callback_data: `task:${taskId}:approve` },
-        { text: "반려", callback_data: `task:${taskId}:reject` },
-        { text: "취소", callback_data: `task:${taskId}:cancel` }
-      ]
-    ]
-  };
-}
-
-export function buildMidApprovalKeyboard(taskId: string): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [[
-      { text: "중간 승인", callback_data: `task:${taskId}:mid_approve` },
-      { text: "중단", callback_data: `task:${taskId}:mid_reject` }
-    ]]
-  };
-}
-
-export function buildCompletionKeyboard(taskId: string): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [
-        { text: "검증", callback_data: `task:${taskId}:rv` },
-        { text: "보완", callback_data: `task:${taskId}:rr` },
-        { text: "완료", callback_data: `task:${taskId}:fa` }
-      ]
-    ]
-  };
-}
-
-// "작업 현황판 열기" 버튼. InlineKeyboardButton(위)은 callback_data 만 갖는 타입이라 재사용하지
+// "협업 운영센터 열기" 버튼. InlineKeyboardButton(위)은 callback_data 만 갖는 타입이라 재사용하지
 // 않는다 — url 버튼은 별개 필드(url)라 섞을 수 없고(Telegram 제약: 인라인 버튼 하나에
 // callback_data 와 url 을 같이 못 넣는다), 기존 InlineKeyboardButton 을 유니온으로 넓히면
 // callback-data-length.test.ts 등 기존 소비처가 `button.callback_data` 를 좁히기(narrow)
@@ -131,7 +80,7 @@ export function parseMiniAppStartParam(startParam: string): { roomId: string; me
 export function buildMiniAppOpenKeyboard(input: { directLinkBaseUrl: string; roomId: string; messageThreadId?: string }): MiniAppOpenKeyboard {
   return {
     inline_keyboard: [
-      [{ text: "작업 현황판 열기", url: buildMiniAppDirectLink(input.directLinkBaseUrl, input.roomId, input.messageThreadId) }]
+      [{ text: "협업 운영센터 열기", url: buildMiniAppDirectLink(input.directLinkBaseUrl, input.roomId, input.messageThreadId) }]
     ]
   };
 }

@@ -113,7 +113,7 @@ function artifact(path: string): GatewayEvent {
 //
 // 파일을 바꾸지 않은 실행은 감사를 붙이지 않기로 했는데, 그러자 그 작업이
 // verification_pending 에서 깨울 사람 없이 영영 멈췄다. 조회 작업 5건이 그렇게 묶여
-// 현황판 "대기" 칸만 불렸다. 감사할 대상이 없다는 것이 작업을 방치할 이유는 아니다.
+// 협업 운영센터 "대기" 칸만 불렸다. 감사할 대상이 없다는 것이 작업을 방치할 이유는 아니다.
 test("감사가 안 붙는 실행도 완료 승인 대기까지는 간다", async () => {
   const calls = makeStoreCalls();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "k", fetchImpl: calls.fetchImpl });
@@ -132,8 +132,8 @@ test("감사가 안 붙는 실행도 완료 승인 대기까지는 간다", asyn
 
   const review = calls.requests.find((r) => String(r.body?.idempotency_key ?? "").startsWith("telegram-completion-review:"));
   assert.ok(review, "방장이 완료를 결정할 창구가 안 열렸다");
-  assert.match(String(review.body.payload.text), /작업 현황판/, "어디서 결정하는지 알려줘야 한다");
-  assert.equal(review.body.payload.keyboard, undefined, "결정은 현황판에서 한다");
+  assert.match(String(review.body.payload.text), /협업 운영센터/, "어디서 결정하는지 알려줘야 한다");
+  assert.equal(review.body.payload.keyboard, undefined, "결정은 협업 운영센터에서 한다");
 });
 
 test("감사가 붙는 실행은 감사에 맡기고 먼저 닫지 않는다", async () => {
@@ -260,9 +260,9 @@ test("한 바퀴 더 돈 것마저 막히면 더 넘기지 않는다", () => {
 // 엔진이 둘뿐이던 때의 결함 — 감사하던 Codex 가 한도에 걸리면 남는 건 작업자 Claude 뿐이라,
 // 자기 일을 자기가 검사하게 됐다. 세 번째 엔진은 그 자리를 메우려고 붙였다.
 test("감사가 막히면 작업자 엔진을 피해 세 번째 엔진에 넘긴다", () => {
-  assert.equal(nextEngineAfter("codex", "claude_code"), "antigravity");
+  assert.equal(nextEngineAfter("codex", "claude_code"), "gemini_web");
   assert.equal(nextEngineAfter("antigravity", "claude_code"), "codex");
-  assert.equal(nextEngineAfter("claude_code", "codex"), "antigravity");
+  assert.equal(nextEngineAfter("claude_code", "codex"), "gemini_web");
 });
 
 test("작업자를 모르면 남은 엔진 중 앞엣것으로 넘긴다", () => {
@@ -287,13 +287,13 @@ test("감사 요청은 누가 작업했는지를 달고 나간다", () => {
   // 이 값이 없으면 감사가 한 번 더 넘어갈 때 작업자 엔진으로 되돌아갈 수 있다.
   const request = { ...auditRequest(), adapterType: "claude_code" as const, workerAdapterType: "claude_code" as const };
 
-  assert.equal(nextEngineAfter("codex", request.workerAdapterType), "antigravity");
+  assert.equal(nextEngineAfter("codex", request.workerAdapterType), "gemini_web");
 });
 
 test("방에 올리는 이름은 엔진마다 다르다", () => {
   assert.equal(engineActorName("claude_code"), "ClaudeBot");
   assert.equal(engineActorName("codex"), "CodexBot");
-  assert.equal(engineActorName("antigravity"), "AntigravityBot");
+  assert.equal(engineActorName("antigravity"), "GeminiWeb");
 });
 
 test("리더 판단은 엔진을 바꾸지 않는다", () => {
@@ -348,9 +348,9 @@ test("작업이 넘어가면 보고하는 봇도 같이 바뀐다", () => {
   assert.equal(reportBotRoleForAdapter("antigravity"), "claude_leader");
 });
 
-// 라이브 결함 회귀 — 폴백이 실행 엔진만 바꾸고 작업 행의 담당은 그대로 둬서, 현황판에
+// 라이브 결함 회귀 — 폴백이 실행 엔진만 바꾸고 작업 행의 담당은 그대로 둬서, 협업 운영센터에
 // ClaudeBot 이 한 작업이 "담당: codex_leader (codex)" 로 남아 있었다. 방에 나가는 문구만
-// 고치면 나중에 현황판을 열었을 때 같은 거짓말을 다시 본다.
+// 고치면 나중에 협업 운영센터를 열었을 때 같은 거짓말을 다시 본다.
 test("엔진이 넘어가면 작업 담당도 그 엔진으로 바뀐다", async () => {
   const calls = makeStoreCalls();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "k", fetchImpl: calls.fetchImpl });
@@ -364,7 +364,7 @@ test("엔진이 넘어가면 작업 담당도 그 엔진으로 바뀐다", async
   });
 
   const reassign = calls.requests.find((r) => r.method === "PATCH" && /huai_tasks/.test(r.url) && r.body?.assignee_actor_id !== undefined);
-  assert.ok(reassign, "담당을 바꾸지 않으면 현황판이 계속 옛 엔진을 가리킨다");
+  assert.ok(reassign, "담당을 바꾸지 않으면 협업 운영센터가 계속 옛 엔진을 가리킨다");
 });
 
 // 방장 요청(Fable 5 제안 채택) — 같은 지적이 방마다 되풀이되는데, 감사자는 매번 처음처럼
@@ -432,24 +432,24 @@ test("엔진이 셋이면 한 바퀴 돌고 한 번 더 넘긴다(최대 세 번
 
 test("이미 써 본 엔진은 다시 고르지 않는다 — 단, 셋 다 써 봤으면 처음부터 한 바퀴 더", () => {
   assert.equal(nextEngineAfterTried(["claude_code"]), "codex");
-  assert.equal(nextEngineAfterTried(["claude_code", "codex"]), "antigravity");
+  assert.equal(nextEngineAfterTried(["claude_code", "codex"]), "gemini_web");
   // 감사라면 작업자 엔진은 뒤로 미룬다 — 자기 일을 자기가 검사하는 것을 마지막 수단으로.
-  assert.equal(nextEngineAfterTried(["codex"], "claude_code"), "antigravity");
+  assert.equal(nextEngineAfterTried(["codex"], "claude_code"), "gemini_web");
   // 남은 것이 작업자 엔진뿐이면 그거라도 쓴다. 아무도 안 보는 것보다 낫다.
-  assert.equal(nextEngineAfterTried(["codex", "antigravity"], "claude_code"), "claude_code");
+  assert.equal(nextEngineAfterTried(["codex", "gemini_web"], "claude_code"), "claude_code");
   // 전부 써 봤으면(한 바퀴 다 돌았으면) 처음 엔진부터 다시 돈다 — 무한은 아니고
   // MAX_FALLBACK_HOPS 가 그다음 한 번으로 막는다.
-  assert.equal(nextEngineAfterTried(["claude_code", "codex", "antigravity"]), "claude_code");
+  assert.equal(nextEngineAfterTried(["claude_code", "codex", "gemini_web"]), "claude_code");
 });
 
 // 라이브 확인(2026-08-23): ASSIGNEE=codex_leader 작업이 코덱스 한도로 막혔을 때
 // 클로드로 넘어갔다 — PO 는 "코덱스가 막히면 안티그래비티로"를 기대했는데, 고정
 // 배열 순서(claude_code 가 항상 먼저) 때문에 어긋났다. 막힌 엔진의 바로 다음 자리부터
 // 순환하도록 고쳐 이 기대와 맞춘다.
-test("워커 엔진이 코덱스로 막히면(감사 아님) 안티그래비티가 클로드보다 먼저다", () => {
-  assert.equal(nextEngineAfterTried(["codex"]), "antigravity");
-  // 안티그래비티까지 막히면 그제서야 클로드.
-  assert.equal(nextEngineAfterTried(["codex", "antigravity"]), "claude_code");
+test("워커 엔진이 코덱스로 막히면(감사 아님) Gemini 웹이 클로드보다 먼저다", () => {
+  assert.equal(nextEngineAfterTried(["codex"]), "gemini_web");
+  // Gemini 웹까지 막히면 그제서야 클로드.
+  assert.equal(nextEngineAfterTried(["codex", "gemini_web"]), "claude_code");
 });
 
 test("워커 엔진이 클로드로 막히면 코덱스가 다음이다 (원래 배열 순서와 동일)", () => {

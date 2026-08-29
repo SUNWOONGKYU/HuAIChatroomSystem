@@ -231,7 +231,7 @@ test("a failing decision in one room does not block or lose a sibling room's dec
 // executionDefaults 가 없는 방(A-5)의 결정: orchestrator 는 더 이상 던지지 않는다
 // (Delta 분대가 packages/orchestrator 에서 이 경로를 고쳐, executionDefaults 가 없으면
 // "이 방은 아직 실행 준비가 되지 않았습니다" 안내를 accepted:true 로 돌려주도록
-// 바뀌었다 — buildOwnerActionOutbox 의 owner_task_approved 분기 참고). 그 결과 이
+// 바뀌었다 — Mini App 결정 생성기의 owner_task_approved 분기 참고). 그 결과 이
 // 폴러 입장에서는 예외가 아니라 정상적인 "재생" 이 되고, 실행 대신 안내 메시지가
 // 커밋된다. 이 테스트는 그 안내가 실제로 담겨서 commitTelegramInputResult 까지
 // 가는지 확인한다 — 예전 기대(예외로 실패해 무한 재시도)는 더 이상 유효하지 않다.
@@ -796,7 +796,7 @@ function json(body: unknown, status = 200): Response {
 //
 // 쌓인 제안 122건을 한 번에 취소 기록하면서 전부 같은 마이크로초로 들어갔다. 커서가
 // created_at 하나뿐이고 조회가 created_at >= 커서 라, 매 주기 같은 앞 20건만 읽고
-// 커서를 그 시각으로 다시 올리며 제자리걸음을 했다. 그 뒤에 방장이 작업 현황판에서
+// 커서를 그 시각으로 다시 올리며 제자리걸음을 했다. 그 뒤에 방장이 협업 운영센터에서
 // 누른 최종 승인은 폴러에 영영 도달하지 못했다 — 원장에는 남는데 작업은 안 움직였다.
 test("같은 시각 결정이 페이지보다 많아도 커서가 전진한다", () => {
   const sameInstant = "2026-08-15T23:04:12.937488+00:00";

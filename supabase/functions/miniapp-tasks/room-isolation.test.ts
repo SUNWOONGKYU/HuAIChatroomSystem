@@ -36,8 +36,8 @@ function seededClient() {
   });
 }
 
-// 방장 요청 — 방 하나 안에서 주제를 갈라 쓰는데 현황판이 방 전체를 보여주면 주제를 나눈
-// 의미가 없다. 주제마다 고정한 현황판은 그 주제 작업만 열어야 한다.
+// 방장 요청 — 방 하나 안에서 주제를 갈라 쓰는데 협업 운영센터가 방 전체를 보여주면 주제를 나눈
+// 의미가 없다. 주제마다 고정한 협업 운영센터는 그 주제 작업만 열어야 한다.
 function topicSeededClient() {
   return new FakeSupabaseClient({
     huai_tasks: [
@@ -54,7 +54,7 @@ test("주제를 지정하면 그 주제 작업만 나온다", async () => {
   assert.deepEqual((result.data ?? []).map((t) => t.task_id), ["task-egg"]);
 });
 
-test("주제를 안 주면 방 전체가 나온다 — 일반 그룹·General 현황판이 그렇다", async () => {
+test("주제를 안 주면 방 전체가 나온다 — 일반 그룹·General 협업 운영센터가 그렇다", async () => {
   const deps = buildDepsFromClient(topicSeededClient());
   const result = await deps.fetchTasksForRoom("room-A");
   assert.deepEqual((result.data ?? []).map((t) => t.task_id).sort(), ["task-egg", "task-general", "task-sys"]);
@@ -135,7 +135,7 @@ test("E2E — GET ?roomId=room-B 응답에는 room-B 작업만 있고 room-A 작
 });
 
 // 페이지 배포가 늦어 옛 화면을 보고 있는 사용자를 위해, roomId 에 주제가 통째로 실려 와도
-// 서버에서 갈라 읽는다. 안 그러면 현황판이 빈 화면이 되고 원인이 화면에 안 보인다.
+// 서버에서 갈라 읽는다. 안 그러면 협업 운영센터가 빈 화면이 되고 원인이 화면에 안 보인다.
 test("roomId 에 주제가 붙어 와도 방과 주제를 갈라 읽는다", async () => {
   const client = new FakeSupabaseClient({
     huai_tasks: [
@@ -154,8 +154,8 @@ test("roomId 에 주제가 붙어 와도 방과 주제를 갈라 읽는다", asy
 });
 
 // 방장 제기 — "만들어 줬으면 그걸 연결을 시켜줘야 되는데 연결을 안 시켜주지".
-// 현황판이 작업 제목·상태만 보여주면, 결과물을 보려고 방 대화를 거슬러 올라가야 한다.
-test("현황판 작업에 산출물 목록이 실린다", async () => {
+// 협업 운영센터가 작업 제목·상태만 보여주면, 결과물을 보려고 방 대화를 거슬러 올라가야 한다.
+test("협업 운영센터 작업에 산출물 목록이 실린다", async () => {
   const client = new FakeSupabaseClient({
     huai_tasks: [taskRow({ task_id: "task-a", room_id: "room-A", title: "달걀 게임" })],
     huai_artifacts: [

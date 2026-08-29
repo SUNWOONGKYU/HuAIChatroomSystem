@@ -1,34 +1,15 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
+import { startBrowserGameFixture } from "./browser-test-fixture.mjs";
+import { chromium } from "playwright";
 
-const port = process.env.CHROME_DEBUG_PORT || "9333";
-const gameUrl = process.env.BREAKOUT_GAME_URL;
-assert.ok(gameUrl, "BREAKOUT_GAME_URL is required");
-const targets = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
-const page = targets.find((t) => t.type === "page");
-assert.ok(page?.webSocketDebuggerUrl, "Chrome page target not found");
-
-const socket = new WebSocket(page.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  socket.addEventListener("open", resolve, { once: true });
-  socket.addEventListener("error", reject, { once: true });
-});
-
-let nextId = 0;
-const pending = new Map();
-socket.addEventListener("message", (event) => {
-  const message = JSON.parse(event.data);
-  if (!message.id || !pending.has(message.id)) return;
-  const { resolve, reject } = pending.get(message.id);
-  pending.delete(message.id);
-  message.error ? reject(new Error(message.error.message)) : resolve(message.result);
-});
-
-function send(method, params = {}) {
-  const id = ++nextId;
-  socket.send(JSON.stringify({ id, method, params }));
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-}
+const fixture = await startBrowserGameFixture({ envName: "BREAKOUT_GAME_URL", fileName: "breakout-game.html" });
+const gameUrl = fixture.url;
+const browser = await chromium.launch({ headless: true });
+const context = await browser.newContext();
+const page = await context.newPage();
+const cdp = await context.newCDPSession(page);
+function send(method, params = {}) { return cdp.send(method, params); }
 
 async function evaluate(expression) {
   const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
@@ -93,9 +74,9 @@ const afterMouse2 = await evaluate(`window.__breakout.getState()`);
 assert.ok(afterMouse2.paddleX > afterMouse.paddleX, "paddle did not move right when mouse moved right");
 
 // --- paddle control: keyboard ---
-await send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowLeft", code: "ArrowLeft" });
+await page.keyboard.down("ArrowLeft");
 await wait(200);
-await send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowLeft", code: "ArrowLeft" });
+await page.keyboard.up("ArrowLeft");
 const afterKey = await evaluate(`window.__breakout.getState()`);
 assert.ok(afterKey.paddleX < afterMouse2.paddleX, "paddle did not move left on ArrowLeft key hold");
 
@@ -113,8 +94,15 @@ assert.ok(latest.ballX >= 0 && latest.ballX <= canvasRect.width, "ball left the 
 const audioStarts = await evaluate(`window.__breakoutAudioStarts`);
 assert.ok(audioStarts >= 1, `brick break did not play a sound (audioStarts=${audioStarts})`);
 
-const scoreText = await evaluate(`document.querySelector('#score').textContent`);
-assert.equal(scoreText, "점수 " + latest.score, "score DOM text did not match internal score state");
+// State와 DOM을 서로 다른 animation frame에서 읽으면 다음 충돌이 끼어
+// 점수만 한 단계 앞서 보일 수 있다. 한 번의 브라우저 평가에서 같은 시점의
+// state/DOM을 함께 캡처해 비교한다.
+const finalSnapshot = await evaluate(`(() => {
+  const state = window.__breakout.getState();
+  return { ...state, scoreText: document.querySelector('#score').textContent };
+})()`);
+assert.equal(finalSnapshot.score, (24 - finalSnapshot.bricksLeft) * 10, "score state did not match destroyed brick count");
+assert.equal(finalSnapshot.scoreText, "점수 " + finalSnapshot.score, "score DOM text did not match internal score state");
 
 const shot = await send("Page.captureScreenshot", { format: "png" });
 await writeFile(new URL("./breakout-game-playing.png", import.meta.url), Buffer.from(shot.data, "base64"));
@@ -122,9 +110,11 @@ await writeFile(new URL("./breakout-game-playing.png", import.meta.url), Buffer.
 console.log(JSON.stringify({
   result: "pass",
   checks: ["initial-state", "mouse-paddle", "keyboard-paddle", "brick-collision", "score-increment", "sound-playback"],
-  finalScore: latest.score,
-  bricksDestroyed: 24 - latest.bricksLeft,
+  finalScore: finalSnapshot.score,
+  bricksDestroyed: 24 - finalSnapshot.bricksLeft,
   audioStarts,
   screenshot: "breakout-game-playing.png"
 }));
-socket.close();
+await page.close();
+await fixture.close();
+await browser.close();

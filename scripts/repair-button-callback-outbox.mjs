@@ -1,10 +1,6 @@
 import { applyOperationEnvFile } from "./operation-env-loader.mjs";
 
-const SHORT_ACTIONS = new Map([
-  ["reverify", "rv"],
-  ["request_revision", "rr"],
-  ["final_approve", "fa"]
-]);
+const OWNER_CONTROL_CALLBACK = /^(proposal|task):[^:]+:(approve|reject|revise|request_revision|mid_approve|mid_reject|reverify|final_approve|cancel|rv|rr|fa)$/;
 
 export async function repairButtonCallbackOutbox(env, options = {}, fetchImpl = fetch) {
   const baseUrl = trimSlash(required(env, "SUPABASE_URL"));
@@ -69,23 +65,26 @@ export function rewritePayloadCallbacks(payload) {
     if (!value || typeof value !== "object") return value;
     const next = {};
     for (const [key, raw] of Object.entries(value)) {
-      if (key === "callback_data" && typeof raw === "string") {
-        const rewrittenCallback = shortenCallbackData(raw);
-        if (rewrittenCallback !== raw) changedCallbacks += 1;
-        next[key] = rewrittenCallback;
-      } else {
-        next[key] = rewriteValue(raw);
+      if (key === "keyboard" && hasOwnerControlCallback(raw)) {
+        changedCallbacks += countOwnerControlCallbacks(raw);
+        next.ownerActionRedirect = true;
+        continue;
       }
+      next[key] = rewriteValue(raw);
     }
     return next;
   }
 }
 
-function shortenCallbackData(value) {
-  const parts = value.split(":");
-  if (parts.length !== 3) return value;
-  const short = SHORT_ACTIONS.get(parts[2]);
-  return short ? [parts[0], parts[1], short].join(":") : value;
+function hasOwnerControlCallback(value) {
+  return countOwnerControlCallbacks(value) > 0;
+}
+
+function countOwnerControlCallbacks(value) {
+  if (Array.isArray(value)) return value.reduce((count, item) => count + countOwnerControlCallbacks(item), 0);
+  if (!value || typeof value !== "object") return 0;
+  if (typeof value.callback_data === "string" && OWNER_CONTROL_CALLBACK.test(value.callback_data)) return 1;
+  return Object.values(value).reduce((count, item) => count + countOwnerControlCallbacks(item), 0);
 }
 
 async function getJson(fetchImpl, url, serviceRoleKey) {

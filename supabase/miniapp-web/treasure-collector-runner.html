@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>보물 수집 러너</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#10243a; }
+  main { width:min(92vw,460px); text-align:center; }
+  h1 { margin:.2rem 0; color:#ffd166; }
+  p { color:#c9d6e8; }
+  canvas { width:100%; max-width:420px; border:3px solid #ffd166; border-radius:14px; background:#173b59; display:block; margin:1rem auto; }
+  button { border:0; border-radius:999px; padding:.75rem 1.4rem; background:#06d6a0; color:#06261d; font-weight:800; cursor:pointer; }
+  #status { min-height:1.5rem; color:#fff; }
+</style>
+</head>
+<body>
+<main data-game="treasure-collector-runner" data-revision="0">
+  <h1>보물 수집 러너</h1>
+  <p>← → 방향키로 달려 보물을 모으세요</p>
+  <div><span id="score">보물 0</span> · <span id="revision">수정 0</span></div>
+  <canvas id="game" width="420" height="220" aria-label="보물 수집 러너 게임 화면"></canvas>
+  <p id="status">시작 버튼을 눌러 출발하세요.</p>
+  <button id="start" type="button">게임 시작</button>
+</main>
+<script>
+(() => {
+  const canvas = document.querySelector('#game');
+  const ctx = canvas.getContext('2d');
+  const start = document.querySelector('#start');
+  const score = document.querySelector('#score');
+  const status = document.querySelector('#status');
+  const revision = Number(document.querySelector('main').dataset.revision || 0);
+  const state = { running:false, score:0, playerX:40, treasureX:230, speed:16 };
+  function draw() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = '#2f6f4e'; ctx.fillRect(0,180,420,40);
+    ctx.fillStyle = '#4dabf7'; ctx.fillRect(state.playerX,150,28,30);
+    ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(state.treasureX,165,14,0,Math.PI*2); ctx.fill();
+  }
+  function render() { score.textContent = '보물 ' + state.score; document.querySelector('#revision').textContent = '수정 ' + revision; draw(); }
+  function reset() { state.running=true; state.score=0; state.playerX=40; state.treasureX=230; status.textContent='달리는 중 — 보물을 찾아보세요!'; start.textContent='다시 시작'; render(); }
+  function move(dx) {
+    if (!state.running) return;
+    state.playerX = Math.max(0, Math.min(392, state.playerX + dx));
+    if (Math.abs(state.playerX + 14 - state.treasureX) < 24) {
+      state.score = 1; state.running=false; status.textContent='보물을 획득했습니다!'; start.textContent='다시 시작';
+    }
+    render();
+  }
+  start.addEventListener('click', reset);
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowRight') { event.preventDefault(); move(state.speed); }
+    if (event.key === 'ArrowLeft') { event.preventDefault(); move(-state.speed); }
+  });
+  window.__treasureRunner = { getState: () => ({ ...state, revision }), reset, move };
+  render();
+})();
+</script>
+</body>
+</html>

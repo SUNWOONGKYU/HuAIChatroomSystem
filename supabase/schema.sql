@@ -38,7 +38,7 @@ create table if not exists huai_ai_actors (
   cli_session_id text,
   cli_session_updated_at timestamptz,
   constraint huai_ai_actors_role_check check (role in ('leader', 'claude_leader', 'codex_leader', 'auditor')),
-  constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'antigravity', 'auditor')),
+  constraint huai_ai_actors_adapter_type_check check (adapter_type in ('orchestrator', 'claude_code', 'codex', 'gemini_web', 'antigravity', 'auditor')),
   constraint huai_ai_actors_status_check check (status in ('active', 'inactive', 'disabled')),
   unique (room_id, role)
 );
@@ -598,7 +598,7 @@ create table if not exists huai_gateway_instances (
   machine_label text not null,
   status text not null default 'offline',
   allowed_project_roots jsonb not null default '[]'::jsonb,
-  allowed_adapters jsonb not null default '["claude_code","codex","antigravity"]'::jsonb,
+  allowed_adapters jsonb not null default '["claude_code","codex","gemini_web"]'::jsonb,
   last_heartbeat_at timestamptz,
   created_at timestamptz not null default now(),
   constraint huai_gateway_instances_status_check check (status in ('online', 'offline', 'draining', 'disabled'))
@@ -618,7 +618,7 @@ create table if not exists huai_execution_attempts (
   telemetry jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   unique (task_id, adapter_type, attempt_no),
-  constraint huai_execution_attempts_adapter_type_check check (adapter_type in ('claude_code', 'codex', 'antigravity')),
+  constraint huai_execution_attempts_adapter_type_check check (adapter_type in ('claude_code', 'codex', 'gemini_web', 'antigravity')),
   constraint huai_execution_attempts_status_check check (status in ('queued', 'leased', 'running', 'cancelled', 'failed', 'retry_scheduled', 'completed'))
 );
 
@@ -781,6 +781,4 @@ using (
 -- GRANT 와 RLS 는 별개의 관문이라 둘 다 통과해야 한다. anon 에는 주지 않는다 —
 -- 서명된 JWT 가 없어 어차피 항상 거부되지만 최소 권한 원칙을 지킨다.
 grant select on huai_tasks to authenticated;
-
-
 

@@ -84,6 +84,9 @@ export function buildChildProcessEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessE
     "NVM_HOME",
     "NVM_SYMLINK",
     "CODEX_HOME"
+    ,"GEMINI_WEB_SESSION_SCRIPT"
+    ,"GEMINI_WEB_CHAT_URL"
+    ,"GEMINI_WEB_BRIDGE_ENTRYPOINT"
   ];
   const env: NodeJS.ProcessEnv = {};
   for (const key of allowedKeys) {

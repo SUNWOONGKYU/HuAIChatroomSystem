@@ -23,7 +23,7 @@ test("builds role command plan without formatting token values", () => {
 
   assert.equal(plan.length, 4);
   assert.equal(plan[0].username, "leader_chatroom_bot");
-  assert.deepEqual(plan[0].commands.map((item) => item.command), ["newtask", "tasks", "task", "search", "trace", "approve", "reject", "verify", "done", "cancel", "help"]);
+  assert.deepEqual(plan[0].commands.map((item) => item.command), ["newtask", "tasks", "task", "search", "trace", "approve", "reject", "verify", "done", "cancel", "center", "help"]);
   assert.deepEqual(plan[1].commands.map((item) => item.command), ["help"]);
   assert.equal(formatBotCommandPlan(plan).includes("LEADER_TOKEN_VALUE"), false);
 });
@@ -40,7 +40,7 @@ test("sets commands for all bots and masks formatted results", async () => {
   assert.equal(calls[0].body.scope.type, "all_group_chats");
   assert.equal(calls[0].body.commands[0].command, "newtask");
   const formatted = formatBotCommandResults(results);
-  assert.match(formatted, /OK leader username=leader_chatroom_bot commands=11/);
+  assert.match(formatted, /OK leader username=leader_chatroom_bot commands=12/);
   assert.equal(formatted.includes("LEADER_TOKEN_VALUE"), false);
 });
 

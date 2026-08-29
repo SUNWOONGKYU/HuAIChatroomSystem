@@ -1,4 +1,4 @@
-// "작업 현황판 열기" 버튼(Direct Link Mini App) 빌더 단위 테스트.
+// "협업 운영센터 열기" 버튼(Direct Link Mini App) 빌더 단위 테스트.
 // web_app 타입 인라인 버튼은 core.telegram.org/bots/api 문서상 "Available only in
 // private chats between a user and the bot" 라 그룹에서 안 눌린다 — 그래서 평범한 url
 // 버튼으로 t.me 딥링크(core.telegram.org/bots/webapps, "Direct Link Mini App")를 연다.
@@ -22,7 +22,7 @@ test("buildMiniAppOpenKeyboard 는 url 버튼 하나짜리 인라인 키보드�
   assert.equal(keyboard.inline_keyboard.length, 1);
   assert.equal(keyboard.inline_keyboard[0]?.length, 1);
   const button = keyboard.inline_keyboard[0]?.[0];
-  assert.equal(button?.text, "작업 현황판 열기");
+  assert.equal(button?.text, "협업 운영센터 열기");
   assert.equal(button?.url, "https://t.me/leader_chatroom_bot/board?startapp=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   // Telegram 제약: 인라인 버튼 하나에 callback_data 와 url(web_app 포함)을 같이 못 넣는다.
   // 타입 자체가 url 만 갖고 있어서 만들 수가 없지만, 직렬화 결과에도 안 섞이는지 구조적으로 확인한다.
@@ -47,9 +47,9 @@ test("생성된 링크는 https 다", () => {
   assert.match(url, /^https:\/\//);
 });
 
-// 방장 요청 — 방 하나 안에서 주제를 갈라 쓰는데 현황판이 방 전체를 보여주면 주제를 나눈
-// 의미가 없다. 주제마다 고정한 현황판은 그 주제 작업만 열어야 한다.
-test("현황판 링크에 주제를 실어 보낸다", () => {
+// 방장 요청 — 방 하나 안에서 주제를 갈라 쓰는데 협업 운영센터가 방 전체를 보여주면 주제를 나눈
+// 의미가 없다. 주제마다 고정한 협업 운영센터는 그 주제 작업만 열어야 한다.
+test("협업 운영센터 링크에 주제를 실어 보낸다", () => {
   const link = buildMiniAppDirectLink("https://t.me/leader_chatroom_bot/board", "9a477b32-15ed-46e3-b575-9488ff09efb6", "613");
 
   assert.match(link, /startapp=9a477b32-15ed-46e3-b575-9488ff09efb6__t613$/);

@@ -1,34 +1,15 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
+import { startBrowserGameFixture } from "./browser-test-fixture.mjs";
+import { chromium } from "playwright";
 
-const port = process.env.CHROME_DEBUG_PORT || "9333";
-const gameUrl = process.env.EGG_GAME_URL;
-assert.ok(gameUrl, "EGG_GAME_URL is required");
-const targets = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
-const page = targets.find((t) => t.type === "page");
-assert.ok(page?.webSocketDebuggerUrl, "Chrome page target not found");
-
-const socket = new WebSocket(page.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  socket.addEventListener("open", resolve, { once: true });
-  socket.addEventListener("error", reject, { once: true });
-});
-
-let nextId = 0;
-const pending = new Map();
-socket.addEventListener("message", (event) => {
-  const message = JSON.parse(event.data);
-  if (!message.id || !pending.has(message.id)) return;
-  const { resolve, reject } = pending.get(message.id);
-  pending.delete(message.id);
-  message.error ? reject(new Error(message.error.message)) : resolve(message.result);
-});
-
-function send(method, params = {}) {
-  const id = ++nextId;
-  socket.send(JSON.stringify({ id, method, params }));
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-}
+const fixture = await startBrowserGameFixture({ envName: "EGG_GAME_URL", fileName: "egg-crack-sound-game.html" });
+const gameUrl = fixture.url;
+const browser = await chromium.launch({ headless: true });
+const context = await browser.newContext();
+const page = await context.newPage();
+const cdp = await context.newCDPSession(page);
+function send(method, params = {}) { return cdp.send(method, params); }
 
 async function evaluate(expression) {
   const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
@@ -111,4 +92,6 @@ await click("#egg");
 assert.equal(await evaluate(`document.querySelector('#score').textContent`), "🥚 2개", "score did not increment on second egg");
 
 console.log(JSON.stringify({ result: "pass", stages: ["initial", "crack1", "broken", "reset"], audioStarts: afterSecond.audioStarts, screenshot: "egg-crack-sound-game-broken.png" }));
-socket.close();
+await page.close();
+await fixture.close();
+await browser.close();

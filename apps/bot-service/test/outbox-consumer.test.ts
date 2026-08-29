@@ -167,6 +167,41 @@ test("fake runtime gateway failure does not enqueue internal error details for T
   assert.equal(text.includes("SECRET"), false);
 });
 
+test("fake runtime automatic audit requests never create Telegram owner-control callbacks", async () => {
+  const previous = process.env.HUAI_AUTO_AUDIT_ENABLED;
+  process.env.HUAI_AUTO_AUDIT_ENABLED = "true";
+  try {
+    const store = new FakeBotServiceStore();
+    await store.recordGatewayExecutionResult({
+      request: {
+        roomId: "room-1",
+        taskId: "task-1",
+        attemptId: "attempt-audit-1",
+        actorId: "actor-1",
+        requestedBy: "user-1",
+        adapterType: "codex",
+        projectPath: "C:\\Dev\\HuAIChatroomSystem",
+        prompt: "수정 완료",
+        timeoutMs: 30_000,
+        idempotencyKey: "audit-test-idempotency",
+        createdAt: "2026-08-13T00:00:00.000Z"
+      },
+      status: "completed",
+      events: [],
+      occurredAt: "2026-08-13T00:00:01.000Z"
+    });
+
+    const audit = store.snapshot().outbox.find((row) => row.idempotencyKey.includes("telegram-audit:"));
+    assert.ok(audit);
+    assert.equal(audit.payload.ownerActionRedirect, true);
+    assert.equal("keyboard" in audit.payload, false);
+    assert.equal(JSON.stringify(audit.payload).includes("callback_data"), false);
+  } finally {
+    if (previous === undefined) delete process.env.HUAI_AUTO_AUDIT_ENABLED;
+    else process.env.HUAI_AUTO_AUDIT_ENABLED = previous;
+  }
+});
+
 test("marks outbox dead when max attempts is reached and masks bot tokens", async () => {
   const store = await seededOutboxStore("send me");
 
@@ -401,4 +436,3 @@ test("reports loop errors through onError", async () => {
   assert.equal(errors.length, 1);
   assert.equal(errors[0], "Bearer secret-token-failed");
 });
-

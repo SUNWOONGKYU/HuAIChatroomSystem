@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
+import { classifyTaskRisk, TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
 import { buildApprovedTelegramTaskPromptForTest, SupabaseBotServiceStore } from "../src/supabase-store.js";
 import { createNodeGitRunner, removeWorktree, worktreePathFor } from "../../local-gateway/src/worktree.js";
 
@@ -579,12 +579,12 @@ test("제안 단계 id 형태가 바뀌어도 작업 명세가 실행자에게 �
 // 인지부채 방지 퀴즈(Orca/Buzz 벤치마킹) — 완료 보고에 QUIZ 블록을 실어 달라는 지시가
 // 실행 프롬프트 끝에 항상 붙어야 한다. packages/supabase-runtime 의
 // extractTaskQuizFromEvents 가 이 마커를 그대로 찾는다.
-test("실행 프롬프트에는 항상 QUIZ_START/QUIZ_END 이해도 확인 지시가 함께 실린다", async () => {
+test("고위험 실행 프롬프트에는 QUIZ_START/QUIZ_END 이해도 확인 지시가 함께 실린다", async () => {
   const proposalId = "p_quizmarker0001";
   const taskId = "77777777-7777-4777-8777-777777777777";
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
-    jsonResponse(200, [{ payload: { proposalId, title: "테스트", rawText: "테스트 작업", purpose: "목적", scope: "범위", completionCriteria: "완료 기준" } }]),
+    jsonResponse(200, [{ payload: { proposalId, title: "운영 배포 설정 변경", rawText: "운영 배포 설정 변경", purpose: "목적", scope: "범위", completionCriteria: "완료 기준" } }]),
     jsonResponse(200, []),
     jsonResponse(201, [{ task_id: taskId }]),
     jsonResponse(201, [])
@@ -601,6 +601,14 @@ test("실행 프롬프트에는 항상 QUIZ_START/QUIZ_END 이해도 확인 지�
   const prompt = String(outboxInsert?.body?.[0]?.payload?.executionRequest?.prompt ?? "");
   assert.match(prompt, /QUIZ_START[\s\S]*QUIZ_END/, "완료 보고에 이해도 퀴즈를 요청하는 지시가 있어야 한다");
   assert.match(prompt, /"correct":0/);
+});
+
+test("위험도 분류는 조회·분석·설명과 단순 파일 변경을 low, 운영 영향 변경을 high로 판정한다", () => {
+  assert.equal(classifyTaskRisk("README.md를 수정하고 설명해줘"), "low");
+  assert.equal(classifyTaskRisk("현재 DB 상태를 조회하고 분석해줘"), "low");
+  assert.equal(classifyTaskRisk("배포 방법을 설명해줘"), "low");
+  assert.equal(classifyTaskRisk("운영 환경변수를 변경하고 배포해줘"), "high");
+  assert.equal(classifyTaskRisk("사용자 데이터를 삭제해줘"), "high");
 });
 
 // humanTaskStatus() 를 없애고 TASK_STATUS_META 를 단일 출처로 통일했다. 이 결함이 특히 나빴던
@@ -642,10 +650,10 @@ test("room facts(리더 판단 프롬프트)는 작업 상태를 raw 값이 아�
   assert.equal(prompt.includes("mid_approval_pending"), false, "raw snake_case 가 프롬프트에 새면 안 된다");
 });
 
-// 방장 제기 — 포럼 그룹은 주제마다 고정 바가 따로라, 그룹에 하나 고정해 둔 작업 현황판이
+// 방장 제기 — 포럼 그룹은 주제마다 고정 바가 따로라, 그룹에 하나 고정해 둔 협업 운영센터가
 // 다른 주제에서는 보이지 않았다. 그 주제에서 일을 시키고도 결과를 확인할 창구가 없었다.
-test("주제로 나가는 메시지가 있으면 그 주제에 현황판을 올려 고정한다", async () => {
-  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, []), jsonResponse(201, [])]);
+test("주제로 나가는 메시지가 있어도 고정 협업 운영센터를 자동 생성하지 않는다", async () => {
+  const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, [])]);
   const store = new SupabaseBotServiceStore({
     url: "https://example.supabase.co",
     serviceRoleKey: "service-role-key-for-test",
@@ -665,16 +673,10 @@ test("주제로 나가는 메시지가 있으면 그 주제에 현황판을 올�
   const inserted = calls.requests
     .filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url))
     .flatMap((request) => (Array.isArray(request.body) ? request.body : [request.body]));
-  const board = inserted.find((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:topic-board:"));
-
-  // 현황판 행은 본 배치와 따로 들어간다 — 같이 넣으면 두 번째 메시지부터 배치가 통째로 막힌다.
-  assert.ok(board, "그 주제에 현황판이 올라가지 않았다");
-  assert.equal(board.payload.messageThreadId, "613", "현황판이 다른 주제에 올라가면 소용이 없다");
-  assert.equal(board.payload.pinMessage, true, "고정하지 않으면 대화에 밀려 사라진다");
-  assert.match(JSON.stringify(board.payload.keyboard), /startapp=/, "현황판을 여는 버튼이 없다");
+  assert.equal(inserted.some((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:topic-board:")), false);
 });
 
-test("주제 없는 그룹에는 현황판을 따로 올리지 않는다", async () => {
+test("주제 없는 그룹에는 협업 운영센터를 따로 올리지 않는다", async () => {
   // 일반 그룹은 고정 바가 하나라 이미 고정해 둔 것으로 충분하다.
   const calls = makeSupabaseFetch([roomResolutionResponse(), jsonResponse(201, []), jsonResponse(201, [])]);
   const store = new SupabaseBotServiceStore({
@@ -699,16 +701,14 @@ test("주제 없는 그룹에는 현황판을 따로 올리지 않는다", async
   assert.equal(inserted.some((row: any) => String(row?.idempotency_key ?? "").startsWith("telegram:topic-board:")), false);
 });
 
-// 라이브 결함 회귀 — 현황판 행을 본 배치에 같이 넣었더니, 그 주제의 두 번째 메시지부터
+// 라이브 결함 회귀 — 협업 운영센터 행을 본 배치에 같이 넣었더니, 그 주제의 두 번째 메시지부터
 // outbox-idempotency-conflict 로 처리 전체가 실패했다(제안 메시지조차 안 나갔다).
-// 배치 삽입은 "행 하나라도 이미 있으면 전체 실패"이고, 현황판 행은 주제당 하나뿐이라
+// 배치 삽입은 "행 하나라도 이미 있으면 전체 실패"이고, 협업 운영센터 행은 주제당 하나뿐이라
 // 두 번째부터는 반드시 이미 존재한다.
-test("현황판 행이 이미 있어도 그 주제의 다음 메시지가 막히지 않는다", async () => {
+test("고정 협업 운영센터를 제거해도 그 주제의 다음 메시지는 정상 처리된다", async () => {
   const calls = makeSupabaseFetch([
     roomResolutionResponse(),
-    // 현황판 행 단건 삽입 → 이미 있음.
-    jsonResponse(409, { message: "duplicate key" }),
-    // 본 배치는 그대로 성공해야 한다.
+    // 본 배치만 성공해야 한다.
     jsonResponse(201, [])
   ]);
   const store = new SupabaseBotServiceStore({
@@ -728,9 +728,8 @@ test("현황판 행이 이미 있어도 그 주제의 다음 메시지가 막히
   );
 
   const posts = calls.requests.filter((request) => request.method === "POST" && /huai_outbox$/.test(request.url));
-  assert.equal(posts.length, 2, "현황판 행과 본 배치는 따로 들어가야 한다");
-  const batch = posts[posts.length - 1]?.body;
-  assert.equal(Array.isArray(batch) && batch.length, 1, "본 배치에 현황판 행이 섞이면 안 된다");
+  assert.equal(posts.length, 1, "고정 협업 운영센터 행을 만들면 안 된다");
+  const batch = posts[0]?.body;
   assert.equal(Array.isArray(batch) && batch[0].idempotency_key, "telegram:proposal:p_1");
 });
 

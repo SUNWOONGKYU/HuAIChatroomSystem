@@ -1,5 +1,6 @@
 import {
   isAiAdapterType,
+  normalizeAiAdapterType,
   type AiAdapterType,
   type TelegramBotRole
 } from "../../../packages/contracts/src/index.js";
@@ -216,7 +217,7 @@ function toLoadedGateway(row: GatewayInstanceRow): LoadedGatewayInstance {
     gatewayId: row.gateway_id,
     status: assertGatewayStatus(row.status),
     allowedProjectRoots: parseStringArray(row.allowed_project_roots),
-    allowedAdapters: parseStringArray(row.allowed_adapters).filter(isAiAdapterType)
+    allowedAdapters: parseStringArray(row.allowed_adapters).filter(isAiAdapterType).map(normalizeAiAdapterType)
   };
 }
 
@@ -282,8 +283,8 @@ function assertBotRole(value: string): TelegramBotRole {
 }
 
 function assertAdapterType(value: string): AiAdapterType {
-  if (["orchestrator", "claude_code", "codex", "auditor"].includes(value)) {
-    return value as AiAdapterType;
+  if (["orchestrator", "claude_code", "codex", "gemini_web", "antigravity", "auditor"].includes(value)) {
+    return value === "antigravity" ? "gemini_web" : value as AiAdapterType;
   }
   throw new Error("invalid-ai-actor-adapter-type");
 }
