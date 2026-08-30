@@ -4,7 +4,7 @@ import { createTelegramWebhookHttpServer } from "../src/http.js";
 import { FakeBotServiceStore } from "../src/fake-store.js";
 import { processTelegramInboundWithPersistence } from "../src/persistence.js";
 import { makeTelegramUpdateIdempotencyKey, type TelegramWebhookPorts } from "../src/index.js";
-import { type TelegramInboundQueueMessage, type TelegramUpdateEnvelope } from "../../../packages/contracts/src/index.js";
+import { type TelegramInboundQueueMessage } from "../../../packages/contracts/src/index.js";
 
 test("accepts webhook over HTTP and turns queued command into outbox", async () => {
   const queued: TelegramInboundQueueMessage[] = [];

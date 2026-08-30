@@ -31,6 +31,9 @@ export type LocalBotServiceRuntime = {
   // 실행 중 표시("…이 입력 중")를 유지하려면 지금 무엇이 도는지 알아야 한다.
   // 게이트웨이가 리스한 local_gateway 행이 곧 실행 중인 것이라 별도 상태를 만들지 않는다.
   inFlightExecutions?: { listInFlightExecutions(): Promise<InFlightExecution[]> };
+  // /readyz 가 Supabase 도달성을 확인할 때 쓰는 가벼운 핑. local(비-Supabase) 모드는
+  // 확인할 의존성 자체가 없으므로 undefined — 그 항목은 항상 통과로 본다.
+  pingSupabase?: () => Promise<void>;
 };
 
 export type MiniAppDecisionPollingSupport = {
@@ -65,6 +68,9 @@ export function buildLocalBotServiceRuntime(env: NodeJS.ProcessEnv = process.env
 
   return {
     config,
+    // updates/inboundQueue 아래 메서드들은 인터페이스 계약(TelegramWebhookPorts)이
+    // Promise 반환을 요구한다 — local 모드는 메모리 배열/Set 조작뿐이라 await 할
+    // 대상이 없어도 async 를 유지한다.
     webhookPorts: {
       updates: {
         async recordUpdateOnce(envelope, _rawUpdate, status): Promise<TelegramUpdateReceipt> {
@@ -106,6 +112,8 @@ export function buildSupabaseBotServiceRuntime(env: NodeJS.ProcessEnv = process.
     config,
     webhookPorts: {
       updates: store,
+      // TelegramInboundQueue 계약이 Promise<void> 반환을 요구한다 — 메모리
+      // 배열 push 뿐이라 await 할 대상이 없어도 async 를 유지한다.
       inboundQueue: {
         async enqueue(message) {
           queue.push(message);
@@ -125,7 +133,8 @@ export function buildSupabaseBotServiceRuntime(env: NodeJS.ProcessEnv = process.
       return drained;
     },
     storeKind: "supabase",
-    outboxStore: store
+    outboxStore: store,
+    pingSupabase: () => store.ping()
   };
 }
 
@@ -165,6 +174,8 @@ export async function buildSupabaseBotServiceRuntimeFromDatabase(
     config: loaded.config,
     webhookPorts: {
       updates: store,
+      // TelegramInboundQueue 계약이 Promise<void> 반환을 요구한다 — 메모리
+      // 배열 push 뿐이라 await 할 대상이 없어도 async 를 유지한다.
       inboundQueue: {
         async enqueue(message) {
           queue.push(message);
@@ -210,7 +221,8 @@ export async function buildSupabaseBotServiceRuntimeFromDatabase(
       executionDefaultsByChatId,
       persistence: store
     },
-    inFlightExecutions: store
+    inFlightExecutions: store,
+    pingSupabase: () => store.ping()
   };
 }
 export function buildLocalBotServiceConfig(env: NodeJS.ProcessEnv = process.env): BotServiceConfig {

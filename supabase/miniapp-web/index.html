@@ -788,6 +788,14 @@
           pActionRow.appendChild(pBtn);
         });
         card.appendChild(pActionRow);
+        var pHint = document.createElement("p");
+        pHint.className = "hint";
+        // 완료 단계 [보완 요청]과 이름이 비슷해 보이지만 동작이 다르다 — 이 "수정"은
+        // 제안을 보류만 하고 사유를 orchestrator 로 전달하지 않는다(위 submitProposalDecision
+        // 주석 참고, 팀장님 지시로 이번 범위 밖). 방장이 누르기 전에 이 차이를 알도록,
+        // 클릭 후에만 뜨는 decisionSuccessNote 안내와 별도로 버튼 바로 아래 상시 문구를 둔다.
+        pHint.textContent = "※ \"수정\"은 제안을 보류만 합니다. 사유는 자동 전달되지 않으니 원하는 수정 내용을 Telegram 방에 직접 말씀해주세요.";
+        card.appendChild(pHint);
         card.appendChild(pNote);
       } else {
         var hint = document.createElement("p");
@@ -1326,7 +1334,7 @@
       return "보완 요청을 전달했습니다. 적어주신 사유가 방과 담당자에게 함께 전달됩니다.";
     }
     if (action === "request_revision" && kind === "proposal") {
-      return "수정 요청이 기록되었습니다. 보완 내용은 협업 운영센터에서 확인하고 처리합니다.";
+      return "이 제안은 보류됩니다. 수정 사유는 자동으로 전달되지 않으니, 원하시는 수정 내용을 Telegram 방에 직접 말씀해주세요.";
     }
     return (res && res.note) || "결정이 기록되었습니다.";
   }

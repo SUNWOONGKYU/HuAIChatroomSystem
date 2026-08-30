@@ -16,6 +16,7 @@ import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyOperationEnvFile } from "./operation-env-loader.mjs";
+import { startLogRotationWatcher } from "./log-rotation.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const LOG_DIR = join(ROOT, "logs");
@@ -53,8 +54,13 @@ async function main() {
 
   const children = SERVICES.map((service) => superviseService(service));
 
+  // 이 감독자는 부팅 후 계속 떠 있는 상주 프로세스라 로그가 한 번 열리면 끝없이
+  // 늘어난다. 주기적으로 검사해 회전한다(one-shot 호출과 달리 재시작을 기다리지 않는다).
+  const logWatcher = startLogRotationWatcher(SERVICES.map((service) => join(LOG_DIR, `${service.name}.log`)));
+
   const shutdown = () => {
     for (const child of children) child.stop();
+    logWatcher.stop();
     process.exit(0);
   };
   process.once("SIGINT", shutdown);

@@ -1,0 +1,37 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # package.json 의 engines.node ">=24" 에 맞춘다.
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # verify:gate47(screenshot 통합 테스트) 와 verify:game-browser 가 실제
+      # playwright chromium 을 띄운다 — 없으면 그 서브테스트만 개별 실패한다.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # verify:all(= verify:operation-ready) 은 오프라인 게이트 전체를 순차 실행한다.
+      # 실 Supabase/Telegram 네트워크 접속이 필요한 라이브 스크립트(--live 옵트인,
+      # apply-telegram-*, check-telegram-* 등)는 이 체계 밖이라 CI 에서 안 돈다.
+      - name: Run verify:all
+        run: npm run verify:all

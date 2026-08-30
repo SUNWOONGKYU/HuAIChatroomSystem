@@ -3,6 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts"
+  "dependencies": {
+    "@hu-ai/contracts": "*",
+    "@hu-ai/local-gateway": "*",
+    "@hu-ai/orchestrator": "*",
+    "@hu-ai/supabase-runtime": "*",
+    "@hu-ai/telegram-ui": "*",
+    "@hu-ai/workflow": "*"
+  }
 }

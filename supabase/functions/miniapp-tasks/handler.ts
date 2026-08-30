@@ -221,7 +221,10 @@ async function handleReportRequest(
 // index.ts 의 buildDeps() 는 이 결과에 authenticate/checkRoomAccess 를 얹어 TasksHandlerDeps
 // 전체를 완성한다(그쪽은 _shared/miniapp-auth.ts, _shared/membership.ts 를 그대로 쓴다 — 둘 다
 // Deno.* 를 참조하므로 이 파일에서는 안 건드린다).
-export type TasksQueryDeps = Pick<TasksHandlerDeps, "fetchTasksForRoom" | "fetchArtifactsForTasks">;
+export type TasksQueryDeps = Pick<
+  TasksHandlerDeps,
+  "fetchTasksForRoom" | "fetchArtifactsForTasks" | "fetchReport" | "fetchReportsForTasks"
+>;
 
 export function buildDepsFromClient(supabase: MinimalSupabaseClient): TasksQueryDeps {
   return {

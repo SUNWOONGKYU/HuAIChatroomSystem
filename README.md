@@ -19,7 +19,7 @@ HuAI Collab Chatroom System은 Telegram 비공개 프로젝트방을 사람과 �
   별도 승인 없이 자동으로 시작합니다(아래 "승인 카테고리" 참고).
 - CodexBot / ClaudeBot: 실제 작업 실행과 결과 보고
 - AuditBot: 의미 있는 결과물의 독립 검증. 작업자와 다른 엔진이 맡습니다.
-- bot-service: Telegram 수신(기본 polling, 공개 URL 불필요), 권한 확인, update 멱등 처리, outbox 발신
+- bot-service: Telegram 수신(코드 자체 기본값은 webhook이나 운영 템플릿 `.env.operation.example`은 polling으로 설정해 배포, 공개 URL 불필요), 권한 확인, update 멱등 처리, outbox 발신
 - Supabase: rooms, members, tasks, events, artifacts, verifications, outbox, 보고 전문, 보관 장부
 - local-gateway: 작업 PC에서 허용된 프로젝트 폴더와 adapter만 실행. 방마다 한 프로세스.
 - 협업 운영센터(Mini App): 작업·산출물·보고 전문을 보고 완료를 승인하는 화면
@@ -134,7 +134,7 @@ node scripts/verify-no-secrets.mjs
 
 ## 상태
 
-Telegram 기반 핵심 운영 경로와 `/tasks`, `/task`, `/search`, `/trace` 조회 흐름은 자동 검증을 통과했습니다. 실제 서비스 운영 시에는 Supabase, bot-service, local-gateway, 작업 PC 인증 상태를 함께 기동해야 합니다. Telegram 수신은 기본이 polling이라 공개 URL이 필요 없고, 공개 도메인을 안정적으로 열어둘 수 있는 배포라면 webhook(`BOT_SERVICE_RECEIVE_MODE=webhook`)으로 전환할 수 있습니다. GitHub 배포 전에는 `GITHUB_RELEASE_CHECKLIST.md`를 확인합니다.
+Telegram 기반 핵심 운영 경로와 `/tasks`, `/task`, `/search`, `/trace` 조회 흐름은 자동 검증을 통과했습니다. 실제 서비스 운영 시에는 Supabase, bot-service, local-gateway, 작업 PC 인증 상태를 함께 기동해야 합니다. Telegram 수신은 코드 자체 기본값이 webhook이지만 운영 템플릿(`.env.operation.example`)은 `BOT_SERVICE_RECEIVE_MODE=polling`으로 설정해 배포하므로 공개 URL이 필요 없고, 공개 도메인을 안정적으로 열어둘 수 있는 배포라면 webhook(`BOT_SERVICE_RECEIVE_MODE=webhook`)으로 전환할 수 있습니다. GitHub 배포 전에는 `GITHUB_RELEASE_CHECKLIST.md`를 확인합니다.
 
 자세한 구조는 `docs/시스템_관계도.md`, 실행 흐름은 `docs/작업_흐름도.md` 를 보면 됩니다.
 저장소 루트의 SVG/PNG 두 쌍은 이 두 md와 같은 날짜(아래 최신 갱신일)로 맞춰 다시 그린

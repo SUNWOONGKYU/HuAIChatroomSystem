@@ -37,3 +37,17 @@ logs/
 
 # git worktree 병렬 변형 실행이 만드는 작업 디렉터리 (apps/local-gateway/src/worktree.ts)
 .worktrees/
+
+# 저장소 루트에 쌓이는 1회성 작업 부산물 — 결함 2(시크릿 스캔이 루트를 안 봄) 대응.
+# 실제로 outbox_all.json/tax_outbox2.json 에 진짜 telegram chat_id 와 승인/작업
+# 전문이 들어 있었다. 루트에서만 막는다(선행 슬래시로 고정) — supabase/miniapp-web/
+# 아래 정식 산출물(browser-test.mjs, *-preview.png 등)까지 가리면 안 되기 때문이다.
+/outbox_all.json
+/tax_outbox2.json
+/audit_msg.txt
+/retest.txt
+/tax_report2.txt
+/deploy-test.html
+/*.browser-test.mjs
+/star-dodge-game*.html
+/_scratch/

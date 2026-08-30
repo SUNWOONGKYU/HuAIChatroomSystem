@@ -15,7 +15,10 @@ REM Node writes Korean to the log. Without this it lands as mojibake and the log
 REM unreadable to the person who needs it most - the one investigating a bad night.
 set PYTHONIOENCODING=utf-8
 set NODE_OPTIONS=
-cd /d C:\Dev\HuAIChatroomSystem
+REM %~dp0 is this .cmd file's own directory (scripts\), always ending in a
+REM backslash - ".." from there is the repo root. A hardcoded developer-PC
+REM path here would silently point at nothing on any other checkout.
+cd /d "%~dp0.."
 
 if not exist "C:\tmp\huai-logs" mkdir "C:\tmp\huai-logs"
 call :run >> "C:\tmp\huai-logs\nightly-archive.log" 2>&1

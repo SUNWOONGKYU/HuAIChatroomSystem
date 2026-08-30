@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "description": "Telegram-based human-AI collaboration room orchestrator.",
   "type": "module",
-  "packageManager": "pnpm@10.0.0",
+  "packageManager": "npm@10.8.2",
   "scripts": {
     "verify:game-browser": "node scripts/verify-game-browser.mjs",
     "verify:structure": "node scripts/verify-structure.mjs",
@@ -126,7 +126,35 @@
     "verify:gate48": "npm run verify:task-quiz && npm run verify:gateway-report-rendering && npm run verify:supabase-store",
     "verify:artifact-promotion": "npm run build && node --test dist/apps/local-gateway/test/artifact-promotion.test.js",
     "verify:gate49": "npm run verify:artifact-promotion && npm run verify:artifact-publisher && npm run verify:gemini-web-adapter",
-    "verify:gemini-web-adapter": "node --test scripts/gemini-web-adapter.test.mjs"
+    "verify:gemini-web-adapter": "node --test scripts/gemini-web-adapter.test.mjs",
+    "lint": "eslint .",
+    "verify:log-rotation": "node --test scripts/log-rotation.test.mjs",
+    "verify:room-backup": "npm run build && node --test dist/packages/supabase-runtime/test/room-backup.test.js scripts/verify-recovery-snapshot-rehearsal.test.mjs",
+    "verify:bot-service-readyz": "npm run build && node --test dist/apps/bot-service/test/readiness.test.js dist/apps/bot-service/test/webhook-registration-check.test.js dist/apps/bot-service/test/http-health.test.js",
+    "verify:stale-proposal-scheduling": "npm run build && node --test dist/apps/bot-service/test/stale-proposal-cleanup.test.js",
+    "verify:secrets-patterns": "node --test scripts/verify-no-secrets.test.mjs",
+    "verify:multi-bot-mention-race": "npm run build && node --test dist/apps/bot-service/test/multi-bot-mention-race.test.js",
+    "verify:mini-supabase-fake": "npm run build && node --test dist/apps/bot-service/test/mini-supabase-fake.test.js",
+    "verify:miniapp-decision-poller": "npm run build && node --test dist/apps/bot-service/test/miniapp-decision-poller.test.js",
+    "verify:synthetic-leader-planning-webhook": "npm run build && node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js",
+    "verify:telegram-polling": "npm run build && node --test dist/apps/bot-service/test/telegram-polling.test.js",
+    "verify:ai-adapters": "npm run build && node --test dist/packages/ai-adapters/test/index.test.js",
+    "verify:contracts": "npm run build && node --test dist/packages/contracts/test/index.test.js",
+    "verify:owner-action-redirect": "npm run build && node --test dist/packages/orchestrator/test/owner-action-redirect.test.js",
+    "verify:outbox-lease-status": "npm run build && node --test dist/packages/supabase-runtime/test/outbox-lease-status.test.js",
+    "verify:outbox-mark-retry": "npm run build && node --test dist/packages/supabase-runtime/test/outbox-mark-retry.test.js",
+    "verify:gate50": "npm run verify:multi-bot-mention-race && npm run verify:mini-supabase-fake && npm run verify:miniapp-decision-poller && npm run verify:synthetic-leader-planning-webhook && npm run verify:telegram-polling && npm run verify:ai-adapters && npm run verify:contracts && npm run verify:owner-action-redirect && npm run verify:outbox-lease-status && npm run verify:outbox-mark-retry",
+    "verify:egg-game": "node --test supabase/miniapp-web/egg-game.test.mjs",
+    "verify:quiz-gate": "node --test supabase/miniapp-web/quiz-gate.test.mjs",
+    "verify:reason-input": "node --test supabase/miniapp-web/reason-input.test.mjs",
+    "verify:resolve-room-id": "node --test supabase/miniapp-web/resolve-room-id.test.mjs",
+    "verify:gate51": "npm run verify:egg-game && npm run verify:quiz-gate && npm run verify:reason-input && npm run verify:resolve-room-id",
+    "verify:gate52": "npm run verify:bot-service-readyz && npm run verify:log-rotation && npm run verify:room-backup && npm run verify:stale-proposal-scheduling && npm run verify:secrets-patterns && npm run verify:create-room-backup && npm run verify:room-backup-scheduling",
+    "backup:rooms": "npm run build && node --env-file=.env.operation.local scripts/create-room-backup.mjs",
+    "verify:create-room-backup": "npm run build && node --test scripts/create-room-backup.test.mjs",
+    "verify:room-backup-scheduling": "npm run build && node --test dist/apps/bot-service/test/room-backup-scheduler.test.js",
+    "verify:supabase-functions": "node scripts/verify-supabase-functions.mjs && node --test scripts/verify-supabase-functions.test.mjs",
+    "verify:package-boundaries": "node --test scripts/verify-package-boundaries.test.mjs"
   },
   "workspaces": [
     "apps/*",
@@ -137,7 +165,10 @@
   },
   "devDependencies": {
     "@types/node": "24.2.0",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "eslint": "10.9.1",
+    "@typescript-eslint/parser": "8.68.0",
+    "@typescript-eslint/eslint-plugin": "8.68.0"
   },
   "dependencies": {
     "grammy": "^1.45.1",

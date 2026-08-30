@@ -69,7 +69,7 @@ export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxD
     this.failedUpdates.push({ idempotencyKey, error: maskSensitiveText(error) });
   }
 
-  async leasePending(limit: number, _leaseUntil: string): Promise<OutboxRecord[]> {
+  async leasePending(limit: number): Promise<OutboxRecord[]> {
     const rows = this.outbox
       .filter((row) => row.status === "pending" || row.status === "retry_pending")
       .slice(0, limit);
@@ -83,7 +83,7 @@ export class FakeBotServiceStore implements OrchestratorPersistencePort, OutboxD
     return leased;
   }
 
-  async leasePendingLocalGateway(limit: number, _leaseUntil: string): Promise<OutboxRecord[]> {
+  async leasePendingLocalGateway(limit: number): Promise<OutboxRecord[]> {
     const rows = this.outbox
       .filter((row) => (row.status === "pending" || row.status === "retry_pending") && row.target.kind === "local_gateway")
       .slice(0, limit);

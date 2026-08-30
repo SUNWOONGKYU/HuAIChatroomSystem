@@ -156,13 +156,23 @@ npm run build
    | `BOT_SERVICE_CLAUDE_BOT_TOKEN` | ClaudeBot 토큰 |
    | `BOT_SERVICE_CODEX_BOT_TOKEN` | CodexBot 토큰 |
    | `BOT_SERVICE_AUDITOR_BOT_TOKEN` | AuditBot 토큰 |
+   | `BOT_SERVICE_LEADER_BOT_USERNAME` | 5단계에서 만든 LeaderBot의 실제 username(예: `my_leader_chatroom_bot`) |
+   | `BOT_SERVICE_CLAUDE_BOT_USERNAME` | 5단계에서 만든 ClaudeBot의 실제 username |
+   | `BOT_SERVICE_CODEX_BOT_USERNAME` | 5단계에서 만든 CodexBot의 실제 username |
+   | `BOT_SERVICE_AUDITOR_BOT_USERNAME` | 5단계에서 만든 AuditBot의 실제 username |
+
+   ⚠️ `BOT_SERVICE_*_BOT_USERNAME` 4개는 템플릿에 `your_leader_bot`처럼 예시값이 이미
+   채워져 있어서 지나치기 쉽지만, 방에서 `@my_leader_chatroom_bot` 처럼 멘션했을 때 봇이
+   자기를 부른 건지 판단하는 데 이 값을 그대로 씁니다. 5단계에서 실제로 만든 봇
+   username과 다르면 멘션을 인식하지 못합니다 — 반드시 실제 값으로 바꿉니다.
 
 5. `BOT_SERVICE_RECEIVE_MODE=polling` 줄이 이미 있는지 확인합니다(없으면 추가). 이 값이면
    공개 인터넷 주소·터널 설정 없이 그냥 이 PC에서 텔레그램으로 직접 연결됩니다 — 초보자에게
    가장 간단한 방식입니다.
 6. `LOCAL_GATEWAY_ALLOWED_ROOTS`를 2단계에서 받은 폴더 경로로 맞춰둡니다(기본값이 이미
    `C:\Dev\HuAIChatroomSystem`이면 그대로 두면 됩니다. 다른 경로에 풀었다면 그 경로로 바꿉니다).
-7. 저장하고 메모장을 닫습니다.
+7. 저장하고 메모장을 닫습니다. (`LOCAL_GATEWAY_ID`는 아직 건드리지 않습니다 — 8단계에서
+   방을 등록한 뒤 그 결과값으로 채웁니다.)
 
 ⚠️ 이 파일(`.env.operation.local`)은 절대 GitHub에 올리거나 남에게 보내면 안 됩니다.
 비밀번호나 다름없는 값들이 들어있습니다. (`.gitignore`에 이미 등록돼 있어서 실수로
@@ -191,6 +201,19 @@ git에 올라가지는 않습니다.)
 3. 화면에 SQL 문장들이 출력됩니다. 이 전체를 복사해서 Supabase SQL Editor(4단계에서 썼던
    그 화면)에 새 쿼리로 붙여넣고 Run을 누릅니다.
 
+4. **이 PC의 `LOCAL_GATEWAY_ID` 채우기(중요 — 안 하면 10단계에서 게이트웨이가 바로 죽습니다)**:
+   방금 출력된 SQL 마지막 줄(`commit;`) 바로 위 줄을 보면 이렇게 생겼습니다(실제 값은
+   다릅니다):
+
+   ```sql
+   insert into huai_gateway_instances (gateway_id, room_id, machine_label, allowed_project_roots, allowed_adapters, status) values ('c7fc490d-3390-43a6-bb74-fd1e2d23b972'::uuid, ...
+   ```
+
+   `values (` 바로 뒤, 여는 작은따옴표(`'`)와 닫는 작은따옴표(`'`) 사이의 UUID
+   (위 예시에서 `c7fc490d-3390-43a6-bb74-fd1e2d23b972`)가 이 방의 gateway_id입니다. 이
+   값을 복사해서 `.env.operation.local`을 다시 열고 `LOCAL_GATEWAY_ID=` 뒤에 붙여넣습니다
+   (템플릿 기본값 `00000000-0000-4000-8000-000000000000`을 그대로 두면 안 됩니다).
+
 방을 **여러 개** 등록할 계획이면(봇 4개는 공용, 방마다 room-id·chat-id만 다름) 매번 SQL을
 손으로 붙여넣는 대신 `scripts/onboard-telegram-room.mjs`를 씁니다. 인자는 위와 동일하고,
 Supabase에 곧바로 API로 등록합니다(먼저 확인만 하려면 `--dry-run` 추가):
@@ -198,6 +221,11 @@ Supabase에 곧바로 API로 등록합니다(먼저 확인만 하려면 `--dry-r
 ```powershell
 node scripts/onboard-telegram-room.mjs --room-id <room-id> --chat-id <chat-id> --owner-id <owner-id> --project-path "C:\Dev\HuAIChatroomSystem"
 ```
+
+이 명령은 실행 결과에 `gateway_id=<uuid>` 줄을 직접 출력합니다 — SQL에서 찾을 필요 없이
+이 값을 그대로 `LOCAL_GATEWAY_ID`에 복사하면 됩니다. 방을 여러 개 운영하면 방마다
+gateway_id가 다르므로(게이트웨이 프로세스 하나는 방 하나만 맡습니다), 두 번째 방부터는
+`LOCAL_GATEWAY_EXTRA_INSTANCES`(`.env.operation.example` 참고)로 게이트웨이를 추가합니다.
 
 ## 9단계 — Claude Code / Codex 로그인
 
@@ -315,6 +343,8 @@ node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js
 | 봇이 아무 반응이 없다 | 10단계의 두 PowerShell 창이 열려 있는지 확인. 닫혀 있으면 다시 실행 |
 | `npm install`에서 멈추거나 에러 | 인터넷 연결 확인 후 `npm install` 다시 실행. 그래도 안 되면 Node.js 버전을 v24 LTS로 재설치 |
 | 창을 열자마자 바로 꺼진다(에러) | `.env.operation.local`에 빈 값이 없는지 확인(특히 4개 봇 토큰, Supabase URL/키) |
+| local-gateway 창이 `missing-env:LOCAL_GATEWAY_ID`를 출력하고 바로 꺼진다 | 8단계에서 `LOCAL_GATEWAY_ID`를 `.env.operation.local`에 채우지 않았습니다. 8단계 4번을 따라 실제 gateway_id 값을 채웁니다 |
+| 방에서 봇을 멘션해도 아무 반응이 없다(다른 항목은 다 정상) | 7단계에서 `BOT_SERVICE_*_BOT_USERNAME` 값을 5단계에서 만든 실제 봇 username으로 바꿨는지 확인합니다. 템플릿 예시값(`your_leader_bot` 등)이 그대로 남아 있으면 멘션을 인식하지 못합니다 |
 | "봇 여러 개가 같은 토큰" 비슷한 에러 | 5단계에서 봇 4개가 진짜 서로 다른 토큰인지 확인 |
 | 승인 버튼을 눌러도 반응이 늦다 | 정상입니다 — 실제 AI 실행은 몇 초~몇 분 걸립니다. 방에 "⏳ 작업 중" 표시가 주기적으로 올라옵니다 |
 | Supabase SQL 실행에서 에러 | `supabase/schema.sql` 전체를 빠짐없이 붙여넣었는지 확인(일부만 붙여넣으면 실패) |

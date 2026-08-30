@@ -93,7 +93,7 @@ assert.equal(broken.audioStarts, 2, "each egg tap must start one sound");
 assert.equal(broken.scoreText, "🥚 1개", "score did not increment when the egg fully broke");
 
 const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-await writeFile(new URL("./egg-game-broken.png", import.meta.url), Buffer.from(shot.data, "base64"));
+await writeFile(new URL("./_task-artifacts/egg-game-broken.png", import.meta.url), Buffer.from(shot.data, "base64"));
 
 await tap("#reset");
 assert.equal(await evaluate(`document.querySelector('#egg').dataset.stage`), "0");

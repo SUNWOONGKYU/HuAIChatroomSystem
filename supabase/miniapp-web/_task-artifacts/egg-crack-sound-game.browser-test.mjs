@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
-import { startBrowserGameFixture } from "./browser-test-fixture.mjs";
+import { startBrowserGameFixture } from "../browser-test-fixture.mjs";
 import { chromium } from "playwright";
 
-const fixture = await startBrowserGameFixture({ envName: "EGG_GAME_URL", fileName: "egg-crack-sound-game.html" });
+const fixture = await startBrowserGameFixture({ envName: "EGG_GAME_URL", fileName: "_task-artifacts/egg-crack-sound-game.html" });
 const gameUrl = fixture.url;
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext();

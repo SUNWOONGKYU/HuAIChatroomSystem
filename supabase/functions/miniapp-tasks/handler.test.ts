@@ -24,7 +24,10 @@ function makeDeps(tasks: TaskRow[]): TasksHandlerDeps {
     authenticate: async () => ({ ok: true, telegramUserId: "111" }),
     checkRoomAccess: async (roomId) => ({ ok: true, room: { roomId, purpose: "테스트 방" }, viewerRole: "human_member" }),
     fetchArtifactsForTasks: async () => ({ data: [] }),
-    fetchTasksForRoom: async () => ({ data: tasks })
+    fetchTasksForRoom: async () => ({ data: tasks }),
+    // 이 테스트 파일은 hint 필드 배선만 본다 — 보고서 조회 경로는 다루지 않는다.
+    fetchReport: async () => ({ data: undefined }),
+    fetchReportsForTasks: async () => ({ data: [] })
   };
 }
 

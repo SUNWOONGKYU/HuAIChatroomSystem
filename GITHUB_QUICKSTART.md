@@ -58,18 +58,32 @@ BOT_SERVICE_LEADER_BOT_TOKEN=
 BOT_SERVICE_CLAUDE_BOT_TOKEN=
 BOT_SERVICE_CODEX_BOT_TOKEN=
 BOT_SERVICE_AUDITOR_BOT_TOKEN=
+BOT_SERVICE_LEADER_BOT_USERNAME=
+BOT_SERVICE_CLAUDE_BOT_USERNAME=
+BOT_SERVICE_CODEX_BOT_USERNAME=
+BOT_SERVICE_AUDITOR_BOT_USERNAME=
 BOT_SERVICE_EXECUTION_TIMEOUT_MS=900000
 LOCAL_GATEWAY_MAX_RUNTIME_MS=900000
 LOCAL_GATEWAY_LEASE_MS=960000
-GEMINI_WEB_SESSION_SCRIPT=C:\Users\home\.codex\skills\웹세션-자동화\session.js
+LOCAL_GATEWAY_ALLOWED_ROOTS=
+LOCAL_GATEWAY_ID=
+GEMINI_WEB_SESSION_SCRIPT=<YOUR_HOME>\.codex\skills\웹세션-자동화\session.js
 GEMINI_WEB_CHAT_URL=
-GEMINI_WEB_BRIDGE_ENTRYPOINT=C:\Dev\HuAIChatroomSystem\scripts\gemini-web-adapter.mjs
+GEMINI_WEB_BRIDGE_ENTRYPOINT=<YOUR_PROJECT_ROOT>\scripts\gemini-web-adapter.mjs
 LOCAL_GATEWAY_ALLOWED_ADAPTERS=codex,claude_code,gemini_web,antigravity
 ```
 
 `BOT_SERVICE_RECEIVE_MODE`를 비우거나 `webhook`으로 두면 기본값이 webhook으로 바뀌는데,
 그때만 `BOT_SERVICE_PUBLIC_BASE_URL`(공개 HTTPS 주소)이 필요합니다. polling은 이 값 자체가
 필요 없습니다.
+
+`BOT_SERVICE_*_BOT_USERNAME`은 실제로 BotFather에서 만든 봇 username과 반드시 같아야
+합니다(방에서 `@username` 멘션을 인식하는 데 그대로 쓰입니다) — 템플릿의 예시값
+(`your_leader_bot` 등)을 그대로 두면 멘션이 인식되지 않습니다.
+
+`LOCAL_GATEWAY_ID`는 `supabase-store.ts`의 `requiredEnv`가 부팅 시 강제하는 값입니다
+(없으면 local-gateway가 `missing-env:LOCAL_GATEWAY_ID`로 즉시 죽습니다). 아래 4단계에서
+방을 시딩할 때 나오는 `gateway_id` 값을 그대로 씁니다.
 
 운영 기본 실행 제한은 15분입니다. 더 긴 작업은 작은 단위로 나누는 것이 기본 원칙입니다.
 
@@ -83,6 +97,11 @@ node scripts/generate-supabase-room-seed.mjs
 ```
 
 3. 생성된 SQL을 검토한 뒤 Supabase에 적용합니다.
+4. 생성된 SQL의 `huai_gateway_instances` insert 문에 있는 `gateway_id` 값(또는
+   `node scripts/onboard-telegram-room.mjs`를 쓴다면 그 출력의 `gateway_id=<uuid>` 줄)을
+   복사해 `.env.operation.local`의 `LOCAL_GATEWAY_ID`에 넣습니다. 이 값이 비어 있으면
+   local-gateway가 부팅 시 `missing-env:LOCAL_GATEWAY_ID`로 즉시 종료합니다
+   (`apps/local-gateway/src/supabase-store.ts`의 `requiredEnv`).
 
 저장 원칙:
 
@@ -135,6 +154,14 @@ LeaderBot은 사람 말을 아래 유형으로 분류합니다. 사람끼리 하
 
 Telegram 사진/파일 caption과 답장 대상 메시지는 라우터가 읽습니다. 단순 새 메시지로 `진행해`만 쓰면 어느 작업인지 알 수 없으므로, 작업 메시지에 답장하거나 `proposal_id/task_id`를 붙입니다.
 
+"필요한 정보를 되묻습니다"는 화면에 실제로 이렇게 나타납니다(코드 그대로):
+
+- `진행해`, `그거 해`처럼 답장 대상 없이 새 메시지로만 보내면:
+  > 어느 작업을 이어갈지 확인이 필요합니다. task_id 또는 proposal_id를 붙여 다시 말하거나, 해당 작업 메시지에 답장해 주세요.
+- `코덱스에게 작업시켜`처럼 AI만 지정하고 시킬 내용이 없으면:
+  > CodexBot에게 넘길 작업 내용을 함께 적어주세요.
+  > 예: @leader_chatroom_bot CodexBot에게 현재 오류 원인을 찾아 수정해줘
+
 ## 7. 서비스 실행
 
 운영 환경변수를 로드한 상태에서 다음 두 서비스를 실행합니다.
@@ -154,9 +181,17 @@ node scripts/restart-operation-services-from-live-env.mjs
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8787/healthz
+Invoke-RestMethod http://127.0.0.1:8787/readyz
 Invoke-RestMethod http://127.0.0.1:8797/healthz
 Invoke-RestMethod http://127.0.0.1:8797/readyz
 ```
+
+`/healthz`는 설정만 확인하는 liveness(프로세스가 떠 있는지)이고, `/readyz`는 실제로 일할
+수 있는지(Supabase 연결·Telegram 수신 상태)를 확인하는 readiness입니다 — `curl 200`만 보고
+"동작한다"고 판단하지 말고 `/readyz`의 `ok` 값을 봅니다. bot-service `/readyz`가 503을 주면
+응답 JSON의 `checks.supabase`(Supabase 연결 실패)와 `checks.receive`(Telegram 수신 중단 —
+polling이면 마지막 폴링이 오래됐다는 뜻, webhook이면 등록이 안 됐다는 뜻)를 확인합니다.
+자세한 원인별 대응은 `2026_08_12__OPERATION_INCIDENT_RUNBOOK.md`의 "Service Health"를 참고합니다.
 
 ## 8. Telegram smoke test
 

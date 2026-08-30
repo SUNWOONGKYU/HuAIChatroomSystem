@@ -486,13 +486,6 @@ function nextRetryAt(now: Date, attempts: number, error?: unknown): string {
   return new Date(now.getTime() + delayMs).toISOString();
 }
 
-function requireString(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`missing-${name}`);
-  }
-  return value;
-}
-
 // TelegramApiError / normalizeTelegramError 는 항상 "telegram-api-error:<status>:..." 형태의
 // 메시지를 만든다(masking 은 bot 토큰/Bearer 값만 지우므로 상태 코드는 그대로 남는다).
 // 429 는 rate limit — 영구 실패가 아니므로 attempts 소진 대상에서 제외한다.

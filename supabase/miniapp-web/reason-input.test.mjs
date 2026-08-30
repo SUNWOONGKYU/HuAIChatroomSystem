@@ -33,11 +33,13 @@ test("decisionSuccessNote: task 경로의 보완 요청은 사유가 전달된�
   assert.match(decisionSuccessNote("request_revision", {}, "task"), /사유가 방과 담당자에게 함께 전달됩니다/);
 });
 
-test("decisionSuccessNote: proposal 경로(제안 '수정')는 여전히 사유가 안 닿는다고 말한다 — 이번 범위 밖", () => {
+test("decisionSuccessNote: proposal 경로(제안 '수정')는 보류된다는 사실과 방에 직접 말해야 한다는 다음 행동을 함께 말한다 — 이번 범위 밖", () => {
   const body = extractFunction(html, "decisionSuccessNote\\(action, res, kind\\)");
   const decisionSuccessNote = new Function("action", "res", "kind", body);
 
-  assert.match(decisionSuccessNote("request_revision", {}, "proposal"), /협업 운영센터에서 확인하고 처리합니다/);
+  const note = decisionSuccessNote("request_revision", {}, "proposal");
+  assert.match(note, /보류/);
+  assert.match(note, /Telegram 방에 직접 말씀해주세요/);
 });
 
 test("decisionSuccessNote: 그 외 액션은 서버 note 를 그대로 쓰거나 기본 문구로 떨어진다", () => {

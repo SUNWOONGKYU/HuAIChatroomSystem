@@ -1,6 +1,12 @@
 {
-  "name": "@huai/supabase-runtime",
+  "name": "@hu-ai/supabase-runtime",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts"
+  "dependencies": {
+    "@hu-ai/contracts": "*",
+    "@hu-ai/orchestrator": "*",
+    "@hu-ai/telegram-ui": "*",
+    "@hu-ai/workflow": "*"
+  }
 }

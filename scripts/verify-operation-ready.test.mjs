@@ -22,7 +22,14 @@ test("multi-room offline gate is wired in, before the terminal secrets scan", ()
 test("operation ready runner uses direct node commands for terminal checks", () => {
   assert.equal(commandForStep("verify:structure"), "node scripts/verify-structure.mjs");
   assert.equal(commandForStep("verify:secrets"), "node scripts/verify-no-secrets.mjs");
+  assert.equal(commandForStep("verify:supabase-functions"), "node scripts/verify-supabase-functions.mjs");
   assert.equal(commandForStep("verify:gate25"), "npm run verify:gate25");
+});
+
+test("supabase edge function tests run before the terminal secrets scan", () => {
+  const steps = operationReadySteps();
+  assert.equal(steps.includes("verify:supabase-functions"), true);
+  assert.ok(steps.indexOf("verify:supabase-functions") < steps.indexOf("verify:secrets"));
 });
 
 test("operation ready runner stops at first failing step", () => {

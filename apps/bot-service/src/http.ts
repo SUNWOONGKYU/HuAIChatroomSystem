@@ -5,11 +5,15 @@ import {
   type TelegramWebhookPorts
 } from "./index.js";
 import { type TelegramWebhookAck } from "../../../packages/contracts/src/index.js";
+import { type BotServiceReadinessResult } from "./readiness.js";
 
 export type TelegramWebhookHttpServerOptions = {
   config: BotServiceConfig;
   ports: TelegramWebhookPorts;
   maxBodyBytes?: number;
+  // /readyz 판정. 안 넘기면(테스트 등에서 저수준 API 를 직접 쓸 때) 확인할 의존성이
+  // 없다고 보고 항상 200 을 준다 — 실제 운영 기동 경로(server.ts)는 항상 채워 넘긴다.
+  readiness?: () => Promise<BotServiceReadinessResult>;
 };
 
 export function createTelegramWebhookHttpServer(options: TelegramWebhookHttpServerOptions): Server {
@@ -23,12 +27,31 @@ async function routeHttpRequest(
   res: ServerResponse,
   options: TelegramWebhookHttpServerOptions
 ): Promise<void> {
-  if (req.method === "GET" && new URL(req.url ?? "", "http://localhost").pathname === "/healthz") {
+  const pathname = new URL(req.url ?? "", "http://localhost").pathname;
+
+  if (req.method === "GET" && pathname === "/healthz") {
     writeJson(res, 200, {
       ok: true,
       service: "bot-service",
       bots: options.config.botsByUsername.size,
       allowedChats: options.config.allowedChatIds.length
+    });
+    return;
+  }
+
+  // /healthz 는 설정값만 보는 liveness 다. Telegram 수신이 멎었거나 Supabase 가 끊겨도
+  // 200 이라 "curl 200 ≠ 동작함" 을 어긴다 — /readyz 는 실제 의존성을 확인한다.
+  if (req.method === "GET" && pathname === "/readyz") {
+    if (!options.readiness) {
+      writeJson(res, 200, { ok: true, service: "bot-service", ready: true });
+      return;
+    }
+    const result = await options.readiness();
+    writeJson(res, result.ready ? 200 : 503, {
+      ok: result.ready,
+      service: "bot-service",
+      ready: result.ready,
+      checks: result.checks
     });
     return;
   }

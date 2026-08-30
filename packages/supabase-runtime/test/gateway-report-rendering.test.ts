@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildReportOpenKeyboard, buildRoomMessageWithPreview, previewRoomMessage, SupabaseOutboxStore, renderGatewayReportText } from "../src/index.js";
-import { type ExecutionRequest, type GatewayEvent } from "../../contracts/src/index.js";
+import { type ExecutionRequest } from "../../contracts/src/index.js";
 
 test("gateway report hides internal json and hook output from Telegram text", () => {
   const text = renderGatewayReportText({

@@ -1,35 +1,57 @@
-import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { maskTelegramSensitiveText as maskSensitiveText, safeTelegramTraceUri } from "../../../packages/telegram-ui/src/sanitize.js";
 import {
-  classifyTaskRisk,
   type OutboxRecord,
-  type OutboxTarget,
   type TelegramSendResult,
   type TelegramUpdateEnvelope,
   type TelegramUpdateReceipt
 } from "../../../packages/contracts/src/index.js";
 import {
-  summarizeTelegramSendResult,
   type OrchestratorPersistencePort,
-  type PersistedEvent,
-  type PersistedOutboxItem
+  type PersistedEvent
 } from "./persistence.js";
 import { type OutboxDispatcherStore } from "./outbox.js";
 import { makeTelegramUpdateIdempotencyKey } from "./index.js";
-import { isForbiddenTransition, transitionTaskStatus, type TaskStatus, type WorkflowContext, type WorkflowEventType } from "../../../packages/workflow/src/index.js";
-import { summarizeSupabaseSendResult } from "../../../packages/supabase-runtime/src/index.js";
+import { isForbiddenTransition, transitionTaskStatus, type TaskStatus, type WorkflowEventType } from "../../../packages/workflow/src/index.js";
 import { isLeaderPlanningAttempt } from "../../../packages/orchestrator/src/index.js";
-import {
-  buildLeaderPlanningPrompt,
-  extractPersonaTag,
-  type AgentPersona,
-  type RoomFacts,
-  type RoomTurn
-} from "../../../packages/orchestrator/src/leader-planning.js";
-import { buildMiniAppOpenKeyboard, buildProjectStatusMessage } from "../../../packages/telegram-ui/src/index.js";
-import { createNodeGitRunner, ensureWorktree } from "../../local-gateway/src/worktree.js";
 
+import {
+  type OrchestratorPersistencePortEvent,
+  type EventRow,
+  type OutboxRow,
+  type TelegramUpdateRow,
+  type OutboxInsertRow,
+  taskIdFromBinding,
+  buildFinalApprovalResultText
+} from "./command-prompt-helpers.js";
+import {
+  workflowContextFromEvent,
+  approvalRecordForEvent,
+  approvalEntityRefFromPayload,
+  approvalDeciderFromPayload,
+  approvalReasonFromPayload,
+  taskIdFromEventPayload,
+  isUuid,
+  toPersistedEvent,
+  toPersistedOutboxItem,
+  sameOutboxContent,
+  escapePostgrestInValue,
+  eventIdForOutbox,
+  parseTelegramUpdateIdempotencyKey,
+  receiptStatus,
+  toBigIntString,
+  requiredEnv,
+  requireMiniAppDirectLinkBaseUrl,
+  optionalPayloadString
+} from "./event-row-mapping.js";
+import { maskTelegramSensitiveText as maskSensitiveText } from "../../../packages/telegram-ui/src/sanitize.js";
+import { SupabaseRestClient } from "./rest-client.js";
+import { SupabaseOutboxDispatchStore } from "./supabase-outbox-dispatch-store.js";
+// God file 분리(2026-08, 3차) — 실행 요청 파이프라인(리더 판단 프롬프트/실행 프롬프트
+// hydrate)과 명시적 슬래시 명령·조회 명령 렌더링을 각각 별도 클래스로 뽑았다.
+// 아래 두 클래스는 이 파일과 같은 SupabaseRestClient 인스턴스를 공유한다
+// (outboxDispatchStore 와 같은 구성 방식 — 2차 분리 때 이미 검증된 패턴).
+import { SupabaseExecutionHydrationStore } from "./execution-hydration-store.js";
+import { SupabaseChatCommandStore } from "./chat-command-store.js";
 export type SupabaseStoreConfig = {
   url: string;
   serviceRoleKey: string;
@@ -52,18 +74,10 @@ export type SupabaseStoreConfig = {
 
 // 고정 메시지 본문. 목록을 싣지 않는다 — 고정해두면 만들어진 시점의 목록이 박제되고,
 // 최신 상태는 버튼을 눌러야 보인다(scripts/pin-room-board-message.mjs 와 같은 이유).
-// 리더 프롬프트에 넣을 방 기억의 양. 최근 며칠 / 하루치 최대 글자.
-// 너무 넣으면 최근 지시가 밀려나고, 너무 적으면 지난 결정을 못 찾는다.
-const ROOM_MEMORY_DAYS = 5;
-const ROOM_MEMORY_MAX_CHARS = 2_000;
 
 // 주제별 현황판 고정 메시지 생성은 제거됐다(ensureTopicBoardRows). 이미 방에 남아 있는
 // 옛 고정 메시지의 문구는 지우는 쪽이 알아야 하므로 scripts/pin-room-board-message.mjs 의
 // LEGACY_BOARD_MESSAGE_TEXTS 가 들고 있다.
-
-function optionalPayloadString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
 
 function outboxTargetChatId(target: string): string | undefined {
   try {
@@ -83,6 +97,15 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
   private readonly miniAppDirectLinkBaseUrl: string | undefined;
   // 방 기억(위키)을 읽어올 폴더. 아카이브 스크립트가 쓰는 자리와 같아야 한다.
   private readonly archiveRootDir: string;
+  // God class 분리(2026-08, 2차) — OutboxDispatcherStore 쪽(leasePending 등 5개)은
+  // 이 클래스의 나머지(OrchestratorPersistencePort 쪽)와 아무 상태도 공유하지 않는
+  // 별도 클래스로 뽑았다. 같은 client 인스턴스를 그대로 주입해 동작은 바꾸지 않는다.
+  private readonly outboxDispatchStore: SupabaseOutboxDispatchStore;
+  // God class 분리(2026-08, 3차) — commitTelegramInputResult 의 실행 요청 hydrate
+  // 파이프라인과, 명시적 슬래시 명령/조회 명령 렌더링을 각각 별도 클래스로 뽑았다.
+  // 위 outboxDispatchStore 와 같은 구성 방식(같은 client 공유, 동작 불변).
+  private readonly executionHydrationStore: SupabaseExecutionHydrationStore;
+  private readonly chatCommandStore: SupabaseChatCommandStore;
 
   constructor(config: SupabaseStoreConfig) {
     this.client = new SupabaseRestClient({
@@ -95,6 +118,17 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       ? requireMiniAppDirectLinkBaseUrl(config.miniAppDirectLinkBaseUrl)
       : undefined;
     this.archiveRootDir = config.archiveRootDir ?? path.join("sessions", "rooms");
+    this.outboxDispatchStore = new SupabaseOutboxDispatchStore(this.client);
+    this.executionHydrationStore = new SupabaseExecutionHydrationStore(this.client, this.archiveRootDir);
+    this.chatCommandStore = new SupabaseChatCommandStore(this.client, this.now, this.miniAppDirectLinkBaseUrl);
+  }
+
+  // /readyz 가 Supabase 도달성을 확인할 때 쓰는 가벼운 왕복.
+  // 데이터를 쓰지 않고 가장 가벼운 조회(limit=1)로 연결·인증(서비스 롤 키)이
+  // 실제로 살아있는지만 본다 — local-gateway 의 leasePendingLocalGateway(0, ...) 와
+  // 같은 목적, 같은 원칙("설정값이 아니라 실제 왕복")이다.
+  async ping(): Promise<void> {
+    await this.client.request("GET", "/huai_rooms?select=room_id&limit=1").then((response) => response.expectOk());
   }
 
   // 한 프로세스가 여러 방을 처리하므로 room_id 는 생성자 고정값이 아니라
@@ -177,7 +211,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     await this.applyTaskTransitions(eventsToPersist, roomId);
     await this.materializePostCompletionChanges(persistedEvents, roomId);
     const fallbackEventId = persistedEvents[0]?.eventId;
-    const outboxRows = input.result.outbox.map((item, index) => ({
+    const outboxRows = input.result.outbox.map((item) => ({
       room_id: roomId,
       event_id: eventIdForOutbox(item.payload.binding, persistedEvents) ?? fallbackEventId,
       idempotency_key: item.idempotencyKey,
@@ -186,16 +220,16 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       payload: item.payload
     }));
 
-    const startedHydratedRows = await this.hydrateExecutionStartedMessages(outboxRows, roomId);
-    const planningHydratedRows = await this.hydrateLeaderPlanningRows(startedHydratedRows, roomId);
-    const executionHydratedOutboxRows = await this.hydrateExecutionOutboxPrompts(planningHydratedRows, roomId);
-    const taskQueryHydratedRows = await this.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
-    const finalApprovalHydratedRows = await this.hydrateFinalApprovalRows(taskQueryHydratedRows, roomId);
-    const personaHydratedRows = await this.hydrateAgentPersonaRows(finalApprovalHydratedRows, roomId);
-    const hydratedOutboxRows = await this.hydrateAiActorRows(personaHydratedRows, roomId);
-    const roomHydratedRows = await this.hydrateRoomCommandRows(hydratedOutboxRows, roomId);
-    const memberHydratedRows = await this.hydrateRoomMemberRows(roomHydratedRows, roomId);
-    const controlHydratedRows = this.hydrateOwnerControlRows(memberHydratedRows, roomId);
+    const startedHydratedRows = await this.executionHydrationStore.hydrateExecutionStartedMessages(outboxRows, roomId);
+    const planningHydratedRows = await this.executionHydrationStore.hydrateLeaderPlanningRows(startedHydratedRows, roomId);
+    const executionHydratedOutboxRows = await this.executionHydrationStore.hydrateExecutionOutboxPrompts(planningHydratedRows, roomId);
+    const taskQueryHydratedRows = await this.chatCommandStore.hydrateTaskQueryOutboxRows(executionHydratedOutboxRows, roomId);
+    const finalApprovalHydratedRows = await this.hydrateFinalApprovalRows(taskQueryHydratedRows);
+    const personaHydratedRows = await this.chatCommandStore.hydrateAgentPersonaRows(finalApprovalHydratedRows, roomId);
+    const hydratedOutboxRows = await this.chatCommandStore.hydrateAiActorRows(personaHydratedRows, roomId);
+    const roomHydratedRows = await this.chatCommandStore.hydrateRoomCommandRows(hydratedOutboxRows, roomId);
+    const memberHydratedRows = await this.chatCommandStore.hydrateRoomMemberRows(roomHydratedRows, roomId);
+    const controlHydratedRows = this.chatCommandStore.hydrateOwnerControlRows(memberHydratedRows, roomId);
     // 현황판 행은 주제당 하나뿐이라 두 번째 메시지부터는 반드시 이미 존재한다. 아래 배치
     // 삽입은 "행 하나라도 이미 있으면 전체 실패"라서, 같이 넣으면 그 주제의 모든 처리가
     // 멎는다(라이브에서 outbox-idempotency-conflict 로 제안 메시지가 통째로 안 나갔다).
@@ -207,43 +241,7 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     };
   }
 
-  // Telegram은 알림·운영센터 열기만 제공한다. 기존 코드 경로와 과거 보고가
-  // callback_data 키보드를 만들어도 실제 전송 직전에 URL 버튼으로 바꿔
-  // Telegram에서 상태 변경이 일어날 수 없게 한다.
-  //
-  // 슬래시 명령 쪽도 이미 닫혀 있다 — /approve·/reject·/done·/cancel·/verify 는
-  // orchestrator 의 renderOwnerActionRedirect 로 빠져 events: [] 만 돌려준다.
-  // 여기서 버튼을 바꾸는 것은 그 단일 창구 원칙의 나머지 절반이다.
-  private hydrateOwnerControlRows(rows: OutboxInsertRow[], roomId: string): OutboxInsertRow[] {
-    return rows.map((row) => {
-      if (row.target_kind !== "telegram_bot") return row;
-      const payload = row.payload;
-      const redirect = payload.ownerActionRedirect === true;
-      const hasOwnerCallback = isOwnerControlKeyboard(payload.keyboard);
-      if (!redirect && !hasOwnerCallback) return row;
-      const threadId = optionalPayloadString(payload.messageThreadId);
-      // 링크가 없으면 버튼을 지운 자리에 아무것도 남지 않는다. 그대로 두면 방장은
-      // 결정 수단을 잃은 채 "운영센터에서 처리하세요"라는 갈 곳 없는 안내만 받는다.
-      // supabase-runtime 의 중간승인 보고와 같은 문구로 원인을 알린다.
-      const guidance = this.miniAppDirectLinkBaseUrl
-        ? "\n협업 운영센터에서 작업을 확인하고 처리해 주세요."
-        : "\n협업 운영센터 링크가 설정되지 않아 승인 UI가 비활성화되었습니다. 운영 담당자에게 BOT_SERVICE_MINIAPP_DIRECT_LINK 설정을 요청하세요.";
-      return {
-        ...row,
-        payload: {
-          ...payload,
-          keyboard: this.miniAppDirectLinkBaseUrl
-            ? buildMiniAppOpenKeyboard({ directLinkBaseUrl: this.miniAppDirectLinkBaseUrl, roomId, messageThreadId: threadId })
-            : undefined,
-          text: redirect || !this.miniAppDirectLinkBaseUrl
-            ? `${String(payload.text ?? "")}${guidance}`
-            : payload.text
-        }
-      };
-    });
-  }
-
-  private async hydrateFinalApprovalRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
+  private async hydrateFinalApprovalRows(rows: OutboxInsertRow[]): Promise<OutboxInsertRow[]> {
     const hydrated: OutboxInsertRow[] = [];
     for (const row of rows) {
       if (!row.idempotency_key.startsWith("telegram:final-approved:")) {
@@ -314,37 +312,25 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .filter((execution) => execution.telegramChatId.length > 0);
   }
 
+  // OutboxDispatcherStore 구현은 supabase-outbox-dispatch-store.ts 로 위임한다(위 필드 주석 참고).
   async leasePending(limit: number, leaseUntil: string): Promise<OutboxRecord[]> {
-    return this.leaseOutbox(limit, leaseUntil, "telegram_bot");
+    return this.outboxDispatchStore.leasePending(limit, leaseUntil);
   }
 
   async leasePendingLocalGateway(limit: number, leaseUntil: string): Promise<OutboxRecord[]> {
-    return this.leaseOutbox(limit, leaseUntil, "local_gateway");
+    return this.outboxDispatchStore.leasePendingLocalGateway(limit, leaseUntil);
   }
 
   async markSent(outboxId: string, result: TelegramSendResult): Promise<void> {
-    const updated = await this.client.rpc<boolean>("mark_huai_outbox_sent", {
-      p_huai_outbox_id: outboxId,
-      p_send_result: summarizeSupabaseSendResult(result)
-    });
-    if (updated !== true) throw new Error("outbox-state-conflict:mark-sent");
+    return this.outboxDispatchStore.markSent(outboxId, result);
   }
 
   async markRetry(outboxId: string, error: string, nextAttemptAt: string): Promise<void> {
-    await this.patchOutbox(outboxId, {
-      status: "retry_pending",
-      last_error: maskSensitiveText(error),
-      next_attempt_at: nextAttemptAt,
-      locked_until: null
-    });
+    return this.outboxDispatchStore.markRetry(outboxId, error, nextAttemptAt);
   }
 
   async markDead(outboxId: string, error: string): Promise<void> {
-    await this.patchOutbox(outboxId, {
-      status: "dead",
-      last_error: maskSensitiveText(error),
-      locked_until: null
-    });
+    return this.outboxDispatchStore.markDead(outboxId, error);
   }
 
   // 방장·리더의 결정을 append-only 원장에 남긴다.
@@ -380,19 +366,6 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       if (response.status === 409) continue;
       await response.expectOk();
     }
-  }
-
-  private async fetchApprovalIdForEntity(entityRef: string, stage: ApprovalStage, roomId: string): Promise<string | undefined> {
-    const rows = await this.client
-      .request(
-        "GET",
-        "/huai_approvals?entity_ref=eq." + encodeURIComponent(entityRef) +
-          "&stage=eq." + encodeURIComponent(stage) +
-          "&room_id=eq." + encodeURIComponent(roomId) +
-          "&decision=eq.approved&select=approval_id&order=created_at.asc&limit=1"
-      )
-      .then((response) => response.json<Array<{ approval_id: string }>>());
-    return rows[0]?.approval_id;
   }
 
   private async applyTaskTransitions(events: readonly OrchestratorPersistencePortEvent[], roomId: string): Promise<void> {
@@ -433,515 +406,6 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       });
   }
 
-  // "작업 실행을 시작했습니다: p_032d2db2..." 처럼 내부 id 만 보여주면
-  // 방장은 무슨 작업이 시작됐는지, 누가 하는지 알 수 없다.
-  // 리더가 이미 제목과 담당을 정해뒀으니 그것을 실어 보낸다.
-  private async hydrateExecutionStartedMessages(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const targets = rows.filter((row) => row.idempotency_key.startsWith("telegram:execution-started:"));
-    if (targets.length === 0) return rows;
-
-    const proposalIds = Array.from(new Set(targets.map((row) => row.idempotency_key.split(":")[2]).filter(Boolean)));
-    const hints = await this.fetchProposalExecutionHints(proposalIds, roomId);
-
-    return rows.map((row) => {
-      if (!row.idempotency_key.startsWith("telegram:execution-started:")) return row;
-      const hint = hints.get(row.idempotency_key.split(":")[2] ?? "");
-      if (!hint?.title) return row;
-      const worker = executionWorkerLabel(hint.requestedActorRole, hint.executionMode);
-      return {
-        ...row,
-        payload: {
-          ...row.payload,
-          text: [
-            `작업을 시작했습니다: ${hint.title}`,
-            worker ? `담당: ${worker}` : undefined,
-            hint.completionCriteria ? `완료 조건: ${hint.completionCriteria}` : undefined,
-            "",
-            "작업에는 보통 몇 분이 걸립니다. 끝나면 결과를 보고하겠습니다."
-          ].filter((line) => line !== undefined).join("\n")
-        }
-      };
-    });
-  }
-
-  // 리더 판단 요청에 방의 직전 논의를 실어준다.
-  // 오케스트레이터는 순수 함수라 DB 를 못 읽으므로 여기서 채운다.
-  private async hydrateLeaderPlanningRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const hydrated: OutboxInsertRow[] = [];
-    for (const row of rows) {
-      const request = executionRequestPayload(row.payload);
-      if (!request || typeof request.attemptId !== "string" || !isLeaderPlanningAttempt(request.attemptId)) {
-        hydrated.push(row);
-        continue;
-      }
-      const rawTriggeringText = typeof row.payload.triggeringText === "string" ? row.payload.triggeringText : "";
-      // "!페르소나이름 지시" 형태면 등록된 페르소나를 찾아 프롬프트에 실어준다. 못 찾으면
-      // 태그를 떼지 않고 그대로 평범한 요청으로 취급한다 — 오타로 지시 자체가 사라지면 안 된다.
-      const personaTag = extractPersonaTag(rawTriggeringText);
-      const persona = personaTag ? await this.fetchAgentPersona(roomId, personaTag.personaName) : undefined;
-      const triggeringText = persona && personaTag ? personaTag.remainingText : rawTriggeringText;
-      const telegramChatId = typeof row.payload.telegramChatId === "string" ? row.payload.telegramChatId : undefined;
-      const turns = telegramChatId ? await this.fetchRecentRoomTurns(telegramChatId, roomId) : [];
-      const leader = await this.fetchLeaderActor(roomId);
-      const facts = await this.fetchRoomFacts(roomId, await this.fetchRoomLabel(roomId));
-      hydrated.push({
-        ...row,
-        payload: {
-          ...row.payload,
-          executionRequest: {
-            ...request,
-            prompt: buildLeaderPlanningPrompt({ turns, triggeringText, facts, persona }),
-            ...(leader?.actor_id ? { actorId: leader.actor_id } : {}),
-            ...(leader?.cli_session_id ? { resumeSessionId: leader.cli_session_id } : {})
-          }
-        }
-      });
-    }
-    return hydrated;
-  }
-
-  // 직전 논의 뭉치 — 마지막으로 작업이 만들어진 시점 이후의 방 대화.
-  // 그 시점을 못 찾으면 최근 40건으로 자른다.
-  private async fetchRecentRoomTurns(telegramChatId: string, roomId: string): Promise<RoomTurn[]> {
-    const since = await this.fetchLastWorkCreatedAt(roomId);
-    const ownerId = await this.fetchOwnerTelegramUserId(roomId);
-    const filter = since ? "&received_at=gt." + encodeURIComponent(since) : "";
-    const rows = await this.client
-      .request(
-        "GET",
-        "/huai_telegram_updates?telegram_chat_id=eq." + encodeURIComponent(telegramChatId) +
-          filter + "&select=raw_update,received_at&order=received_at.desc&limit=40"
-      )
-      .then((response) => response.json<Array<{ raw_update: Record<string, unknown>; received_at?: string }>>())
-      .catch(() => []);
-
-    return rows
-      .map((row) => roomTurnFromRawUpdate(row.raw_update, ownerId))
-      .filter((turn): turn is RoomTurn => Boolean(turn))
-      .reverse();
-  }
-
-  private async fetchLastWorkCreatedAt(roomId: string): Promise<string | undefined> {
-    const rows = await this.client
-      .request("GET", "/huai_events?room_id=eq." + encodeURIComponent(roomId) + "&event_type=eq.owner_task_approved&select=created_at&order=created_at.desc&limit=1")
-      .then((response) => response.json<Array<{ created_at?: string }>>())
-      .catch(() => []);
-    return rows[0]?.created_at;
-  }
-
-  private async fetchOwnerTelegramUserId(roomId: string): Promise<string | undefined> {
-    const rows = await this.client
-      .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&role=eq.owner&select=telegram_user_id&limit=1")
-      .then((response) => response.json<Array<{ telegram_user_id: string | number }>>())
-      .catch(() => []);
-    const value = rows[0]?.telegram_user_id;
-    return value === undefined || value === null ? undefined : String(value);
-  }
-
-  // 리더가 방에 대해 이미 알아야 하는 것.
-  // 이게 없으면 "이 방에 봇이 몇 개야?" 같은 질문에도 조사 작업을 만든다 —
-  // 자기가 모르니까 확인하겠다고 하는 것이고, 방장은 답을 원했는데 일이 하나 생긴다.
-  // 방 기억을 세션 폴더에서 읽는다.
-  //
-  // 요약을 DB 에 넣지 않는 이유: 이 프로세스가 게이트웨이와 같은 작업 PC 에서 돈다.
-  // 디스크를 직접 읽을 수 있으므로 DB 를 거칠 이유가 없고, 요약까지 DB 에 쌓으면 용량만
-  // 늘어난다. 무손실 원본은 Supabase Storage 에 따로 있다.
-  //
-  // 못 읽어도 판단은 진행한다 — 기억이 얕아질 뿐이고, 그건 이 기능을 붙이기 전의 상태다.
-  private async readRoomMemory(roomId: string, roomLabel: string): Promise<RoomFacts["memory"]> {
-    try {
-      const folder = roomLabel.replace(/[\/:*?"<>|]/g, "_").slice(0, 60);
-      const dir = path.join(this.archiveRootDir, folder);
-      const entries = await readdir(dir).catch(() => [] as string[]);
-      const notes = entries.filter((name) => name.endsWith("_위키.md")).sort().slice(-ROOM_MEMORY_DAYS);
-      const memory: Array<{ date: string; summary: string }> = [];
-      for (const note of notes) {
-        const text = await readFile(path.join(dir, note), "utf8").catch(() => "");
-        if (!text.trim()) continue;
-        // frontmatter 는 사람이 파일을 열었을 때를 위한 것이다. 프롬프트에는 본문만 넣는다.
-        const body = text.replace(/^---[\s\S]*?---\n/, "").trim();
-        memory.push({ date: note.replace("_위키.md", ""), summary: body.slice(0, ROOM_MEMORY_MAX_CHARS) });
-      }
-      return memory.length > 0 ? memory : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  // 세션 폴더 이름은 방 이름으로 만들어진다(archive-room-conversations.mjs 와 같은 규칙).
-  private async fetchRoomLabel(roomId: string): Promise<string | undefined> {
-    try {
-      const rows = await this.client
-        .request("GET", "/huai_rooms?room_id=eq." + encodeURIComponent(roomId) + "&select=purpose&limit=1")
-        .then((response) => response.json<Array<{ purpose?: string }>>());
-      return rows[0]?.purpose || roomId;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private async fetchRoomFacts(roomId: string, roomLabel?: string): Promise<RoomFacts | undefined> {
-    try {
-      const [actors, members, tasks] = await Promise.all([
-        this.client
-          .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.active&select=role")
-          .then((response) => response.json<Array<{ role: string }>>()),
-        this.client
-          .request("GET", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.active&select=telegram_user_id")
-          .then((response) => response.json<Array<{ telegram_user_id: string }>>()),
-        this.client
-          .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&status=not.in.(completed,cancelled,rejected_or_cancelled,proposal_rejected)&select=title,status&order=updated_at.desc&limit=8")
-          .then((response) => response.json<Array<{ title: string; status: TaskStatus }>>())
-      ]);
-
-      return {
-        bots: actors.map((actor) => botLabelForRole(actor.role)),
-        memberCount: members.length,
-        memory: roomLabel ? await this.readRoomMemory(roomId, roomLabel) : undefined,
-        // TASK_STATUS_META 가 단일 출처다 — 별도 상태 라벨표를 여기 두지 않는다.
-        // 이 결과는 리더 판단 프롬프트(buildLeaderPlanningPrompt)에 순수 텍스트로만
-        // 들어간다: `${title}(${status})`. 파싱하는 코드는 없다(packages/orchestrator/src/leader-planning.ts 확인).
-        openTasks: tasks.map((task) => ({ title: task.title, status: taskStatusMeta(task.status).label }))
-      };
-    } catch {
-      // 방 정보를 못 읽어도 판단 자체는 진행한다. 맥락이 얕아질 뿐이다.
-      return undefined;
-    }
-  }
-
-  private async fetchLeaderActor(roomId: string): Promise<{ actor_id: string; cli_session_id?: string } | undefined> {
-    const rows = await this.client
-      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&role=eq.leader&select=actor_id,cli_session_id&limit=1")
-      .then((response) => response.json<Array<{ actor_id: string; cli_session_id?: string }>>())
-      .catch(() => []);
-    return rows[0];
-  }
-
-  private async hydrateExecutionOutboxPrompts(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const proposalIds = Array.from(new Set(rows.map((row) => proposalIdNeedingPromptHydration(row)).filter((value): value is string => Boolean(value))));
-    if (proposalIds.length === 0) return rows;
-
-    const hintsByProposalId = await this.fetchProposalExecutionHints(proposalIds, roomId);
-    const requestedRoles = Array.from(new Set(Array.from(hintsByProposalId.values()).flatMap((hint) => requestedExecutionRolesForHint(hint))));
-    const actorsByRole = await this.fetchActiveExecutionActorsByRole(requestedRoles, roomId);
-    const hydrated: OutboxInsertRow[] = [];
-
-    for (const row of rows) {
-      const proposalId = proposalIdNeedingPromptHydration(row);
-      const hint = proposalId ? hintsByProposalId.get(proposalId) : undefined;
-      if (!proposalId || !hint?.prompt) {
-        hydrated.push(row);
-        continue;
-      }
-      const executionRequest = executionRequestPayload(row.payload);
-      if (!executionRequest) {
-        hydrated.push(row);
-        continue;
-      }
-      const primaryActor = hint.executionMode === "multi_ai_review"
-        ? actorsByRole.get("codex_leader") ?? actorsByRole.get("claude_leader")
-        : hint.requestedActorRole ? actorsByRole.get(hint.requestedActorRole) : undefined;
-      const taskId = await this.ensureApprovedProposalTask(proposalId, hint, primaryActor?.actor_id, roomId);
-      const isolatedProjectPath = hint.useIsolatedWorktree && typeof executionRequest.projectPath === "string"
-        ? await this.ensureIsolatedWorktree(taskId, executionRequest.projectPath)
-        : undefined;
-      const taskExecutionRequest = {
-        ...executionRequest,
-        taskId,
-        sourceProposalId: proposalId,
-        ...(isolatedProjectPath ? { projectPath: isolatedProjectPath } : {})
-      };
-      if (hint.executionMode === "multi_ai_review") {
-        hydrated.push(...buildMultiAiExecutionRows(row, taskExecutionRequest, hint, actorsByRole));
-        continue;
-      }
-      const actor = hint.requestedActorRole ? actorsByRole.get(hint.requestedActorRole) : undefined;
-      // reportBotRole 까지 함께 바꿔야 한다.
-      // 예전에는 actorId·adapterType 만 바꿔서, 리더가 ClaudeBot 을 지정해도
-      // 보고는 기본값인 CodexBot 이름으로 나갔다 — 방장이 보기에 배분이 무시된 것처럼 보인다.
-      hydrated.push({
-        ...row,
-        payload: {
-          ...row.payload,
-          executionRequest: {
-            ...taskExecutionRequest,
-            ...(actor ? { actorId: actor.actor_id, adapterType: actor.adapter_type, reportBotRole: actor.role } : {}),
-            prompt: promptWithRiskQuiz(hint.prompt, hint.rawText ?? hint.prompt)
-          }
-        }
-      });
-    }
-
-    return hydrated;
-  }
-
-  // "버전 N개" 변형은 공유 프로젝트 폴더가 아니라 자기만의 git worktree 에서 돈다 —
-  // 안 그러면 변형끼리 같은 파일을 밟는다(이 격리가 없으면 병렬 변형의 존재 이유가 없다).
-  // taskId 하나마다 워크트리 하나(variantIndex 는 항상 1 — 여기 도달한 시점에 이미
-  // "제안 1개 = 변형 1개 = 작업 1개"로 갈라져 있어서 taskId 자체가 이미 유일하다).
-  // 실패해도(예: git 오류) 실행을 막지 않는다 — 공유 폴더로 폴백한다. 최악의 경우도
-  // "격리가 덜 됐다"이지 "작업이 아예 안 됐다"가 아니다.
-  private async ensureIsolatedWorktree(taskId: string, repoPath: string): Promise<string | undefined> {
-    try {
-      const handle = await ensureWorktree({ runner: createNodeGitRunner(), repoPath, taskId, variantIndex: 1 });
-      return handle.path;
-    } catch (error) {
-      console.error(JSON.stringify({
-        type: "isolated_worktree_create_failed",
-        taskId,
-        reason: maskSensitiveText(error instanceof Error ? error.message : String(error))
-      }));
-      return undefined;
-    }
-  }
-
-  private async fetchProposalExecutionHints(proposalIds: readonly string[], roomId: string): Promise<Map<string, ProposalExecutionHint>> {
-    if (proposalIds.length === 0) return new Map();
-    // room_id 필터 없이 전역 최근 200건만 보면, 방이 늘수록 이 창이 남의 방 제안으로
-    // 차서 자기 방 제안을 못 찾는다(approved-task-materialization-missing).
-    const rows = await this.client
-      .request("GET", "/huai_events?event_type=eq.proposal_created&room_id=eq." + encodeURIComponent(roomId) + "&select=payload,created_at&order=created_at.desc&limit=200")
-      .then((response) => response.json<Array<{ payload: Record<string, unknown> }>>());
-    const wanted = new Set(proposalIds);
-    const hints = new Map<string, ProposalExecutionHint>();
-    for (const row of rows) {
-      const proposalId = typeof row.payload.proposalId === "string" ? row.payload.proposalId : undefined;
-      if (!proposalId || !wanted.has(proposalId) || hints.has(proposalId)) continue;
-      const prompt = proposalPromptFromPayload(row.payload);
-      if (prompt) hints.set(proposalId, { prompt, messageThreadId: optionalPayloadString(row.payload.messageThreadId), title: proposalTitleFromPayload(row.payload), requestedActorRole: proposalActorRoleFromPayload(row.payload), executionMode: proposalExecutionModeFromPayload(row.payload), rawText: proposalRequestTextFromPayload(row.payload), purpose: proposalFieldFromPayload(row.payload, "purpose"), scope: proposalFieldFromPayload(row.payload, "scope"), completionCriteria: proposalFieldFromPayload(row.payload, "completionCriteria"), useIsolatedWorktree: row.payload.useIsolatedWorktree === true });
-    }
-    return hints;
-  }
-
-  private async fetchActiveExecutionActorsByRole(roles: readonly ExecutionActorRole[], roomId: string): Promise<Map<ExecutionActorRole, ExecutionActorRow>> {
-    if (roles.length === 0) return new Map();
-    const quoted = roles.map((role) => '"' + escapePostgrestInValue(role) + '"').join(",");
-    const rows = await this.client
-      .request("GET", "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&role=in.(" + encodeURIComponent(quoted) + ")&status=eq.active&select=actor_id,role,adapter_type")
-      .then((response) => response.json<ExecutionActorRow[]>());
-    return new Map(rows.map((row) => [row.role, row]));
-  }
-
-  private async ensureApprovedProposalTask(proposalId: string, hint: ProposalExecutionHint, assigneeActorId: string | undefined, roomId: string): Promise<string> {
-    const proposalUuid = uuidFromProposalId(proposalId);
-    const existing = proposalUuid ? await this.fetchTaskByProposalId(proposalUuid) : undefined;
-    if (existing) return existing.task_id;
-
-    if (proposalUuid) {
-      await this.insertProposalIfMissing(proposalUuid, hint, roomId);
-    }
-
-    const taskRows = await this.insertTaskForProposal(proposalId, proposalUuid, hint, assigneeActorId, roomId);
-    return taskRows[0]?.task_id ?? await this.fetchTaskIdByIdempotencyKey(taskIdempotencyKey(proposalId));
-  }
-
-  private async fetchTaskByProposalId(proposalUuid: string): Promise<{ task_id: string } | undefined> {
-    const rows = await this.client
-      .request("GET", "/huai_tasks?proposal_id=eq." + encodeURIComponent(proposalUuid) + "&select=task_id&limit=1")
-      .then((response) => response.json<Array<{ task_id: string }>>());
-    return rows[0];
-  }
-
-  private async fetchTaskIdByIdempotencyKey(idempotencyKey: string): Promise<string> {
-    const rows = await this.client
-      .request("GET", "/huai_tasks?idempotency_key=eq." + encodeURIComponent(idempotencyKey) + "&select=task_id&limit=1")
-      .then((response) => response.json<Array<{ task_id: string }>>());
-    const taskId = rows[0]?.task_id;
-    if (!taskId) throw new Error("approved-task-materialization-missing");
-    return taskId;
-  }
-
-  private async insertProposalIfMissing(proposalUuid: string, hint: ProposalExecutionHint, roomId: string): Promise<void> {
-    const response = await this.client.request("POST", "/huai_task_proposals", {
-      body: {
-        proposal_id: proposalUuid,
-        room_id: roomId,
-        title: hint.title,
-        purpose: hint.purpose ?? hint.title,
-        scope: hint.scope ?? hint.rawText ?? hint.title,
-        completion_criteria: hint.completionCriteria ?? DEFAULT_COMPLETION_CRITERIA,
-        status: "approved",
-        decided_at: new Date().toISOString()
-      },
-      prefer: "return=minimal"
-    });
-    if (response.status !== 409) await response.expectOk();
-  }
-
-  private async insertTaskForProposal(proposalId: string, proposalUuid: string | undefined, hint: ProposalExecutionHint, assigneeActorId: string | undefined, roomId: string): Promise<Array<{ task_id: string }>> {
-    // 승인 원장은 절대 수정하지 않는다. 대신 task 를 만들 때 그 task 가 어느 승인으로 생겼는지를
-    // 여기서 한 번 연결한다 (AC-08 "완료 전 3단계 승인 증거").
-    const approvalId = await this.fetchApprovalIdForEntity(proposalId, "task_approval", roomId);
-    const response = await this.client.request("POST", "/huai_tasks", {
-      body: {
-        room_id: roomId,
-        proposal_id: proposalUuid ?? null,
-        approved_by_approval_id: approvalId ?? null,
-        assignee_actor_id: assigneeActorId ?? null,
-        idempotency_key: taskIdempotencyKey(proposalId),
-        status: "scheduled",
-        title: hint.title,
-        purpose: hint.purpose ?? hint.title,
-        scope: hint.scope ?? hint.rawText ?? hint.title,
-        completion_criteria: hint.completionCriteria ?? DEFAULT_COMPLETION_CRITERIA,
-        // 현황판을 주제별로 가르는 값. 없으면 주제 없이 만들어진 작업이다.
-        telegram_message_thread_id: hint.messageThreadId ?? null,
-        use_isolated_worktree: hint.useIsolatedWorktree ?? false
-      },
-      prefer: "return=representation"
-    });
-    if (response.status === 409) return [{ task_id: await this.fetchTaskIdByIdempotencyKey(taskIdempotencyKey(proposalId)) }];
-    return response.json<Array<{ task_id: string }>>();
-  }
-
-  private async hydrateTaskQueryOutboxRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const hydrated: OutboxInsertRow[] = [];
-    for (const row of rows) {
-      const query = taskQueryPayload(row.payload);
-      if (!query || row.target_kind !== "telegram_bot") {
-        hydrated.push(row);
-        continue;
-      }
-
-      const text = query.kind === "center"
-        ? String(row.payload.text ?? "협업 운영센터 링크입니다.")
-        : query.kind === "tasks"
-        ? await this.renderTaskListQuery(query.limit, roomId)
-        : query.kind === "search"
-          ? await this.renderTaskSearchQuery(query.term, roomId)
-          : query.kind === "trace"
-            ? await this.renderTaskTraceQuery(query.taskId, roomId)
-            : await this.renderTaskDetailQuery(query.taskId, roomId);
-      // "협업 운영센터 열기" 버튼은 /tasks 에만 붙인다(/search·/task·/trace 는 이번 범위가 아니다).
-      // BOT_SERVICE_MINIAPP_DIRECT_LINK 미설정 시 keyboard 필드 자체를 안 만든다 —
-      // 기존 payload 에 keyboard 가 없던 것과 완전히 동일하게 유지한다.
-      const keyboard = (query.kind === "tasks" || query.kind === "center") && this.miniAppDirectLinkBaseUrl
-        ? buildMiniAppOpenKeyboard({
-          directLinkBaseUrl: this.miniAppDirectLinkBaseUrl,
-          roomId,
-          messageThreadId: optionalPayloadString(row.payload.messageThreadId)
-        })
-        : undefined;
-      hydrated.push({ ...row, payload: { ...row.payload, text, ...(keyboard ? { keyboard } : {}) } });
-    }
-    return hydrated;
-  }
-
-  // /newagent·/agents 는 오케스트레이터가 표식만 실어 보내고, 실제 DB 기록·조회는
-  // 여기서 한다(오케스트레이터는 DB 를 안 읽는 순수 함수라서). 새 봇 계정을 만들지 않고
-  // 기존 실행 담당 봇(claude_leader/codex_leader) 위에 이름 붙은 페르소나를 얹는다 —
-  // huai_ai_actors 의 role 4종 고정 상태머신은 건드리지 않는다.
-  private async hydrateAgentPersonaRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const hydrated: OutboxInsertRow[] = [];
-    for (const row of rows) {
-      const command = agentPersonaCommandPayload(row.payload);
-      if (!command || row.target_kind !== "telegram_bot") {
-        hydrated.push(row);
-        continue;
-      }
-
-      const text = command.action === "create"
-        ? await this.createAgentPersona(roomId, command)
-        : await this.renderAgentPersonaList(roomId);
-      hydrated.push({ ...row, payload: { ...row.payload, text } });
-    }
-    return hydrated;
-  }
-
-  private async hydrateAiActorRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const hydrated: OutboxInsertRow[] = [];
-    for (const row of rows) {
-      const command = aiActorCommandPayload(row.payload);
-      if (!command || row.target_kind !== "telegram_bot") {
-        hydrated.push(row);
-        continue;
-      }
-      if (command.action === "check") {
-        const inactive = await this.client.request(
-          "GET",
-          "/huai_ai_actors?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.inactive&select=actor_id,role"
-        ).then((response) => response.json<Array<{ actor_id: string; role: string }>>()).catch(() => []);
-        for (const actor of inactive) {
-          await this.client.request("POST", "/huai_events", {
-            body: {
-              room_id: roomId,
-              task_id: null,
-              event_type: "ai_actor_inactive",
-              idempotency_key: "ai-actor-inactive:" + actor.actor_id,
-              payload: { actorId: actor.actor_id, role: actor.role, action: "propose_exit" }
-            },
-            prefer: "return=minimal"
-          }).then((response) => (response.status === 409 ? undefined : response.expectOk())).catch(() => undefined);
-        }
-        hydrated.push({ ...row, payload: { ...row.payload, text: inactive.length === 0 ? "현재 장기 미사용 전문 AI가 없습니다." : `${inactive.length}개 전문 AI가 장기 미사용 상태입니다. 퇴장 제안을 기록했습니다.` } });
-        continue;
-      }
-      const response = await this.client.request("POST", "/huai_ai_actors", {
-        body: {
-          room_id: roomId,
-          role: command.role,
-          adapter_type: command.adapterType,
-          status: "active"
-        },
-        prefer: "return=minimal"
-      });
-      const text = response.status === 409
-        ? `${command.role} 전문 AI가 이미 이 방에 등록되어 있습니다.`
-        : (await response.expectOk(), `${command.role} 전문 AI 초대가 등록되었습니다.`);
-      hydrated.push({ ...row, payload: { ...row.payload, text } });
-    }
-    return hydrated;
-  }
-
-  private async hydrateRoomCommandRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const hydrated: OutboxInsertRow[] = [];
-    for (const row of rows) {
-      const command = roomCommandPayload(row.payload);
-      if (!command || row.target_kind !== "telegram_bot") {
-        hydrated.push(row);
-        continue;
-      }
-      const response = await this.client.request("POST", "/huai_rooms?on_conflict=room_id", {
-        body: {
-          room_id: roomId,
-          telegram_chat_id: command.telegramChatId,
-          owner_telegram_user_id: command.ownerTelegramUserId,
-          purpose: "Telegram 프로젝트 채팅룸",
-          rules: "방장 승인 후 실행"
-        },
-        prefer: "resolution=merge-duplicates,return=minimal"
-      });
-      await response.expectOk();
-      hydrated.push({ ...row, payload: { ...row.payload, text: "프로젝트 채팅룸 등록이 완료되었습니다." } });
-    }
-    return hydrated;
-  }
-
-  private async hydrateRoomMemberRows(rows: OutboxInsertRow[], roomId: string): Promise<OutboxInsertRow[]> {
-    const hydrated: OutboxInsertRow[] = [];
-    for (const row of rows) {
-      const command = roomMemberCommandPayload(row.payload);
-      if (!command || row.target_kind !== "telegram_bot") {
-        hydrated.push(row);
-        continue;
-      }
-      if (command.action === "add") {
-        await this.client.request("POST", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&telegram_user_id=eq." + encodeURIComponent(command.telegramUserId), {
-          body: { room_id: roomId, telegram_user_id: command.telegramUserId, role: "human_member", permissions: ["task:read"], status: "active" },
-          prefer: "resolution=merge-duplicates,return=minimal"
-        }).then((response) => response.expectOk());
-      } else {
-        await this.client.request("PATCH", "/huai_room_members?room_id=eq." + encodeURIComponent(roomId) + "&telegram_user_id=eq." + encodeURIComponent(command.telegramUserId), { body: { status: "left" }, prefer: "return=minimal" }).then((response) => response.expectOk());
-      }
-      await this.client.request("POST", "/huai_events", {
-        body: { room_id: roomId, task_id: null, event_type: "participant_changed", idempotency_key: row.idempotency_key + ":participant", payload: { telegramUserId: command.telegramUserId, action: command.action } },
-        prefer: "return=minimal"
-      }).then((response) => (response.status === 409 ? undefined : response.expectOk()));
-      hydrated.push({ ...row, payload: { ...row.payload, text: command.action === "add" ? "참여자를 초대했습니다." : "참여자를 퇴장 처리했습니다." } });
-    }
-    return hydrated;
-  }
-
   private async materializePostCompletionChanges(events: readonly PersistedEvent[], roomId: string): Promise<void> {
     for (const event of events) {
       if (event.eventType !== "post_completion_scope_change_requested") continue;
@@ -967,262 +431,6 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
     }
   }
 
-  private async fetchAgentPersona(roomId: string, personaName: string): Promise<AgentPersona | undefined> {
-    const rows = await this.client
-      .request(
-        "GET",
-        "/huai_agent_personas?room_id=eq." + encodeURIComponent(roomId) +
-          "&persona_name=eq." + encodeURIComponent(personaName) +
-          "&status=eq.active&select=persona_name,base_role,instructions&limit=1"
-      )
-      .then((response) => response.json<Array<{ persona_name: string; base_role: string; instructions: string }>>());
-    const row = rows[0];
-    if (!row || (row.base_role !== "claude_leader" && row.base_role !== "codex_leader")) return undefined;
-    return { name: row.persona_name, baseRole: row.base_role, instructions: row.instructions };
-  }
-
-  private async createAgentPersona(
-    roomId: string,
-    command: { personaName: string; baseRole: string; instructions: string; createdByTelegramUserId?: string }
-  ): Promise<string> {
-    const response = await this.client.request("POST", "/huai_agent_personas", {
-      body: {
-        room_id: roomId,
-        persona_name: command.personaName,
-        base_role: command.baseRole,
-        instructions: command.instructions,
-        created_by_telegram_user_id: command.createdByTelegramUserId
-          ? toBigIntString(command.createdByTelegramUserId, "created_by_telegram_user_id")
-          : null
-      },
-      prefer: "return=minimal"
-    });
-
-    if (response.status === 409) {
-      return `이미 "${command.personaName}" 페르소나가 있습니다. 다른 이름을 쓰거나 기존 것을 그대로 사용하세요.`;
-    }
-    await response.expectOk();
-
-    const roleLabel = command.baseRole === "claude_leader" ? "ClaudeBot" : "CodexBot";
-    return [
-      `페르소나 "${command.personaName}" 등록 완료 (담당: ${roleLabel}).`,
-      `이제 리더봇을 부를 때 "!${command.personaName} <지시>" 형식으로 쓰면 이 페르소나로 처리됩니다.`,
-      `예: @leader_chatroom_bot !${command.personaName} 최신 소식 조사해줘`
-    ].join("\n");
-  }
-
-  private async renderAgentPersonaList(roomId: string): Promise<string> {
-    const rows = await this.client
-      .request(
-        "GET",
-        "/huai_agent_personas?room_id=eq." + encodeURIComponent(roomId) +
-          "&status=eq.active&select=persona_name,base_role,instructions&order=created_at.asc"
-      )
-      .then((response) => response.json<Array<{ persona_name: string; base_role: string; instructions: string }>>());
-
-    if (rows.length === 0) {
-      return "등록된 페르소나가 없습니다.\n/newagent <이름> <claude_leader|codex_leader> <할 일> 로 추가할 수 있습니다.";
-    }
-
-    const lines = [`등록된 페르소나 (${rows.length}개)`];
-    for (const row of rows) {
-      const roleLabel = row.base_role === "claude_leader" ? "ClaudeBot" : "CodexBot";
-      lines.push("", `!${row.persona_name} (담당: ${roleLabel})`, row.instructions.slice(0, 200));
-    }
-    return lines.join("\n");
-  }
-
-  // Phase 3: /tasks 를 평문 나열에서 상태별 그룹 + 경과시간 + 담당자 표시로 바꾼다.
-  // 상태 분류표는 TASK_STATUS_META(전수 커버리지, huai_tasks_status_check 기준) 참고.
-  private async renderTaskListQuery(limit: number, roomId: string): Promise<string> {
-    const safeLimit = Math.max(1, Math.min(limit, 30));
-    // in_progress 작업은 장기 체류로 updated_at 이 밀려 단일 updated_at.desc 쿼리에서
-    // 창 밖으로 탈락하는 결함이 있었다. 별도 조회로 항상 포함시킨다.
-    const IN_PROGRESS_CAP = 30;
-    const taskSelect = "task_id,title,status,priority,assignee_actor_id,updated_at,created_at";
-    const inProgressResponse = await this.client.request(
-      "GET",
-      "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&status=eq.in_progress&select=" + taskSelect + "&order=updated_at.desc&limit=" + IN_PROGRESS_CAP,
-      { prefer: "count=exact" }
-    );
-    const inProgressRows = await inProgressResponse.json<TaskSummaryRow[]>();
-    const inProgressTotal = parseContentRangeTotal(inProgressResponse.header("content-range")) ?? inProgressRows.length;
-
-    const otherLimit = Math.max(1, safeLimit - inProgressRows.length);
-    const otherResponse = await this.client.request(
-      "GET",
-      "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&status=neq.in_progress&select=" + taskSelect + "&order=updated_at.desc&limit=" + otherLimit,
-      { prefer: "count=exact" }
-    );
-    const otherRows = await otherResponse.json<TaskSummaryRow[]>();
-    const otherTotal = parseContentRangeTotal(otherResponse.header("content-range")) ?? otherRows.length;
-
-    const rows = [...inProgressRows, ...otherRows];
-    const totalCount = inProgressTotal + otherTotal;
-
-    if (rows.length === 0) return "작업 목록\n현재 등록된 작업이 없습니다.";
-
-
-    const assigneeActorIds = Array.from(new Set(rows.map((task) => task.assignee_actor_id).filter((value): value is string => Boolean(value))));
-    const roleByActorId = await this.fetchActorRolesByActorIds(assigneeActorIds);
-    const now = this.now();
-
-    const grouped = new Map<TaskStatusGroupKey, TaskSummaryRow[]>();
-    for (const task of rows) {
-      const meta = taskStatusMeta(task.status);
-      const bucket = grouped.get(meta.group) ?? [];
-      bucket.push(task);
-      grouped.set(meta.group, bucket);
-    }
-
-    const headerLine = totalCount > rows.length
-      ? `작업 목록 (최근 ${rows.length}건 표시 · 전체 ${totalCount}건 중 ${totalCount - rows.length}건 더 있음)`
-      : `작업 목록 (총 ${rows.length}건)`;
-    const lines: string[] = [
-      buildProjectStatusMessage({
-        title: "HuAI 프로젝트",
-        activeTasks: inProgressTotal,
-        pendingApprovals: rows.filter((task) => task.status.includes("pending")).length,
-        gatewayOnline: true
-      }),
-      "",
-      headerLine
-    ];
-    let index = 0;
-    for (const groupKey of TASK_STATUS_GROUP_ORDER) {
-      const tasks = grouped.get(groupKey);
-      if (!tasks || tasks.length === 0) continue; // 빈 그룹은 화면을 잡아먹으니 아예 출력하지 않는다.
-      const groupInfo = TASK_STATUS_GROUPS[groupKey];
-      lines.push("", `${groupInfo.icon} ${groupInfo.label} (${tasks.length})`);
-      for (const task of tasks) {
-        index += 1;
-        // updated_at 은 상태가 바뀔 때마다 patchTaskStatus 가 갱신하고, 아직 한 번도
-        // 안 바뀐 task 는 insert 시점 created_at 과 사실상 같은 값이 default now() 로 들어간다.
-        // 그래서 상태별로 기준 필드를 분기할 필요 없이 updated_at 하나가
-        // "이 상태로 바뀐 시점"과 "생성된 시점"을 동시에 커버한다.
-        const elapsed = formatElapsedSince(task.updated_at ?? task.created_at, now);
-        const assignee = taskAssigneeLabel(roleByActorId.get(task.assignee_actor_id ?? ""));
-        // 그룹 헤더는 스캔용이고, 같은 그룹 안에도 서로 다른 세부 상태가 섞인다
-        // (예: "⏳ 대기 중"에는 제안 검토 대기/실행 대기/검증 대기 등 6가지가 섞인다).
-        // 그룹만 보여주면 어떤 대기인지 알 수 없어 정보 손실이라, 세부 라벨을 항상 같이 보여준다.
-        const detailParts = [`상태: ${taskStatusMeta(task.status).label}`, `담당: ${assignee}`];
-        if (elapsed) detailParts.push(elapsed);
-        if (task.priority && task.priority !== "normal") detailParts.push(`우선순위: ${task.priority}`);
-        lines.push(`${index}. ${shortTaskId(task.task_id)} · ${task.title || "제목 없음"}`);
-        lines.push(`   ${detailParts.join(" · ")}`);
-      }
-    }
-    return lines.join("\n");
-  }
-
-  // actor_id 는 UUID PK 라 room 필터가 필요 없다 (fetchTaskByProposalId 와 같은 근거).
-  private async fetchActorRolesByActorIds(actorIds: readonly string[]): Promise<Map<string, string>> {
-    if (actorIds.length === 0) return new Map();
-    const quoted = actorIds.map((id) => '"' + escapePostgrestInValue(id) + '"').join(",");
-    const rows = await this.client
-      .request("GET", "/huai_ai_actors?actor_id=in.(" + encodeURIComponent(quoted) + ")&select=actor_id,role")
-      .then((response) => response.json<Array<{ actor_id: string; role: string }>>());
-    return new Map(rows.map((row) => [row.actor_id, row.role]));
-  }
-
-  private async renderTaskSearchQuery(term: string, roomId: string): Promise<string> {
-    const normalized = term.trim();
-    if (!normalized) return "작업 검색\n검색어를 함께 보내주세요. 예: /search 버튼";
-    const encodedTerm = encodeURIComponent("*" + normalized.replace(/[*,()]/g, " ").trim() + "*");
-    const rows = await this.client
-      .request("GET", "/huai_tasks?room_id=eq." + encodeURIComponent(roomId) + "&or=(title.ilike." + encodedTerm + ",purpose.ilike." + encodedTerm + ",scope.ilike." + encodedTerm + ")&select=task_id,title,status,priority,assignee_actor_id,updated_at,created_at&order=updated_at.desc&limit=10")
-      .then((response) => response.json<TaskSummaryRow[]>());
-    if (rows.length === 0) return "작업 검색\n검색 결과가 없습니다: " + normalized;
-    return [
-      "작업 검색: " + normalized,
-      ...rows.map((task, index) => `${index + 1}. ${shortTaskId(task.task_id)} · ${task.title || "제목 없음"}\n상태: ${taskStatusMeta(task.status).label}`)
-    ].join("\n");
-  }
-  private async renderTaskTraceQuery(taskId: string, roomId: string): Promise<string> {
-    const normalizedTaskId = taskId.trim();
-    if (!isUuid(normalizedTaskId)) return "작업 이력\n작업 UUID를 함께 보내주세요. 예: /trace <task_id>";
-
-    const encodedTaskId = encodeURIComponent(normalizedTaskId);
-    // huai_artifacts·huai_verifications 에는 room_id 컬럼이 없어 직접 필터링할 수 없다.
-    // 대신 이 task 가 이 방 소유인지 먼저 확인하고, 아니면 실재하지 않는 task 와
-    // 똑같이 빈 이력으로 응답한다 — 존재 여부조차 다른 방에 알려주지 않는다.
-    const owned = await this.taskBelongsToRoom(normalizedTaskId, roomId);
-    const [events, artifacts, verifications] = owned
-      ? await Promise.all([
-          this.client
-            .request("GET", "/huai_events?task_id=eq." + encodedTaskId + "&room_id=eq." + encodeURIComponent(roomId) + "&select=event_type,created_at&order=created_at.desc&limit=10")
-            .then((response) => response.json<TaskTraceEventRow[]>()),
-          this.client
-            .request("GET", "/huai_artifacts?task_id=eq." + encodedTaskId + "&select=uri,version,is_final,created_at&order=created_at.desc&limit=10")
-            .then((response) => response.json<TaskTraceArtifactRow[]>()),
-          this.client
-            .request("GET", "/huai_verifications?task_id=eq." + encodedTaskId + "&select=verdict,target_version,created_at&order=created_at.desc&limit=10")
-            .then((response) => response.json<TaskTraceVerificationRow[]>())
-        ])
-      : [[], [], []] as [TaskTraceEventRow[], TaskTraceArtifactRow[], TaskTraceVerificationRow[]];
-
-    return [
-      "작업 이력: " + shortTaskId(normalizedTaskId),
-      "이벤트:",
-      ...(events.length === 0 ? ["- 없음"] : events.map((event) => "- " + event.event_type + formatTraceTime(event.created_at))),
-      "산출물:",
-      ...(artifacts.length === 0 ? ["- 없음"] : artifacts.map((artifact) => "- " + artifact.version + (artifact.is_final ? " · final" : "") + " · " + safeTelegramTraceUri(artifact.uri) + formatTraceTime(artifact.created_at))),
-      "검증:",
-      ...(verifications.length === 0 ? ["- 없음"] : verifications.map((verification) => "- " + verification.verdict + " · " + verification.target_version + formatTraceTime(verification.created_at)))
-    ].join("\n");
-  }
-
-  private async renderTaskDetailQuery(taskId: string, roomId: string): Promise<string> {
-    const normalizedTaskId = taskId.trim();
-    if (!normalizedTaskId) return "작업 상세\n작업 ID를 함께 보내주세요. 예: /task task_id";
-
-    const task = normalizedTaskId.startsWith("proposal_")
-      ? await this.fetchTaskDetailByProposalId(normalizedTaskId, roomId)
-      : await this.fetchTaskDetailByTaskId(normalizedTaskId, roomId);
-    if (!task) return `작업 상세\n해당 작업을 찾지 못했습니다: ${normalizedTaskId}`;
-
-    return [
-      "작업 상세",
-      `ID: ${shortTaskId(task.task_id)}`,
-      `작업: ${task.title || "제목 없음"}`,
-      `상태: ${taskStatusMeta(task.status).label}`,
-      task.priority ? `우선순위: ${task.priority}` : undefined,
-      task.purpose ? `목적: ${task.purpose}` : undefined,
-      task.scope ? `범위: ${task.scope}` : undefined,
-      task.completion_criteria ? `완료 기준: ${task.completion_criteria}` : undefined,
-      task.updated_at ? `최근 갱신: ${task.updated_at}` : undefined
-    ].filter((line): line is string => typeof line === "string" && line.trim().length > 0).join("\n");
-  }
-
-  private async fetchTaskDetailByTaskId(taskId: string, roomId: string): Promise<TaskDetailRow | undefined> {
-    if (!isUuid(taskId)) return undefined;
-    // room_id 를 SELECT 필터에 직접 넣으면, 다른 방 task 는 "존재하지 않음"과
-    // 똑같이 빈 결과로 돌아온다 — 별도 분기 없이 유출을 막는다.
-    const rows = await this.client
-      .request("GET", "/huai_tasks?task_id=eq." + encodeURIComponent(taskId) + "&room_id=eq." + encodeURIComponent(roomId) + "&select=task_id,title,status,priority,purpose,scope,completion_criteria,updated_at,created_at&limit=1")
-      .then((response) => response.json<TaskDetailRow[]>());
-    return rows[0];
-  }
-
-  private async fetchTaskDetailByProposalId(proposalId: string, roomId: string): Promise<TaskDetailRow | undefined> {
-    const proposalUuid = uuidFromProposalId(proposalId);
-    const query = proposalUuid
-      ? "proposal_id=eq." + encodeURIComponent(proposalUuid)
-      : "idempotency_key=eq." + encodeURIComponent(taskIdempotencyKey(proposalId));
-    const rows = await this.client
-      .request("GET", "/huai_tasks?" + query + "&room_id=eq." + encodeURIComponent(roomId) + "&select=task_id,title,status,priority,purpose,scope,completion_criteria,updated_at,created_at&limit=1")
-      .then((response) => response.json<TaskDetailRow[]>());
-    return rows[0];
-  }
-
-  // /trace 가드용. huai_artifacts·huai_verifications 에 room_id 가 없으므로
-  // 산출물·검증 이력을 조회하기 전에 이 task 가 이 방 소유인지부터 확인한다.
-  private async taskBelongsToRoom(taskId: string, roomId: string): Promise<boolean> {
-    const rows = await this.client
-      .request("GET", "/huai_tasks?task_id=eq." + encodeURIComponent(taskId) + "&room_id=eq." + encodeURIComponent(roomId) + "&select=task_id&limit=1")
-      .then((response) => response.json<Array<{ task_id: string }>>());
-    return rows.length > 0;
-  }
   private async insertOutboxRowsIdempotently(rows: OutboxInsertRow[]): Promise<OutboxRow[]> {
     if (rows.length === 0) return [];
     const body = rows.map((row) => ({ ...row, event_id: row.event_id ?? null }));
@@ -1308,15 +516,6 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .then((response) => response.json<OutboxRow[]>());
   }
 
-  private async leaseOutbox(limit: number, leaseUntil: string, targetKind: "telegram_bot" | "local_gateway"): Promise<OutboxRecord[]> {
-    const rows = await this.client.rpc<OutboxRow[]>("lease_huai_outbox", {
-      p_limit: limit,
-      p_locked_until: leaseUntil,
-      p_target_kind: targetKind
-    });
-    return rows.map(toOutboxRecord);
-  }
-
   private async fetchExistingUpdate(envelope: TelegramUpdateEnvelope): Promise<TelegramUpdateRow | undefined> {
     const rows = await this.client
       .request("GET", `/huai_telegram_updates?telegram_bot_id=eq.${encodeURIComponent(envelope.telegramBotId)}&update_id=eq.${encodeURIComponent(envelope.updateId)}&select=status`)
@@ -1330,17 +529,6 @@ export class SupabaseBotServiceStore implements OrchestratorPersistencePort, Out
       .then((response) => response.expectOk());
   }
 
-  private async patchOutbox(outboxId: string, body: Record<string, unknown>): Promise<void> {
-    await this.client
-      .request("PATCH", `/huai_outbox?huai_outbox_id=eq.${encodeURIComponent(outboxId)}&status=eq.processing`, {
-        body,
-        prefer: "return=representation"
-      })
-      .then((response) => response.json<OutboxRow[]>())
-      .then((rows) => {
-        if (rows.length !== 1) throw new Error("outbox-state-conflict:patch");
-      });
-  }
 }
 
 export function buildSupabaseBotServiceStoreFromEnv(env: NodeJS.ProcessEnv = process.env): SupabaseBotServiceStore {
@@ -1351,847 +539,20 @@ export function buildSupabaseBotServiceStoreFromEnv(env: NodeJS.ProcessEnv = pro
   });
 }
 
-// 바깥으로 나가는 호출은 반드시 스스로 끊는다.
-//
-// 라이브에서 폴링 한 바퀴가 Supabase 기록 단계에서 영영 돌아오지 않아, 텔레그램에서 가져온
-// 메시지의 offset 이 확정되지 못했다. 프로세스는 살아 있고 로그는 조용한데 방의 말은 하나도
-// 처리되지 않았다(pending_update_count 가 1 에서 안 움직였다). 끊기지 않는 호출 하나가
-// 루프 전체를 멈춘다 — 재기동 말고는 빠져나올 길이 없다.
-const SUPABASE_REQUEST_TIMEOUT_MS = 20_000;
-
-class SupabaseRestClient {
-  private readonly baseUrl: string;
-  private readonly serviceRoleKey: string;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(input: { url: string; serviceRoleKey: string; fetchImpl?: typeof fetch }) {
-    this.baseUrl = input.url.replace(/\/+$/, "");
-    this.serviceRoleKey = input.serviceRoleKey;
-    this.fetchImpl = input.fetchImpl ?? fetch;
-  }
-
-  async rpc<T = unknown>(name: string, body: Record<string, unknown>): Promise<T> {
-    return this.request("POST", `/rpc/${name}`, { body }).then((response) => response.json<T>());
-  }
-
-  async request(method: string, path: string, options: { body?: unknown; prefer?: string } = {}): Promise<SupabaseRestResponse> {
-    const response = await this.fetchImpl(`${this.baseUrl}/rest/v1${path}`, {
-      method,
-      headers: stripUndefined({
-        apikey: this.serviceRoleKey,
-        authorization: `Bearer ${this.serviceRoleKey}`,
-        "content-type": "application/json",
-        prefer: options.prefer
-      }),
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: AbortSignal.timeout(SUPABASE_REQUEST_TIMEOUT_MS)
-    });
-    return new SupabaseRestResponse(response);
-  }
-}
-
-class SupabaseRestResponse {
-  constructor(private readonly response: Response) {}
-
-  get status(): number {
-    return this.response.status;
-  }
-
-  header(name: string): string | null {
-    return this.response.headers.get(name);
-  }
-
-  async expectOk(): Promise<void> {
-    if (!this.response.ok) {
-      throw new Error(`supabase-rest-error:${this.response.status}:${await safeResponseText(this.response)}`);
-    }
-  }
-
-  async json<T>(): Promise<T> {
-    await this.expectOk();
-    if (this.response.status === 204) return undefined as T;
-    return (await this.response.json()) as T;
-  }
-}
-
-type OrchestratorPersistencePortEvent = Parameters<OrchestratorPersistencePort["commitTelegramInputResult"]>[0]["result"]["events"][number];
-
-type EventRow = {
-  event_id: string;
-  room_id: string;
-  task_id?: string | null;
-  event_type: string;
-  idempotency_key: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-};
-
-type OutboxRow = {
-  huai_outbox_id: string;
-  room_id?: string | null;
-  event_id?: string | null;
-  idempotency_key: string;
-  target_kind: "telegram_bot" | "local_gateway";
-  target: string | OutboxTarget;
-  payload: Record<string, unknown>;
-  status: PersistedOutboxItem["status"];
-  attempts: number;
-  created_at: string;
-  sent_at?: string | null;
-  last_error?: string | null;
-};
-
-type TelegramUpdateRow = {
-  status?: string;
-};
-
-type ExecutionActorRole = "claude_leader" | "codex_leader";
-
-type ProposalExecutionHint = {
-  prompt: string;
-  title: string;
-  // 이 제안이 시작된 포럼 주제. 승인되면 작업 행에 그대로 옮겨 적는다.
-  messageThreadId?: string;
-  requestedActorRole?: ExecutionActorRole;
-  executionMode?: "multi_ai_review";
-  rawText?: string;
-  // FR-007: 제안 단계에서 구조화된 목적·범위·완료조건. 완료조건은 검증 판정 기준이 된다.
-  purpose?: string;
-  scope?: string;
-  completionCriteria?: string;
-  // "버전 N개 만들어줘" 변형이면 true — 공유 프로젝트 폴더가 아니라 자기만의 격리된
-  // git worktree 에서 실행돼야 한다(huai_tasks.use_isolated_worktree).
-  useIsolatedWorktree?: boolean;
-};
-
-type OutboxInsertRow = {
-  // 방 단위 공평 리스(lease_huai_outbox, migration 20260815140000)의 파티션 키.
-  // 여기서 안 채우면 새로 들어가는 행은 전부 room_id=null 로 한 버킷에 묶여 공평 리스가 무력화된다.
-  room_id: string;
-  event_id: string | undefined;
-  idempotency_key: string;
-  target_kind: OutboxRow["target_kind"];
-  target: string;
-  payload: Record<string, unknown>;
-};
-
-function taskIdFromBinding(binding: unknown): string | undefined {
-  if (!binding || typeof binding !== "object") return undefined;
-  const value = binding as Record<string, unknown>;
-  return value.kind === "task" && typeof value.taskId === "string" && isUuid(value.taskId) ? value.taskId : undefined;
-}
-
-export function buildFinalApprovalResultText(
-  taskId: string,
-  reportBody: string | undefined,
-  artifacts: ReadonlyArray<{ uri: string; public_url?: string | null }>
-): string {
-  const summary = String(reportBody ?? "").trim();
-  const artifactLines = artifacts.map((artifact) => {
-    const uri = artifact.public_url && /^https?:\/\//i.test(artifact.public_url) ? artifact.public_url : artifact.uri;
-    return "- " + safeTelegramTraceUri(uri);
-  });
-  return [
-    `승인 완료: ${taskId}`,
-    summary ? "결과 보고:\n" + summary : "결과 보고: 저장된 실행 보고가 없습니다.",
-    artifactLines.length > 0 ? "산출물:\n" + artifactLines.join("\n") : "산출물: 없음"
-  ].join("\n\n");
-}
-
-type ExecutionActorRow = {
-  actor_id: string;
-  role: ExecutionActorRole;
-  adapter_type: "claude_code" | "codex";
-};
-
-
-type TaskSummaryRow = {
-  task_id: string;
-  title?: string | null;
-  status: TaskStatus;
-  priority?: string | null;
-  assignee_actor_id?: string | null;
-  updated_at?: string | null;
-  created_at?: string | null;
-};
-
-type TaskDetailRow = TaskSummaryRow & {
-  purpose?: string | null;
-  scope?: string | null;
-  completion_criteria?: string | null;
-};
-
-type TaskTraceEventRow = {
-  event_type: string;
-  created_at?: string | null;
-};
-
-type TaskTraceArtifactRow = {
-  uri: string;
-  version: string;
-  is_final?: boolean | null;
-  created_at?: string | null;
-};
-
-type TaskTraceVerificationRow = {
-  verdict: string;
-  target_version: string;
-  created_at?: string | null;
-};
-
-type TaskQueryPayload =
-  | { kind: "center" }
-  | { kind: "tasks"; limit: number }
-  | { kind: "task"; taskId: string }
-  | { kind: "search"; term: string }
-  | { kind: "trace"; taskId: string };
-function taskQueryPayload(payload: Record<string, unknown>): TaskQueryPayload | undefined {
-  const value = payload.query;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const query = value as Record<string, unknown>;
-  if (query.kind === "center") return { kind: "center" };
-  if (query.kind === "tasks") {
-    const limit = typeof query.limit === "number" && Number.isFinite(query.limit) ? Math.trunc(query.limit) : 10;
-    return { kind: "tasks", limit };
-  }
-  if (query.kind === "task") {
-    return { kind: "task", taskId: typeof query.taskId === "string" ? query.taskId : "" };
-  }
-  if (query.kind === "search") {
-    return { kind: "search", term: typeof query.term === "string" ? query.term : "" };
-  }
-  if (query.kind === "trace") {
-    return { kind: "trace", taskId: typeof query.taskId === "string" ? query.taskId : "" };
-  }
-  return undefined;
-}
-
-type AgentPersonaCommandPayload =
-  | { action: "create"; personaName: string; baseRole: string; instructions: string; createdByTelegramUserId?: string }
-  | { action: "list" };
-function agentPersonaCommandPayload(payload: Record<string, unknown>): AgentPersonaCommandPayload | undefined {
-  const value = payload.agentPersonaCommand;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const command = value as Record<string, unknown>;
-  if (command.action === "list") return { action: "list" };
-  if (command.action === "create") {
-    return {
-      action: "create",
-      personaName: typeof command.personaName === "string" ? command.personaName : "",
-      baseRole: typeof command.baseRole === "string" ? command.baseRole : "",
-      instructions: typeof command.instructions === "string" ? command.instructions : "",
-      createdByTelegramUserId: typeof command.createdByTelegramUserId === "string" ? command.createdByTelegramUserId : undefined
-    };
-  }
-  return undefined;
-}
-
-type AiActorCommandPayload = { action: "invite"; role: string; adapterType: string } | { action: "check" };
-function aiActorCommandPayload(payload: Record<string, unknown>): AiActorCommandPayload | undefined {
-  const value = payload.aiActorCommand;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const command = value as Record<string, unknown>;
-  if (command.action === "check") return { action: "check" };
-  if (command.action !== "invite" || typeof command.role !== "string" || typeof command.adapterType !== "string") return undefined;
-  const roles = ["leader", "claude_leader", "codex_leader", "auditor"];
-  const adapters = ["orchestrator", "claude_code", "codex", "auditor"];
-  if (!roles.includes(command.role) || !adapters.includes(command.adapterType)) return undefined;
-  return { action: "invite", role: command.role, adapterType: command.adapterType };
-}
-
-type RoomCommandPayload = { action: "register"; telegramChatId: string; ownerTelegramUserId: string };
-function roomCommandPayload(payload: Record<string, unknown>): RoomCommandPayload | undefined {
-  const value = payload.roomCommand;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const command = value as Record<string, unknown>;
-  if (command.action !== "register" || typeof command.telegramChatId !== "string" || typeof command.ownerTelegramUserId !== "string") return undefined;
-  return { action: "register", telegramChatId: command.telegramChatId, ownerTelegramUserId: command.ownerTelegramUserId };
-}
-
-type RoomMemberCommandPayload = { action: "add" | "leave"; telegramUserId: string };
-function roomMemberCommandPayload(payload: Record<string, unknown>): RoomMemberCommandPayload | undefined {
-  const value = payload.roomMemberCommand;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const command = value as Record<string, unknown>;
-  if ((command.action !== "add" && command.action !== "leave") || typeof command.telegramUserId !== "string" || !/^-?\d+$/.test(command.telegramUserId)) return undefined;
-  return { action: command.action, telegramUserId: command.telegramUserId };
-}
-
-function formatTraceTime(value?: string | null): string {
-  return value ? " · " + value : "";
-}
-
-function shortTaskId(taskId: string): string {
-  return taskId.length <= 12 ? taskId : taskId.slice(0, 8);
-}
-
-// PostgREST 의 `Prefer: count=exact` 응답 헤더 형식: "0-9/25"(부분) 또는 "*/0"(빈 결과).
-// 슬래시 뒤의 총 건수만 뽑는다. 헤더가 없거나 형식이 다르면 undefined — 호출부가
-// "실제보다 많다고 거짓 안내"하지 않도록 rows.length 로 안전하게 폴백한다.
-function parseContentRangeTotal(value: string | null): number | undefined {
-  if (!value) return undefined;
-  const match = value.match(/\/(\d+)$/);
-  if (!match) return undefined;
-  const total = Number(match[1]);
-  return Number.isFinite(total) ? total : undefined;
-}
-
-// ---------- 작업 상태 라벨: 단일 출처 ----------
-// 예전엔 humanTaskStatus(status: string) 가 따로 있었다. 실제 huai_tasks_status_check(schema.sql)
-// 값과 어긋나는 case 가 섞여 있었고("proposed"/"running"/"verified" 는 실제 TaskStatus 에 존재하지
-// 않는 값), 다수의 실제 상태값(proposal_pending/in_progress/mid_approval_pending 등)은 default 로
-// 원문 snake_case 그대로 노출됐다. /search·/task·room facts(리더 판단 프롬프트) 세 경로가 전부
-// 이 결함을 물려받고 있었다 — room facts 쪽이 특히 나빴다: 리더가 방 상태를 판단할 때 원문
-// 값을 그대로 읽고 있었다는 뜻이다. TASK_STATUS_META(Record<TaskStatus, ...>, 23개 전수 컴파일
-// 타임 강제)가 이미 있었으므로 두 표를 남기지 않고 이걸 유일한 출처로 통일했다.
-// Record<TaskStatus, ...> 로 선언해 huai_tasks_status_check 의 23개 값 전수를 컴파일 타임에 강제한다.
-type TaskStatusGroupKey = "approval_pending" | "action_needed" | "in_progress" | "waiting" | "paused" | "completed" | "closed";
-
-// 출력 순서: 방장이 지금 결정해야 하는 것(승인 대기) -> 막힌 것(조치 필요) -> 돌고 있는 것(진행 중)
-// -> 대기 -> 일시정지 -> 끝난 것(완료/종료됨) 순. 방장이 가장 궁금해할 것을 위로 올린다.
-const TASK_STATUS_GROUP_ORDER: readonly TaskStatusGroupKey[] = [
-  "approval_pending", "action_needed", "in_progress", "waiting", "paused", "completed", "closed"
-];
-
-const TASK_STATUS_GROUPS: Readonly<Record<TaskStatusGroupKey, { icon: string; label: string }>> = {
-  approval_pending: { icon: "🗳️", label: "승인 대기" },
-  action_needed: { icon: "⚠️", label: "조치 필요" },
-  in_progress: { icon: "▶️", label: "진행 중" },
-  waiting: { icon: "⏳", label: "대기 중" },
-  paused: { icon: "⏸️", label: "일시정지" },
-  completed: { icon: "✅", label: "완료" },
-  closed: { icon: "🚫", label: "종료됨" }
-};
-
-const TASK_STATUS_META: Readonly<Record<TaskStatus, { group: TaskStatusGroupKey; label: string }>> = {
-  proposal_pending: { group: "waiting", label: "제안 검토 대기" },
-  proposal_revision_requested: { group: "action_needed", label: "제안 보완 필요" },
-  proposal_rejected: { group: "closed", label: "제안 반려됨" },
-  scheduled: { group: "waiting", label: "실행 대기" },
-  waiting_dependencies: { group: "waiting", label: "선행 작업 대기" },
-  queued_for_gateway: { group: "waiting", label: "실행 준비 중" },
-  in_progress: { group: "in_progress", label: "실행 중" },
-  mid_approval_pending: { group: "approval_pending", label: "중간 승인 대기" },
-  paused_by_owner: { group: "paused", label: "방장이 일시정지" },
-  verification_pending: { group: "waiting", label: "검증 대기" },
-  verification_in_progress: { group: "in_progress", label: "검증 중" },
-  revision_requested: { group: "action_needed", label: "보완 필요" },
-  revision_in_progress: { group: "in_progress", label: "보완 작업 중" },
-  reverification_pending: { group: "waiting", label: "재검증 대기" },
-  commander_completion_pending: { group: "approval_pending", label: "리더 완료 확인 대기" },
-  completion_approval_pending: { group: "approval_pending", label: "승인 대기" },
-  owner_supplement_requested: { group: "action_needed", label: "보완 요청함" },
-  completed: { group: "completed", label: "완료" },
-  cancel_requested: { group: "action_needed", label: "취소 처리 중" },
-  cancelled: { group: "closed", label: "취소됨" },
-  failed_retryable: { group: "action_needed", label: "실패(재시도 예정)" },
-  blocked: { group: "action_needed", label: "조치 필요" },
-  rejected_or_cancelled: { group: "closed", label: "반려/취소됨" }
-};
-
-// DB 제약이 지켜지는 한 항상 히트하지만, 방어적으로 미지의 값은 "조치 필요"로 눈에 띄게 분류한다
-// (조용히 숨기지 않는다 — 방장이 모르는 상태값이면 그게 더 위험하다).
-function taskStatusMeta(status: TaskStatus): { group: TaskStatusGroupKey; label: string } {
-  return TASK_STATUS_META[status] ?? { group: "action_needed", label: String(status) };
-}
-
-// 우리 방 봇 4개(leader/claude_leader/codex_leader/auditor)의 사람이 읽는 담당자 이름.
-// botLabelForRole() 은 리더 판단 프롬프트용 긴 표기("LeaderBot(리더)")라 목적이 다르다 —
-// /tasks 는 여러 건을 한 화면에 보여줘야 해서 짧은 표기를 따로 둔다.
-const TASK_ASSIGNEE_DISPLAY_BY_ROLE: Readonly<Record<string, string>> = {
-  leader: "리더",
-  claude_leader: "ClaudeBot",
-  codex_leader: "CodexBot",
-  auditor: "AuditBot"
-};
-
-function taskAssigneeLabel(role: string | undefined): string {
-  if (!role) return "미배정";
-  return TASK_ASSIGNEE_DISPLAY_BY_ROLE[role] ?? role;
-}
-
-// 절대 시각은 방장이 직접 계산해야 해서 안 읽힌다 — 상대 표현으로만 보여준다.
-function formatElapsedSince(iso: string | null | undefined, now: Date): string {
-  if (!iso) return "";
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return "";
-  const diffMs = Math.max(0, now.getTime() - then);
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 1) return "방금";
-  if (minutes < 60) return `${minutes}분 전`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}시간 전`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}일 전`;
-  const months = Math.floor(days / 30);
-  return `${months}개월 전`;
-}
-// ---------- /Phase 3 ----------
-
-function requestedExecutionRolesForHint(hint: ProposalExecutionHint): ExecutionActorRole[] {
-  if (hint.executionMode === "multi_ai_review") return ["claude_leader", "codex_leader"];
-  return hint.requestedActorRole ? [hint.requestedActorRole] : [];
-}
-
-function buildMultiAiExecutionRows(row: OutboxInsertRow, executionRequest: Record<string, unknown>, hint: ProposalExecutionHint, actorsByRole: Map<ExecutionActorRole, ExecutionActorRow>): OutboxInsertRow[] {
-  const baseAttemptId = typeof executionRequest.attemptId === "string" ? executionRequest.attemptId : "attempt";
-  const rows: OutboxInsertRow[] = [];
-  const claude = actorsByRole.get("claude_leader");
-  const codex = actorsByRole.get("codex_leader");
-  const requestText = hint.rawText ?? hint.prompt;
-  if (claude) rows.push(buildRoleExecutionRow(row, executionRequest, "claude", claude, promptWithRiskQuiz(buildRoleSpecificPrompt("claude_leader", requestText), requestText), `${baseAttemptId}-claude`));
-  if (codex) rows.push(buildRoleExecutionRow(row, executionRequest, "codex", codex, promptWithRiskQuiz(buildRoleSpecificPrompt("codex_leader", requestText), requestText), `${baseAttemptId}-codex`));
-  return rows.length > 0 ? rows : [{ ...row, payload: { ...row.payload, executionRequest: { ...executionRequest, prompt: promptWithRiskQuiz(hint.prompt, requestText) } } }];
-}
-
-function buildRoleExecutionRow(row: OutboxInsertRow, executionRequest: Record<string, unknown>, suffix: string, actor: ExecutionActorRow, prompt: string, attemptId: string): OutboxInsertRow {
-  return { ...row, idempotency_key: row.idempotency_key + ":" + suffix, payload: { ...row.payload, executionRequest: { ...executionRequest, attemptId, actorId: actor.actor_id, adapterType: actor.adapter_type, prompt, reportBotRole: actor.role } } };
-}
-
-// 파일을 실제로 바꾼 작업만, 완료 보고 끝에 이해도 확인용 객관식 3문항을 실어 달라고
-// 고위험 작업에만 요청한다 — 방장이 "완료" 버튼을 누르기 전에 무엇이 바뀌었는지 실제로
-// 이해했는지 확인하기 위함(인지부채 방지, Orca/Buzz 벤치마킹). packages/supabase-runtime 의
-// extractTaskQuizFromEvents 가 이 블록을 파싱하고, huai_task_quizzes 로 저장돼
-// miniapp-approve 가 통과 여부를 강제한다. 조회성 작업(파일 변경 없음)에는 의미가
-// 없어 생략한다 — 저장 쪽도 같은 위험도 함수를 한 번 더 적용한다.
-function appendQuizInstruction(prompt: string): string {
-  return [
-    prompt,
-    "",
-    "---",
-    "고위험 작업에서 파일을 실제로 만들거나 바꿨다면(조회·설명 또는 단순 저위험 변경이면 이 블록은 생략하세요), 보고의",
-    "맨 끝에 아래 형식 그대로 한 블록을 추가하세요. 방장이 변경 내용을 이해했는지",
-    "확인하는 객관식 3문항입니다 — 방장에게 그대로 보이는 문장이니 자연스러운 한국어로",
-    "쓰세요.",
-    "QUIZ_START",
-    '{"summary":"무엇을 왜 바꿨는지 3~5문장 요약","questions":[',
-    '{"q":"질문1","choices":["보기1","보기2","보기3","보기4"],"correct":0},',
-    '{"q":"질문2","choices":["보기1","보기2","보기3","보기4"],"correct":0},',
-    '{"q":"질문3","choices":["보기1","보기2","보기3","보기4"],"correct":0}',
-    "]}",
-    "QUIZ_END",
-    "correct 는 0부터 시작하는 정답 인덱스입니다. QUIZ_START 와 QUIZ_END 사이에는",
-    "유효한 JSON 외에 다른 말을 넣지 마세요."
-  ].join("\n");
-}
-
-function promptWithRiskQuiz(prompt: string, taskText: string): string {
-  return classifyTaskRisk(taskText) === "high" ? appendQuizInstruction(prompt) : prompt;
-}
-
-function buildRoleSpecificPrompt(role: "claude_leader" | "codex_leader" | "auditor", requestText: string): string {
-  const roleLine = role === "claude_leader"
-    ? "역할: ClaudeBot. 설계 관점, 누락 위험, 보완 의견을 제시하세요."
-    : role === "codex_leader"
-      ? "역할: CodexBot. 구현 관점, 실행 가능성, 필요한 코드 조치를 제시하세요."
-      : "역할: AuditBot. ClaudeBot과 CodexBot 결과를 독립 검증할 기준과 최종 판정을 제시하세요.";
-  return [
-    "HuAI Collab Chatroom System의 승인된 다중 AI 협의 작업입니다.",
-    roleLine,
-    "사람이 알아야 할 결론과 필요한 조치만 간결하게 보고하세요.",
-    "내부 JSON, hook log, stack trace, token, API key, 원문 시크릿은 출력하지 마세요.",
-    "",
-    "USER_REQUEST:",
-    requestText
-  ].join("\n");
-}
-
-function proposalExecutionModeFromPayload(payload: Record<string, unknown>): "multi_ai_review" | undefined {
-  return payload.intent === "multi_ai_review" ? "multi_ai_review" : undefined;
-}
-
-// Telegram raw update 에서 사람 발화만 뽑는다. 봇 메시지와 콜백은 대화가 아니다.
-function roomTurnFromRawUpdate(rawUpdate: Record<string, unknown>, ownerTelegramUserId: string | undefined): RoomTurn | undefined {
-  const message = (rawUpdate?.message ?? undefined) as Record<string, unknown> | undefined;
-  if (!message) return undefined;
-  const from = message.from as Record<string, unknown> | undefined;
-  if (from?.is_bot === true) return undefined;
-  const text = typeof message.text === "string" ? message.text : typeof message.caption === "string" ? message.caption : "";
-  const attachmentNote = attachmentNoteFromMessage(message);
-  const combined = [text.trim(), attachmentNote].filter(Boolean).join("\n");
-  if (!combined) return undefined;
-  const userId = from?.id === undefined ? undefined : String(from.id);
-  const isOwner = Boolean(userId && ownerTelegramUserId && userId === ownerTelegramUserId);
-  const speaker = isOwner ? "방장" : nameFromTelegramUser(from, userId);
-  return { speaker, text: maskSensitiveText(combined).slice(0, 500), isOwner };
-}
-
-// 다운로드에 성공한 첨부는 polling.ts 가 message._huaiLocalAttachments 에 로컬 경로를
-// 실어 저장해 둔다. 여기서 그 경로를 프롬프트에 노출해야 AI 실행기가 Read 로 열어 본다.
-function attachmentNoteFromMessage(message: Record<string, unknown>): string {
-  const attachments = message._huaiLocalAttachments as Array<{ path?: unknown; kind?: unknown }> | undefined;
-  if (!Array.isArray(attachments) || attachments.length === 0) return "";
-  return attachments
-    .filter((item) => typeof item.path === "string")
-    .map((item) => `[첨부 ${item.kind === "document" ? "파일" : "이미지"}: ${item.path}]`)
-    .join("\n");
-}
-
-function nameFromTelegramUser(from: Record<string, unknown> | undefined, userId: string | undefined): string {
-  const first = typeof from?.first_name === "string" ? from.first_name.trim() : "";
-  const username = typeof from?.username === "string" ? from.username.trim() : "";
-  return first || username || (userId ? "참여자" + userId.slice(-4) : "참여자");
-}
-
-function botLabelForRole(role: string): string {
-  if (role === "leader") return "LeaderBot(리더)";
-  if (role === "claude_leader") return "ClaudeBot(Claude Code 실행)";
-  if (role === "codex_leader") return "CodexBot(Codex 실행)";
-  if (role === "auditor") return "AuditBot(독립 검증)";
-  return role;
-}
-
-function executionWorkerLabel(
-  role: ExecutionActorRole | undefined,
-  mode: "multi_ai_review" | undefined
-): string | undefined {
-  if (mode === "multi_ai_review") return "ClaudeBot + CodexBot";
-  if (role === "claude_leader") return "ClaudeBot";
-  if (role === "codex_leader") return "CodexBot";
-  return undefined;
-}
-
-function proposalTitleFromPayload(payload: Record<string, unknown>): string {
-  const title = typeof payload.title === "string" ? payload.title.trim() : "";
-  const rawText = typeof payload.rawText === "string" ? payload.rawText.trim() : "";
-  return title || rawText.slice(0, 80) || "승인된 Telegram 작업";
-}
-
-// 완료 조건이 없으면 검증자가 판정할 기준이 없다. 제안 단계에서 못 뽑았을 때만 쓰는 최후 기본값.
-const DEFAULT_COMPLETION_CRITERIA = "요청 내용이 실제로 수행되어 결과가 확인 가능한 형태로 보고된다.";
-
-function proposalFieldFromPayload(payload: Record<string, unknown>, key: "purpose" | "scope" | "completionCriteria"): string | undefined {
-  const value = payload[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function proposalRequestTextFromPayload(payload: Record<string, unknown>): string | undefined {
-  const rawText = typeof payload.rawText === "string" ? payload.rawText.trim() : "";
-  const title = typeof payload.title === "string" ? payload.title.trim() : "";
-  return rawText || title || undefined;
-}
-function proposalIdNeedingPromptHydration(row: {
-  target_kind: OutboxRow["target_kind"];
-  payload: Record<string, unknown>;
-}): string | undefined {
-  if (row.target_kind !== "local_gateway") return undefined;
-  const executionRequest = executionRequestPayload(row.payload);
-  if (!executionRequest) return undefined;
-  const taskId = executionRequest.taskId;
-  if (typeof taskId !== "string" || !taskId) return undefined;
-  // 이미 물질화된 작업(UUID)은 프롬프트가 채워져 있다. 아직 제안 단계인 것만 채운다.
-  //
-  // 예전에는 `proposal_` 접두사로 판별했는데, Telegram 콜백 64바이트 제한 때문에
-  // 리더 제안 id 를 `p_...` 로 줄이자 이 검사가 걸러내 실행 에이전트가
-  // 작업 명세 대신 id 만 받았다("해당 ID 를 조회할 수 없습니다"로 끝남).
-  // 접두사가 아니라 "프롬프트가 아직 비어 있는가"로 판별한다.
-  if (isUuid(taskId)) return undefined;
-  const prompt = executionRequest.prompt;
-  if (typeof prompt === "string" && prompt.trim() && !prompt.startsWith("Execute approved task ")) return undefined;
-  return taskId;
-}
-
-function executionRequestPayload(payload: Record<string, unknown>): Record<string, unknown> | undefined {
-  const value = payload.executionRequest;
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function proposalPromptFromPayload(payload: Record<string, unknown>): string | undefined {
-  const rawText = typeof payload.rawText === "string" ? payload.rawText.trim() : "";
-  const title = typeof payload.title === "string" ? payload.title.trim() : "";
-  const requestText = rawText || title;
-  if (!requestText) return undefined;
-
-  // 리더가 구조화한 것이 있으면 그대로 실행자에게 넘긴다.
-  // 특히 완료 조건은 검증자가 합격/불합격을 판정할 기준이라, 실행자가 모르면
-  // 무엇을 만족시켜야 하는지 알 수 없는 채로 일하게 된다.
-  const purpose = proposalFieldFromPayload(payload, "purpose");
-  const scope = proposalFieldFromPayload(payload, "scope");
-  const completionCriteria = proposalFieldFromPayload(payload, "completionCriteria");
-  const structured = [
-    title ? `작업: ${title}` : undefined,
-    purpose ? `목적: ${purpose}` : undefined,
-    scope ? `범위: ${scope}` : undefined,
-    completionCriteria ? `완료 조건: ${completionCriteria}` : undefined
-  ].filter(Boolean);
-
-  const body = structured.length > 1 ? structured.join("\n") : requestText;
-  return buildApprovedTelegramTaskPrompt(body);
-}
-
-function proposalActorRoleFromPayload(payload: Record<string, unknown>): ExecutionActorRole | undefined {
-  const value = payload.requestedActorRole;
-  if (value === "claude_leader" || value === "codex_leader") return value;
-  return undefined;
-}
-
-// 테스트에서 지시문 내용을 직접 확인한다 — 사고를 막는 문장이 조용히 사라지면 안 된다.
-export function buildApprovedTelegramTaskPromptForTest(requestText: string): string {
-  return buildApprovedTelegramTaskPrompt(requestText);
-}
-
-function buildApprovedTelegramTaskPrompt(requestText: string): string {
-  return [
-    "You are CodexBot executing an approved Telegram project-room task for the HuAI Collab Chatroom System.",
-    "Treat the Telegram user request below as authoritative.",
-    "Do not call this product an MVP. Use '완성 제품' or '정식 운영 버전' when describing scope.",
-    "For project progress or operation-status questions, inspect OPERATION_STATUS.md first if it exists, then verify live scripts or runtime state before reporting.",
-    "Do not infer that Telegram/Supabase/webhook/local-gateway operation is incomplete only because older Gate documents describe setup steps.",
-    "Report only verified facts. If a check cannot run, say exactly which check failed.",
-    "If you reach a high-impact decision that must be approved before the remaining work is safe, stop at that checkpoint and output exactly one MID_APPROVAL_START/MID_APPROVAL_END block containing JSON fields reportId (UUID), approvalRequestId, summary, significanceReason, and affectedTaskIds (known downstream task UUIDs; [] if none are known). Do not continue past that checkpoint in the same execution.",
-    // 라이브 사고 — 작업자가 브라우저 테스트를 하며 `taskkill /F /IM chrome.exe` 를 실행해
-    // 방장이 열어 둔 Chrome 창 약 50개를 통째로 죽였다. 저장 안 한 작업물이 날아갔다.
-    // 작업 폴더 안에서 무엇을 하든 그건 우리 일이지만, 사람이 쓰던 프로그램을 끄는 것은
-    // 작업 범위가 아니다.
-    "Never terminate processes you did not start. Do not run taskkill, Stop-Process, pkill, or",
-    "kill against browsers, editors, or any application the human may be using — the work machine",
-    "is a person's desktop, not a build agent. If a test needs a browser, launch your own instance",
-    "with a separate user-data-dir and close only that instance.",
-    "Never restart or stop the operation services (bot-service, local-gateway) — you are running",
-    "inside them; killing them ends the task that is asking you to work.",
-    "",
-    "USER_REQUEST:",
-    requestText
-  ].join("\n");
-}
-
-function uuidFromProposalId(proposalId: string): string | undefined {
-  const value = proposalId.startsWith("proposal_") ? proposalId.slice("proposal_".length) : proposalId;
-  return isUuid(value) ? value : undefined;
-}
-
-function taskIdempotencyKey(proposalId: string): string {
-  return "task:approved-proposal:" + proposalId;
-}
-function workflowContextFromEvent(event: OrchestratorPersistencePortEvent): WorkflowContext {
-  const payload = event.payload;
-  const actorRole = stringValue(payload.actorRole) ?? inferredActorRoleFromEvent(event.eventType);
-  const actorId = stringValue(payload.actorId);
-  const verifierActorId = stringValue(payload.verifierActorId) ?? (actorRole === "auditor" ? actorId : undefined);
-  return {
-    actorRole,
-    isOwner: actorRole === "human_owner" || event.eventType.startsWith("owner_"),
-    isAssignee: actorRole === "claude_leader" || actorRole === "codex_leader",
-    isVerifier: actorRole === "auditor" || Boolean(verifierActorId),
-    authorActorId: stringValue(payload.authorActorId),
-    verifierActorId,
-    hasOwnerTaskApproval: booleanValue(payload.hasOwnerTaskApproval),
-    hasVerificationPass: booleanValue(payload.hasVerificationPass),
-    hasCommanderCompletionDecision: booleanValue(payload.hasCommanderCompletionDecision),
-    hasOwnerFinalApproval: booleanValue(payload.hasOwnerFinalApproval),
-    changedScope: changedScopeValue(payload.changedScope),
-    idempotencyKey: event.idempotencyKey
-  };
-}
-
-// 승인성 이벤트 -> huai_approvals 의 (stage, decision).
-// 기획서 FR-008 / FR-015 / AC-08 이 요구하는 "완료 전 3단계 승인 증거"를 남기기 위한 매핑이다.
-// 여기에 없는 이벤트는 승인 기록 대상이 아니다.
-const APPROVAL_STAGE_BY_EVENT: Readonly<Record<string, { stage: ApprovalStage; decision: ApprovalDecision }>> = {
-  owner_task_approved: { stage: "task_approval", decision: "approved" },
-  owner_task_rejected: { stage: "task_approval", decision: "rejected" },
-  proposal_rejected: { stage: "task_approval", decision: "rejected" },
-  proposal_revision_requested: { stage: "task_approval", decision: "revision_requested" },
-  owner_mid_approved: { stage: "midpoint_approval", decision: "approved" },
-  owner_mid_rejected: { stage: "midpoint_approval", decision: "rejected" },
-  commander_completion_approved: { stage: "commander_completion", decision: "approved" },
-  owner_final_approved: { stage: "final_approval", decision: "approved" },
-  owner_final_rejected: { stage: "final_approval", decision: "rejected" },
-  owner_supplement_requested: { stage: "final_approval", decision: "revision_requested" },
-  owner_cancel_requested: { stage: "cancellation", decision: "cancelled" },
-  cancel_approved: { stage: "cancellation", decision: "cancelled" }
-};
-
-export type ApprovalStage = "task_approval" | "midpoint_approval" | "commander_completion" | "final_approval" | "cancellation";
-export type ApprovalDecision = "approved" | "rejected" | "revision_requested" | "cancelled";
-
-export function approvalRecordForEvent(eventType: string): { stage: ApprovalStage; decision: ApprovalDecision } | undefined {
-  return APPROVAL_STAGE_BY_EVENT[eventType];
-}
-
-// 승인 시점 대상 식별자. proposal 단계면 "proposal_xxxx", 이후 단계면 task UUID 가 들어온다.
-export function approvalEntityRefFromPayload(payload: Record<string, unknown>): string | undefined {
-  return stringValue(payload.entityId) ?? stringValue(payload.targetId) ?? stringValue(payload.taskId) ?? stringValue(payload.proposalId);
-}
-
-export function approvalDeciderFromPayload(payload: Record<string, unknown>): string | undefined {
-  const value = payload.telegramUserId ?? payload.deciderTelegramUserId;
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  return typeof value === "string" && /^\d+$/.test(value.trim()) ? value.trim() : undefined;
-}
-
-export function approvalReasonFromPayload(payload: Record<string, unknown>): string | null {
-  const reason = stringValue(payload.reason) ?? stringValue(payload.rawText);
-  return reason ? maskSensitiveText(reason).slice(0, 2000) : null;
-}
-
-function inferredActorRoleFromEvent(eventType: string): string {
-  if (eventType.startsWith("owner_")) return "human_owner";
-  if (eventType.startsWith("verification") || eventType.startsWith("reverification")) return "auditor";
-  if (eventType.startsWith("commander_")) return "leader";
-  return "system";
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function booleanValue(value: unknown): boolean {
-  return value === true;
-}
-
-function changedScopeValue(value: unknown): WorkflowContext["changedScope"] {
-  return value === "format_only" || value === "content" || value === "scope_change" ? value : undefined;
-}
-function taskIdFromEventPayload(payload: Record<string, unknown>): string | undefined {
-  const value = payload.targetId ?? payload.entityId ?? payload.taskId;
-  return typeof value === "string" && isUuid(value) ? value : undefined;
-}
-
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-function toPersistedEvent(row: EventRow): PersistedEvent {
-  return {
-    eventId: row.event_id,
-    eventType: row.event_type as PersistedEvent["eventType"],
-    idempotencyKey: row.idempotency_key,
-    payload: row.payload,
-    createdAt: row.created_at
-  };
-}
-
-function toPersistedOutboxItem(row: OutboxRow): PersistedOutboxItem {
-  return {
-    ...toOutboxRecord(row),
-    eventId: row.event_id ?? undefined,
-    createdAt: row.created_at,
-    sentAt: row.sent_at ?? undefined,
-    lastError: row.last_error ?? undefined
-  };
-}
-
-function toOutboxRecord(row: OutboxRow): OutboxRecord {
-  return {
-    outboxId: row.huai_outbox_id,
-    idempotencyKey: row.idempotency_key,
-    target: parseTarget(row.target),
-    payload: row.payload,
-    status: row.status,
-    attempts: row.attempts
-  };
-}
-
-function parseTarget(target: string | OutboxTarget): OutboxTarget {
-  if (typeof target !== "string") return target;
-  const parsed = JSON.parse(target) as OutboxTarget;
-  if (parsed.kind !== "telegram_bot" && parsed.kind !== "local_gateway") {
-    throw new Error("invalid-outbox-target");
-  }
-  return parsed;
-}
-
-function sameOutboxContent(expected: {
-  target_kind: OutboxRow["target_kind"];
-  target: string;
-  payload: Record<string, unknown>;
-}, existing: OutboxRow): boolean {
-  return expected.target_kind === existing.target_kind
-    && stableStringify(JSON.parse(expected.target)) === stableStringify(parseTarget(existing.target))
-    && stableStringify(normalizeVolatileExecutionRequestFields(expected.payload)) === stableStringify(normalizeVolatileExecutionRequestFields(existing.payload));
-}
-
-// packages/orchestrator/src/index.ts 의 enqueueExecutionAfterApproval(:516-528)·
-// enqueueAuditExecutionIfConfigured(:1039-1047) 는 executionRequest.attemptId 를
-// ports.makeId() 로, createdAt 을 ports.now() 로 호출마다 새로 만든다. idempotencyKey
-// 필드(executionRequest 내부, outbox 행 자체의 idempotency_key 와는 다른 필드)도
-// `...:${attemptId}` 형태라 attemptId 에 종속돼 같이 매번 달라진다.
-// 같은 승인 결정을 두 번 제출해도(Telegram 버튼 재클릭, 또는 Telegram·Mini App
-// 두 창구에서 같은 결정이 각각 들어올 때) outbox 행의 idempotency_key(entityId 단위,
-// 위 두 함수 주석 참고)는 같게 설계돼 있는데 이 3개 필드만 매번 달라서 여기서
-// "내용이 다르다"고 오판해 outbox-idempotency-conflict 를 던지고 있었다.
-// roomId/taskId/actorId/requestedBy/adapterType/projectPath/prompt/timeoutMs/
-// reportBotRole 등 나머지 필드가 전부 같다면 이건 정말 "같은 요청"이 맞다 — 그래서
-// 이 3개 필드만 비교에서 뺀다. 진짜 내용이 다른 충돌(다른 actorId, 다른 prompt 등)은
-// 이 필드들을 빼도 나머지가 여전히 달라 정상적으로 outbox-idempotency-conflict 로 걸린다.
-function normalizeVolatileExecutionRequestFields(payload: Record<string, unknown>): Record<string, unknown> {
-  const executionRequest = payload.executionRequest;
-  if (!executionRequest || typeof executionRequest !== "object" || Array.isArray(executionRequest)) return payload;
-  const { attemptId, idempotencyKey, createdAt, ...stableExecutionRequest } = executionRequest as Record<string, unknown>;
-  return { ...payload, executionRequest: stableExecutionRequest };
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
-  if (value && typeof value === "object") {
-    return "{" + Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => JSON.stringify(key) + ":" + stableStringify(item))
-      .join(",") + "}";
-  }
-  return JSON.stringify(value);
-}
-
-function escapePostgrestInValue(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-function eventIdForOutbox(binding: unknown, events: PersistedEvent[]): string | undefined {
-  const eventId = typeof binding === "object" && binding !== null && "eventId" in binding
-    ? (binding as { eventId?: unknown }).eventId
-    : undefined;
-  if (typeof eventId !== "string") return undefined;
-  return events.find((event) => event.idempotencyKey === eventId || event.eventId === eventId)?.eventId;
-}
-
-function parseTelegramUpdateIdempotencyKey(idempotencyKey: string): { telegramBotId: string; updateId: string } {
-  const parts = idempotencyKey.split(":");
-  if (parts.length !== 3 || parts[0] !== "telegram-update") {
-    throw new Error("invalid-telegram-update-idempotency-key");
-  }
-  return { telegramBotId: parts[1] ?? "", updateId: parts[2] ?? "" };
-}
-
-function receiptStatus(status: string | undefined): Extract<TelegramUpdateReceipt, { inserted: false }>["status"] {
-  if (status === "processing" || status === "retry_pending" || status === "failed") return status;
-  return "processed";
-}
-
-function toBigIntString(value: string, field: string): string {
-  if (!/^-?\d+$/.test(value)) throw new Error(`invalid-${field}`);
-  return value;
-}
-
-function stripUndefined(input: Record<string, string | undefined>): Record<string, string> {
-  return Object.fromEntries(Object.entries(input).filter((entry): entry is [string, string] => entry[1] !== undefined));
-}
-
-async function safeResponseText(response: Response): Promise<string> {
-  return maskSensitiveText(await response.text().catch(() => "unreadable-response"));
-}
-
-function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
-  const value = env[key];
-  if (!value) throw new Error(`missing-env:${key}`);
-  return value;
-}
-
-function requireMiniAppDirectLinkBaseUrl(value: string): string {
-  if (!value.startsWith("https://t.me/")) {
-    throw new Error(`invalid-env:BOT_SERVICE_MINIAPP_DIRECT_LINK must start with https://t.me/ (got: ${maskSensitiveText(value)})`);
-  }
-  return value;
-}
-
-function isOwnerControlKeyboard(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const rows = (value as { inline_keyboard?: unknown }).inline_keyboard;
-  if (!Array.isArray(rows)) return false;
-  return rows.some((row) => Array.isArray(row) && row.some((button) => {
-    if (!button || typeof button !== "object") return false;
-    const callback = (button as { callback_data?: unknown }).callback_data;
-    if (typeof callback !== "string") return false;
-    return /^(proposal|task):[^:]+:(approve|reject|revise|request_revision|mid_approve|mid_reject|reverify|final_approve|cancel|rv|rr|fa)$/.test(callback);
-  }));
-}
+// ─────────────────────────────────────────────────────────────────────────
+// God module 분리(2026-08) — 아래는 원래 이 파일에 있던 export 를 그대로 유지하기
+// 위한 배럴 재수출이다. 실제 정의는 각 모듈로 옮겨졌다. 외부 import 경로는
+// 하나도 바뀌지 않는다.
+// ─────────────────────────────────────────────────────────────────────────
+export {
+  buildFinalApprovalResultText,
+  buildApprovedTelegramTaskPromptForTest
+} from "./command-prompt-helpers.js";
+export {
+  type ApprovalStage,
+  type ApprovalDecision,
+  approvalRecordForEvent,
+  approvalEntityRefFromPayload,
+  approvalDeciderFromPayload,
+  approvalReasonFromPayload
+} from "./event-row-mapping.js";

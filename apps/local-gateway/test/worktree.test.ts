@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {

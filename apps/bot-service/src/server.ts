@@ -6,6 +6,19 @@ import { createTelegramFetchSender, createTelegramGrammySender } from "./outbox.
 import { startOutboxConsumerLoop, type OutboxConsumerHandle } from "./consumer.js";
 import { startMiniAppDecisionPollerLoop, type MiniAppDecisionPollerHandle } from "./miniapp-decision-poller.js";
 import { startExecutionHeartbeatLoop, type ExecutionHeartbeatHandle } from "./execution-heartbeat.js";
+import {
+  createStaleProposalCleanupRunner,
+  startStaleProposalCleanupLoop,
+  type StaleProposalCleanupHandle
+} from "./stale-proposal-cleanup.js";
+import {
+  listRoomIdsFromSupabase,
+  startRoomBackupLoop,
+  type RoomBackupSchedulerHandle
+} from "./room-backup-scheduler.js";
+import { createRoomBackupRestClient } from "../../../packages/supabase-runtime/src/room-backup.js";
+import { checkBotServiceReadiness, type BotServiceReadinessState, type BotServiceReceiveMode } from "./readiness.js";
+import { createWebhookRegistrationChecker } from "./webhook-registration-check.js";
 
 export type BotServiceServerHandle = {
   close(): Promise<void>;
@@ -14,9 +27,25 @@ export type BotServiceServerHandle = {
 
 export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.env): Promise<BotServiceServerHandle> {
   const runtime = await buildBotServiceRuntimeFromEnvAsync(env);
+  const receiveMode: BotServiceReceiveMode = (env.BOT_SERVICE_RECEIVE_MODE ?? "webhook") === "polling" ? "polling" : "webhook";
+  // /readyz 가 들여다보는 상태. polling 성공 시각은 아래 maybeStartTelegramPolling 루프가
+  // 채운다 — /healthz 처럼 기동 시점 설정값을 되읊는 게 아니라 실제로 최근에 수신이
+  // 됐는지를 봐야 하므로, 루프가 매 사이클 갱신하는 값을 그대로 참조한다.
+  const readinessState: BotServiceReadinessState = {
+    receiveMode,
+    pollStaleMs: parsePositiveInteger(env.BOT_SERVICE_READYZ_POLL_STALE_MS ?? "120000", "BOT_SERVICE_READYZ_POLL_STALE_MS")
+  };
+  const checkWebhookRegistered = buildWebhookRegistrationChecker(env, receiveMode);
+
   const server = createTelegramWebhookHttpServer({
     config: runtime.config,
-    ports: runtime.webhookPorts
+    ports: runtime.webhookPorts,
+    readiness: () =>
+      checkBotServiceReadiness({
+        state: readinessState,
+        pingSupabase: runtime.pingSupabase,
+        checkWebhookRegistered
+      })
   });
   const port = Number(env.BOT_SERVICE_PORT ?? 8787);
   const inboundIntervalMs = Number(env.BOT_SERVICE_INBOUND_POLL_MS ?? 100);
@@ -39,8 +68,10 @@ export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.en
 
   const outboxLoop = maybeStartOutboxLoop(env, runtime);
   const miniAppDecisionPolling = maybeStartMiniAppDecisionPolling(env, runtime);
-  const polling = await maybeStartTelegramPolling(env, runtime);
+  const polling = await maybeStartTelegramPolling(env, runtime, readinessState);
   const executionHeartbeat = maybeStartExecutionHeartbeat(env, runtime);
+  const staleProposalCleanup = maybeStartStaleProposalCleanup(env);
+  const roomBackup = maybeStartRoomBackup(env);
 
   await new Promise<void>((resolve) => {
     server.listen(port, "127.0.0.1", resolve);
@@ -54,6 +85,8 @@ export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.en
       miniAppDecisionPolling?.stop();
       polling?.stop();
       executionHeartbeat?.stop();
+      staleProposalCleanup?.stop();
+      roomBackup?.stop();
       return new Promise((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error);
@@ -71,7 +104,8 @@ export async function startBotServiceFromEnv(env: NodeJS.ProcessEnv = process.en
 // BOT_SERVICE_RECEIVE_MODE=polling 이면 켠다.
 async function maybeStartTelegramPolling(
   env: NodeJS.ProcessEnv,
-  runtime: Awaited<ReturnType<typeof buildBotServiceRuntimeFromEnvAsync>>
+  runtime: Awaited<ReturnType<typeof buildBotServiceRuntimeFromEnvAsync>>,
+  readinessState: BotServiceReadinessState
 ): Promise<{ stop(): void } | undefined> {
   if ((env.BOT_SERVICE_RECEIVE_MODE ?? "webhook") !== "polling") return undefined;
 
@@ -108,6 +142,10 @@ async function maybeStartTelegramPolling(
             }
           }
         });
+        // /readyz 판정 기준. getUpdates 왕복이 끝난 것 자체가 "폴링이 살아있다"는 신호라
+        // fetched 가 0건이어도 갱신한다 — 방이 조용해서 온 게 없는 것과 루프가 멈춘 것은
+        // 다르다.
+        readinessState.lastPollAt = new Date().toISOString();
         if (result.fetched > 0) console.log(JSON.stringify({ type: "telegram_polling_cycle", ...result }));
       } catch (error) {
         console.error(`bot-service-polling-error:${maskServerError(error)}`);
@@ -131,6 +169,27 @@ function telegramPollingBotsFromEnv(env: NodeJS.ProcessEnv): TelegramPollingBot[
   return pairs
     .filter((pair): pair is [string, string] => Boolean(pair[0] && pair[1]))
     .map(([botUsername, token]) => ({ botUsername: botUsername.replace(/^@/, ""), token }));
+}
+
+// webhook 모드일 때만 /readyz 가 쓸 등록 상태 확인기를 만든다. 토큰 구성은
+// telegramPollingBotsFromEnv 와 같은 4개 역할 봇 env 를 그대로 재사용한다 — 수신 방식과
+// 무관하게 봇 토큰은 항상 이 env 들에서 온다(아웃박스 발신도 같은 값을 쓴다).
+function buildWebhookRegistrationChecker(
+  env: NodeJS.ProcessEnv,
+  receiveMode: BotServiceReceiveMode
+): (() => Promise<boolean>) | undefined {
+  if (receiveMode !== "webhook") return undefined;
+
+  const bots = telegramPollingBotsFromEnv(env);
+  if (bots.length === 0) {
+    console.error("bot-service-readyz-webhook-checker-unavailable:no-bot-tokens");
+    return undefined;
+  }
+
+  return createWebhookRegistrationChecker({
+    bots,
+    publicBaseUrl: env.BOT_SERVICE_PUBLIC_BASE_URL
+  });
 }
 
 // 실행이 도는 동안 방 상단에 "…이 입력 중" 을 유지한다.
@@ -168,6 +227,63 @@ function maybeStartExecutionHeartbeat(
     },
     onError(error) {
       console.error(`bot-service-execution-heartbeat-error:${maskServerError(error)}`);
+    }
+  });
+}
+
+// 결정되지 않고 쌓인 제안을 정리한다(결함 대응 — scripts/cancel-stale-proposals.mjs
+// 는 사람이 --apply 로 직접 실행해야 하는 수동 CLI였고, 어떤 기동·스케줄 경로에도
+// 연결돼 있지 않아 방장이 응답 안 한 제안이 계속 쌓였다). SUPABASE_URL/
+// SUPABASE_SERVICE_ROLE_KEY 가 없으면(오프라인/로컬 실행 모드) 조용히 끈다 — 그
+// 스크립트 자체가 이 값들을 필수로 요구한다.
+function maybeStartStaleProposalCleanup(env: NodeJS.ProcessEnv): StaleProposalCleanupHandle | undefined {
+  if (env.BOT_SERVICE_STALE_PROPOSAL_CLEANUP_ENABLED === "false") return undefined;
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return undefined;
+
+  return startStaleProposalCleanupLoop({
+    intervalMs: parsePositiveInteger(env.BOT_SERVICE_STALE_PROPOSAL_CLEANUP_MS ?? String(60 * 60 * 1000), "BOT_SERVICE_STALE_PROPOSAL_CLEANUP_MS"),
+    run: createStaleProposalCleanupRunner({ env }),
+    onResult(result) {
+      if (result.exitCode !== 0) {
+        console.error(`bot-service-stale-proposal-cleanup-failed:${maskServerError(result.stderr || result.stdout)}`);
+      } else {
+        console.log(JSON.stringify({ type: "bot_service_stale_proposal_cleanup_ran" }));
+      }
+    },
+    onError(error) {
+      console.error(`bot-service-stale-proposal-cleanup-error:${maskServerError(error)}`);
+    }
+  });
+}
+
+// 방 전체를 주기적으로 백업한다(결함 대응 — room-backup.ts 가 조회·직렬화·저장
+// 로직을 갖추고도 어떤 실행 경로에도 연결돼 있지 않아 실제로는 한 방도 백업되지
+// 않았다. 자세한 설계 이유는 room-backup-scheduler.ts 헤더 주석 참고). 그 스크립트
+// 자체(createRoomBackupRestClient)가 SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 를
+// 필수로 요구하므로, 오프라인/로컬 실행 모드에서는 stale-proposal-cleanup 과 같은
+// 방식으로 조용히 끈다.
+function maybeStartRoomBackup(env: NodeJS.ProcessEnv): RoomBackupSchedulerHandle | undefined {
+  if (env.BOT_SERVICE_ROOM_BACKUP_ENABLED === "false") return undefined;
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return undefined;
+
+  const request = createRoomBackupRestClient({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY });
+
+  return startRoomBackupLoop({
+    intervalMs: parsePositiveInteger(
+      env.BOT_SERVICE_ROOM_BACKUP_MS ?? String(6 * 60 * 60 * 1000),
+      "BOT_SERVICE_ROOM_BACKUP_MS"
+    ),
+    listRoomIds: listRoomIdsFromSupabase(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY),
+    request,
+    onRoomResult(roomId, result) {
+      if (!result.ok) {
+        console.error(`bot-service-room-backup-failed:${roomId}:${maskServerError(new Error(result.reason))}`);
+      } else {
+        console.log(JSON.stringify({ type: "bot_service_room_backup_ran", roomId }));
+      }
+    },
+    onError(error) {
+      console.error(`bot-service-room-backup-error:${maskServerError(error)}`);
     }
   });
 }

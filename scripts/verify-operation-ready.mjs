@@ -37,6 +37,16 @@ const STEPS = [
   "verify:gate44",
   "verify:gate45",
   "verify:gate46",
+  // gate47~49 는 package.json 에 정의는 됐지만 이 STEPS 배열에 추가되는 걸 잊어서
+  // verify:all 에서 한 번도 자동 실행된 적이 없었다(품질 인프라 감사에서 발견) —
+  // 14개 고아 테스트 파일과 같은 종류의 결함이 gate 단위로도 있었다는 뜻이다.
+  "verify:gate47",
+  "verify:gate48",
+  "verify:gate49",
+  // verify:game-browser 도 같은 이유로 빠져 있었다 — treasure-collector-runner 등
+  // 미니게임 브라우저 회귀가 자동으로 안 걸렸다. gate47 스크린샷 서브테스트가 이미
+  // playwright chromium 을 요구하므로 추가 브라우저 의존성을 새로 들이는 건 아니다.
+  "verify:game-browser",
   "verify:local-gateway-runtime",
   "verify:local-gateway-consumer",
   "verify:spec-coverage",
@@ -49,6 +59,32 @@ const STEPS = [
   // verify:secrets 는 마지막 관문으로 남겨야 해서 그 앞에 넣는다.
   "verify:multiroom",
   "verify:multiroom-offline",
+  // gate50/51 은 어떤 npm 스크립트에도 안 걸려 있던 고아 테스트 14개를 묶는다
+  // (품질 인프라 감사에서 발견 — 그중 quiz-gate.test.mjs 는 방장이 실제로 보고한
+  // "보완 요청 버튼이 안 보인다" 프로덕션 버그의 회귀 테스트였는데, 자동 실행이
+  // 안 걸려 있어 재발해도 못 잡는 상태였다). gate50 은 빌드가 필요한 .ts, gate51 은
+  // 빌드 없이 바로 도는 miniapp-web .mjs 다.
+  "verify:gate50",
+  "verify:gate51",
+  // gate52 는 이번 완성도 개선에서 새로 만든 검증들을 묶는다 —
+  // bot-service /readyz(진짜 의존성 확인), 로그 로테이션, 룸 백업 스냅샷,
+  // stale 제안 정리 주기 배선, 시크릿 스캐너 패턴 자체 테스트.
+  "verify:gate52",
+  // 패키지 package.json 의 dependencies 선언이 실제 import 그래프와 일치하는지 대조한다.
+  // 선언이 다시 죽은 설정이 되지 않게 하는 가드다(1~3차 평가에서 연속 지적된 항목).
+  "verify:package-boundaries",
+  // supabase/functions/**(Deno Edge Function) 회귀 테스트 11개 — 미니앱 인증(HMAC
+  // initData 검증)·권한(membership)·방 격리(room-isolation) 같은 보안 핵심 경로인데도
+  // 어떤 npm 스크립트에도 안 걸려 있던 고아 테스트였다(품질 인프라 감사에서 발견).
+  // Deno 설치 여부와 무관하게 Node 어댑터로 실제 실행한다 — scripts/verify-supabase-functions.mjs
+  // 상단 주석 참고.
+  "verify:supabase-functions",
+  // 방 복구(restore) CLI — 백업은 있었지만 복구가 저장소 어디에도 없던 공백을 메운다
+  // (3차 평가 지적). 여기서도 package.json 에 스크립트 줄을 새로 추가하지 않고
+  // verify:structure/verify:secrets/verify:supabase-functions 와 같은 패턴으로 바로
+  // 실행되게 한다 — 이 STEPS 배열에 추가하는 걸 잊는 것 자체가 gate47~49 주석이
+  // 경고하는 "고아 테스트" 결함과 같은 종류다.
+  "verify:restore-room-backup",
   "verify:structure",
   "verify:secrets"
 ];
@@ -60,6 +96,11 @@ export function operationReadySteps() {
 export function commandForStep(step) {
   if (step === "verify:structure") return "node scripts/verify-structure.mjs";
   if (step === "verify:secrets") return "node scripts/verify-no-secrets.mjs";
+  // package.json 에 별도 스크립트 줄을 추가하지 않고도 돌게 한다(structure/secrets 와
+  // 같은 패턴) — supabase/functions 는 이 저장소의 tsc 빌드 대상(apps/**, packages/**)
+  // 밖이라 npm run build 로는 컴파일되지 않는다.
+  if (step === "verify:supabase-functions") return "node scripts/verify-supabase-functions.mjs";
+  if (step === "verify:restore-room-backup") return "node --test scripts/restore-room-backup.test.mjs";
   return `npm run ${step}`;
 }
 

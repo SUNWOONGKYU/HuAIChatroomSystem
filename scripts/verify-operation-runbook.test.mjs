@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const runbook = readFileSync("2026_08_10__GATE19_OPERATION_RUNBOOK.md", "utf8");
+const runbook = readFileSync("_archive/gates/2026_08_10__GATE19_OPERATION_RUNBOOK.md", "utf8");
 
 test("operation runbook covers production startup order", () => {
   for (const required of [

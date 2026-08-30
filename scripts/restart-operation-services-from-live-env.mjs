@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } 
 import { resolve } from "node:path";
 import { applyOperationEnvAliases } from "./operation-env-loader.mjs";
 import { validateOperationEnv } from "./verify-operation-env.mjs";
+import { rotateLogIfOversized } from "./log-rotation.mjs";
 import { fileURLToPath as __fileURLToPath } from "node:url";
 // 이 저장소의 루트. 개발자 PC 의 절대경로를 박아 두면 다른 PC·다른 체크아웃에서 조용히
 // 엉뚱한 곳을 가리킨다 — 스크립트 위치(scripts/)에서 한 단계 올라간 곳이 루트다.
@@ -89,6 +90,11 @@ async function restartOperationServices() {
   // 왜 못 받는지 알 방법이 아예 없었다. 서비스가 스스로 남긴 진단(폴링 에러, 무시
   // 사유)이 있어도 읽을 수가 없으면 없는 것과 같다.
   mkdirSync(LOG_DIR, { recursive: true });
+  // 새 fd 를 열기 전에 회전한다 — 이 스크립트는 재기동마다 한 번 돌고 끝나는 one-shot 이라
+  // 상주 감시자를 둘 수 없다. 대신 매 재기동 시작 시점에 검사해, 커진 로그를 새 출력이
+  // 쌓이기 전에 비워 둔다.
+  rotateLogIfOversized(BOT_LOG);
+  rotateLogIfOversized(GATEWAY_LOG);
   const botLog = openSync(BOT_LOG, "a");
   const gatewayLog = openSync(GATEWAY_LOG, "a");
 
@@ -125,7 +131,9 @@ async function restartOperationServices() {
   // 방을 섞지 않는 것이 이 구조의 값이다: 개인회생 방의 실행이 회계 자료 폴더를 열 수
   // 없고, 그 반대도 마찬가지다.
   for (const instance of parseGatewayInstances(mergedEnv.LOCAL_GATEWAY_EXTRA_INSTANCES)) {
-    const log = openSync(`${LOG_DIR}\\local-gateway.${instance.label}.log`, "a");
+    const instanceLogPath = `${LOG_DIR}\\local-gateway.${instance.label}.log`;
+    rotateLogIfOversized(instanceLogPath);
+    const log = openSync(instanceLogPath, "a");
     const child = spawn("node", ["dist/apps/local-gateway/src/cli.js"], {
       cwd: ROOT,
       detached: true,

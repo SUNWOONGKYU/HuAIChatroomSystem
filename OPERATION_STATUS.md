@@ -1,8 +1,9 @@
 # HuAI Collab Chatroom Operation Status
 
-Last verified: 2026-08-23 KST (see "Telegram receive mode switched to polling" section below —
-the 2026-08-17 live-verification section further down predates this switch and no longer describes
-the current receive mode by itself; read both together).
+Last verified: 2026-08-31 KST (see the "2026-08-31 KST — Migration application + room backup
+evidence" section near the bottom for what changed today). Sections in this file are dated but not always in strict
+file order — each describes a point-in-time state; when two sections disagree, the later date
+wins regardless of position in the file.
 
 This file is the current runtime evidence anchor for Telegram operation status reports.
 Do not treat older Gate setup documents as proof that operation is still incomplete.
@@ -176,3 +177,121 @@ When asked for current project progress, first report the verified live-operatio
 - Quiz policy is risk-based: only high-risk deploy/delete/permission-auth/env-secret/important-setting/DB-schema changes get the existing three-question gate. Read/analyze/explain/review and simple low-risk file changes create no quiz rows.
 - Synthetic planning test: `apps/bot-service/test/synthetic-leader-planning-webhook.test.ts`; run after `npm run build` with `node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js`. It uses fake webhook transport/fetch, room-local users 5001 and 9001, and never writes Telegram/Supabase operations data.
 - Game test caveat: local start/keyboard/drag/collision/restart/responsive checks passed for `star-dodge-game-v2.html`; 30-second survival used a test hook and the public-URL browser click journey remains unverified in the test environment.
+
+## 2026-08-30 KST — Documentation reconciliation
+
+This pass was documentation-only (no `apps/**`/`packages/**` source changes); it does not by
+itself change what the system can do, only whether the docs describe it correctly.
+
+- `.env.operation.example` was audited against every `process.env.*`/`env.*` read across
+  `apps/`, `packages/`, `scripts/` and brought fully up to date. Beyond the round's new knobs
+  (`HUAI_LOG_MAX_BYTES`/`HUAI_LOG_MAX_BACKUPS`, `BOT_SERVICE_STALE_PROPOSAL_CLEANUP_ENABLED`/`_MS`,
+  `BOT_SERVICE_READYZ_POLL_STALE_MS`, `LOCAL_GATEWAY_ARTIFACT_DEPLOY_TIMEOUT_MS`/
+  `_PROMOTE_TIMEOUT_MS`), the audit found and fixed two pre-existing template defects:
+  - `LOCAL_GATEWAY_ID` — required for local-gateway to boot in Supabase mode
+    (`requiredEnv` in `supabase-store.ts`) — was missing from the template entirely even though
+    a later comment in the same file already referred to it as if it were documented above.
+  - The template documented `BOT_SERVICE_LISTEN_PORT`/`BOT_SERVICE_LISTEN_HOST`, but
+    `server.ts` only ever reads `BOT_SERVICE_PORT` and the listen host is hardcoded to
+    `127.0.0.1` — the two old names did nothing. This mismatch had already been flagged in an
+    earlier session's notes but was never corrected until now.
+  - `node --test scripts/verify-operation-env-template.test.mjs scripts/verify-operation-env.test.mjs
+    scripts/verify-lease-formula-drift.test.mjs` passes (22/22) against the updated file.
+- bot-service's `/readyz` (port 8787) — added this round in `readiness.ts`/`http.ts` — is now
+  covered in `2026_08_12__OPERATION_INCIDENT_RUNBOOK.md` and `GITHUB_QUICKSTART.md`, including
+  what `checks.supabase`/`checks.receive` mean on a 503 and the `/healthz` vs `/readyz` role
+  split. It was previously undocumented; only local-gateway's `/readyz` was covered.
+- Added a "Database Migration After a Code Update" runbook section: `supabase db push` is the
+  canonical command (already referenced in `GITHUB_RELEASE_CHECKLIST.md`), with the SQL-Editor
+  fallback for machines where the CLI isn't link-authenticated (no `supabase/config.toml` in
+  this repo by default) — this repo had zero documentation of how an already-running instance
+  picks up a new file under `supabase/migrations/` before today.
+- Fixed dead paths in `docs/실전_게임개발_테스트_결과.md` pointing at the pre-move
+  `supabase/miniapp-web/treasure-collector-runner.*` location; the files live under
+  `supabase/miniapp-web/_task-artifacts/` now. Swept the other live docs (README, both
+  QUICKSTART/RELEASE/설치 docs, this file, the incident runbook, `docs/*.md`) for the same class
+  of dead reference from the `_archive/gates/`/`_task-artifacts/` moves — no other dead paths
+  found; every other file path referenced in those docs was checked to exist.
+- Mini App UX: the proposal-stage "수정" button now carries a static one-line caption ("사유는
+  자동 전달되지 않으니 Telegram 방에 직접 말씀해주세요") next to the button itself, not just in
+  the after-click toast, so the difference from the completion-stage "보완 요청" (which does
+  deliver its reason to the orchestrator) is visible before the owner clicks. The label itself
+  was kept as "수정" to stay aligned with the Telegram room's own proposal keyboard
+  (`buildProposalKeyboard`), per the prior explicit decision recorded in `index.html`. All 8
+  `supabase/miniapp-web/reason-input.test.mjs` cases still pass.
+
+**Note on a concurrent workstream, checked at the end of this pass:** while this documentation
+pass was in progress, a separate, concurrent workstream (room-backup automation —
+`scripts/create-room-backup.mjs`, `packages/supabase-runtime/src/room-backup.ts`,
+`scripts/verify-recovery-snapshot-rehearsal.mjs`) was mid-edit and briefly left `npm run
+verify:all` failing at the build step (`Cannot find name 'maybeStartRoomBackup'`). Re-running
+`npm run verify:all` after that workstream finished shows a full pass (`operation-ready passed`,
+~150s), including its own `verify:room-backup` gate. This documentation pass did not touch that
+workstream's code and cannot itself vouch for what "backup/restore proof" now covers — a
+production backup/restore rehearsal claim should still come from that workstream's own report,
+not from this one.
+
+## 2026-08-31 KST — Migration application + room backup evidence
+
+This section records only what was actually run/observed this pass, not restated claims.
+
+### Database migrations
+
+Three migration files exist in `supabase/migrations/`:
+
+- `20260829090000_huai_missing_fk_indexes.sql` — adds 5 missing indexes on FK columns
+  (`huai_verifications.task_id`, `huai_events.room_id`/`task_id`,
+  `huai_message_bindings.task_id`/`room_id`) that previously forced sequential scans on
+  per-room/per-task lookups.
+- `20260829100000_huai_gateway_allowed_adapters_check.sql` — adds
+  `huai_gateway_instances_allowed_adapters_check` (`NOT VALID`), constraining
+  `allowed_adapters` to the 4 known adapter types (`claude_code`/`codex`/`gemini_web`/
+  `antigravity`) at the DB layer, closing a gap where `LOCAL_GATEWAY_ALLOWED_ADAPTERS` was
+  written unvalidated by `scripts/room-seed-derivation.mjs`.
+- `20260830000000_validate_huai_gateway_allowed_adapters_check.sql` — promotes that
+  constraint from `NOT VALID` to fully validated (`VALIDATE CONSTRAINT`), after the migration's
+  own comment records that all 5 existing `huai_gateway_instances` rows were checked and found
+  compliant.
+
+Their *live application to the production Supabase project* was confirmed in a separate
+verification pass this round (`supabase migration list` showing Local=Remote match, plus a
+direct `pg_indexes`/`pg_constraint.convalidated=true` read against the live database). This
+session could not independently re-run that same catalog check — `supabase migration list`
+timed out in this sandbox without output (direct Postgres port access appears blocked here even
+though HTTPS to Supabase's REST API works fine, confirmed below) — so this paragraph is citing
+that separate verification's result, not re-deriving it.
+
+### Room backup automation
+
+Ran the real manual backup CLI against the live production Supabase project, dry-run only (no
+writes):
+
+```
+node --env-file=.env.operation.local scripts/create-room-backup.mjs --dry-run
+```
+
+Output confirmed all 5 active rooms are readable with correct per-table counts and no
+`missingTables`, e.g. `room=9a477b32-... tasks=58 events=798 artifacts=221 approvals=194
+missingTables=none checksum=964c86b3...`. This proves the backup query/serialization path works
+against real data.
+
+What this does **not** prove: whether the *automated* 6-hour scheduler
+(`BOT_SERVICE_ROOM_BACKUP_ENABLED`/`maybeStartRoomBackup` in `apps/bot-service/src/server.ts`)
+has ever actually run unattended in production. A direct read of
+`huai_recovery_snapshots?snapshot_type=eq.room` returned zero rows — no automated room snapshot
+has been recorded yet. `node scripts/operation-status-report.mjs` also shows both `bot_service`
+and `local_gateway` as `down` at the time of this check, so the scheduler is not currently
+running in this session's environment. Status: backup automation is code-complete and manually
+dry-run-verified against production data; it has not yet been observed completing a real
+scheduled run end-to-end. Do not report this as "backup automation confirmed running" until a
+`huai_recovery_snapshots` row with `snapshot_type='room'` is actually observed after bot-service
+has been up for a full `BOT_SERVICE_ROOM_BACKUP_MS` interval.
+
+### Room recovery (restore)
+
+A restore path (`scripts/restore-room-backup.mjs`) now exists alongside the backup path — see
+"Room Backup & Recovery" in `2026_08_12__OPERATION_INCIDENT_RUNBOOK.md` for the operator
+procedure and its documented limitations. It defaults to dry-run and has only been tested
+against an in-memory fake Supabase store (`scripts/restore-room-backup.test.mjs`, 12/12 passing)
+— it has deliberately not been run with `--apply` against any real Supabase project, production
+or otherwise, in this pass.
