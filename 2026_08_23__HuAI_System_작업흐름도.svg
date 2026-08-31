@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1210" viewBox="0 0 1700 1210" role="img" aria-labelledby="t d">
-  <title id="t">HuAI Collab Chatroom System 작업 흐름도 (2026-08-28)</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1250" viewBox="0 0 1700 1250" role="img" aria-labelledby="t d">
+  <title id="t">HuAI Collab Chatroom System 작업 흐름도 (2026-09-01)</title>
   <desc id="d">지시 한 줄이 결과물이 되기까지의 순서, 승인 카테고리 분리, 엔진이 한도에 걸렸을 때의 인계 규칙, 하루가 끝난 뒤의 보관과 정리 절차.</desc>
 
   <style>
@@ -34,7 +34,7 @@
     </marker>
   </defs>
 
-  <rect class="bg" x="0" y="0" width="1700" height="1210"/>
+  <rect class="bg" x="0" y="0" width="1700" height="1250"/>
 
   <text class="title" x="60" y="70">HuAI Collab Chatroom System — 작업 흐름도</text>
   <text class="sub" x="60" y="104">지시 한 줄이 결과물이 되기까지. 협업 운영센터는 Telegram 메뉴 /center에서 연다</text>
@@ -145,7 +145,7 @@
   <path class="flowGold" d="M 1065 694 L 1065 726"/>
 
   <!-- 하단: 방장이 볼 화면 -->
-  <rect class="lane" x="60" y="950" width="1580" height="196" rx="10"/>
+  <rect class="lane" x="60" y="950" width="1580" height="230" rx="10"/>
   <rect class="laneHead" x="60" y="950" width="1580" height="48" rx="10"/>
   <text class="laneLabel" x="86" y="984">방장이 누르는 자리</text>
 
@@ -153,4 +153,5 @@
   <text class="body" x="90" y="1056">협업 운영센터에서 누르는 것: 승인(웹 산출물은 이때 프로덕션으로 승격) · 보완 요청</text>
   <text class="note" x="90" y="1088">자동 시작은 새 권한이 아니다 — 요청자가 원래 승인 권한이 없으면 조용히 무시되고 협업 운영센터의 승인 대기로 돌아간다.</text>
   <text class="note" x="90" y="1116">이미 결정이 끝난 건에 다시 누르면 그 사실을 방에 알린다 — 조용히 무시하지 않는다.</text>
+  <text class="note" x="90" y="1148">구조적으로 처리 불가능한 결정은 종결 처리한다 — 같은 실패를 매 주기 영원히 재시도하지 않는다(일시적 실패만 다음 주기에 재시도).</text>
 </svg>

@@ -10,7 +10,7 @@
     .head{font:700 21px 'Malgun Gothic',Arial,sans-serif;fill:#0a1f14}
     .headLight{font:700 21px 'Malgun Gothic',Arial,sans-serif;fill:#fafaf7}
     .sub{font:15px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a}
-    .subLight{font:15px 'Malgun Gothic',Arial,sans-serif;fill:#cfd8d3}
+    .subLight{font:15px 'Malgun Gothic',Arial,sans-serif;fill:#fafaf7}
     .flow{stroke:#2d6a4f;stroke-width:3;fill:none;marker-end:url(#a)}
     .edgeLabel{font:15px 'Malgun Gothic',Arial,sans-serif;fill:#5f6b7a}
   </style>
@@ -22,21 +22,21 @@
 
   <rect class="bg" x="0" y="0" width="900" height="260"/>
 
-  <rect class="card" x="30" y="70" width="230" height="120" rx="10"/>
-  <text class="head" x="145" y="122" text-anchor="middle">사람 · 텔레그램</text>
-  <text class="sub" x="145" y="150" text-anchor="middle">지시하고 승인한다</text>
+  <rect class="card" x="40" y="70" width="230" height="120" rx="10"/>
+  <text class="head" x="155" y="122" text-anchor="middle">사람 · 텔레그램</text>
+  <text class="sub" x="155" y="150" text-anchor="middle">지시하고 승인한다</text>
 
   <rect class="cardGreen" x="335" y="70" width="230" height="120" rx="10"/>
   <text class="head" x="450" y="122" text-anchor="middle">작업 PC</text>
   <text class="sub" x="450" y="150" text-anchor="middle">bot-service · 실행 엔진</text>
 
-  <rect class="cardDark" x="640" y="70" width="230" height="120" rx="10"/>
-  <text class="headLight" x="755" y="122" text-anchor="middle">클라우드</text>
-  <text class="subLight" x="755" y="150" text-anchor="middle">Supabase · Vercel</text>
+  <rect class="cardDark" x="630" y="70" width="230" height="120" rx="10"/>
+  <text class="headLight" x="745" y="122" text-anchor="middle">클라우드</text>
+  <text class="subLight" x="745" y="150" text-anchor="middle">Supabase · Vercel</text>
 
-  <path class="flow" d="M 260 130 L 331 130"/>
-  <text class="edgeLabel" x="296" y="115" text-anchor="middle">지시·승인</text>
+  <path class="flow" d="M 270 130 L 331 130"/>
+  <text class="edgeLabel" x="300" y="115" text-anchor="middle">지시·승인</text>
 
-  <path class="flow" d="M 565 130 L 636 130"/>
-  <text class="edgeLabel" x="600" y="115" text-anchor="middle">기록·배포</text>
+  <path class="flow" d="M 565 130 L 626 130"/>
+  <text class="edgeLabel" x="596" y="115" text-anchor="middle">기록·배포</text>
 </svg>

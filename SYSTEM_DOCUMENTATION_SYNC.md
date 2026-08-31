@@ -33,6 +33,10 @@
 - 결과물 전달 방식(웹 배포 / 파일 업로드)이 바뀌었는가?
 - 방에 보이는 길이 기준이나 전문 보기 경로가 바뀌었는가?
 - 방 기억·보관·정리 주기가 바뀌었는가?
+- 헬스체크(`/healthz`·`/readyz`) 판정 기준이 바뀌었는가?
+- 방 백업·복구 자동화 동작(주기, 보관 상한, 수동 실행 명령)이 바뀌었는가?
+- 서비스 기동·재시작·자동 기동(autostart) 절차가 바뀌었는가?
+- CI(`.github/workflows/verify.yml`)나 `verify:all`/`npm run lint`에 새 게이트가 편입됐는가?
 
 해당 항목 중 하나라도 맞으면 설명문, 관계도, 흐름도, GitHub 빠른 구축 문서를 함께 수정한다.
 
@@ -65,3 +69,7 @@
 - 기본 AI 실행 제한은 15분이다.
 - 퀴즈는 `classifyTaskRisk`가 고위험으로 분류한 배포·삭제·권한/인증·환경변수·시크릿·중요 설정·DB 스키마 변경에만 3문항을 요구한다. 조회·분석·설명·검토와 단순 저위험 파일 변경은 퀴즈 행을 만들지 않는다.
 - synthetic 계획 테스트는 `apps/bot-service/test/synthetic-leader-planning-webhook.test.ts`에서 가상 room과 5001/9001 사용자, 가짜 fetch로만 실행하며 실제 Telegram/Supabase에는 쓰지 않는다.
+- bot-service `/healthz`는 설정값(봇 개수·허용 chat 개수)만 보는 liveness이고, `/readyz`는 Supabase 왕복과 Telegram 수신 경로(polling 최신성 또는 webhook 등록)를 실제로 확인하는 readiness다. 실패하면 503과 `checks.supabase`/`checks.receive` JSON을 준다. 기동 직후 첫 polling 바퀴 전에는 `no-successful-poll-yet`으로 503이 정상이다.
+- 방 자동 백업은 bot-service가 6시간마다(`BOT_SERVICE_ROOM_BACKUP_MS`) `status=active` 방 전체를 스냅샷(방당 13개 테이블 + `.sha256` 사이드카)으로 남기고 `huai_recovery_snapshots`에 장부를 쓴다. 수동 백업은 `npm run backup:rooms`, 복구는 `scripts/restore-room-backup.mjs`(기본 dry-run)다.
+- 정체 제안(방장이 응답 안 한 제안)은 bot-service가 1시간마다 자동으로 종결 정리한다.
+- 서비스 기동은 `node scripts/start-services.mjs` 하나로 bot-service·local-gateway를 함께 띄우고 죽으면 재시작하며 로그를 자동 회전한다. Windows 로그온 자동 기동은 `scripts/install-autostart.ps1`로 등록한다.

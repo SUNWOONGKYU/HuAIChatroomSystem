@@ -9,7 +9,7 @@
 Gemini 웹은 계획·검토·텍스트 결과에 사용되며 로컬 파일 수정은 하지 않습니다.
 방장 승인·통제는 협업 운영센터에서 처리합니다.
 
-최신 갱신일: 2026-08-31
+최신 갱신일: 2026-09-01
 
 ---
 
@@ -405,22 +405,31 @@ operation.example`에 각각의 의미가 자세히 나와 있습니다 — 비�
 
 ## 11단계 — 서비스 실행하기
 
-PowerShell 창을 **2개** 엽니다(각각 하나씩 계속 띄워둘 겁니다).
+PowerShell 창을 **1개**만 엽니다.
 
-**창 1**:
 ```powershell
 cd C:\Dev\HuAIChatroomSystem
-node dist/apps/bot-service/src/cli.js
+node scripts/start-services.mjs
 ```
 
-**창 2**:
+이 명령 하나가 `.env.operation.local`을 읽어들이고 봇 수신 담당(bot-service)과 실행 담당
+(local-gateway) 둘 다 띄워줍니다. 둘 중 하나가 죽으면 자동으로 다시 올리고, 로그 파일이
+너무 커지지 않게 자동으로 정리(회전)도 해줍니다.
+
+창에 뭔가 계속 떠 있는 상태(멈추지 않고 대기 중)면 정상입니다. 이 창은 **PC가 켜져 있는 동안
+계속 열려 있어야** 시스템이 작동합니다(닫으면 봇이 멈춥니다).
+
+⚠️ `node dist/apps/bot-service/src/cli.js`처럼 서비스를 직접 실행하지 마세요. 그렇게 하면
+`.env.operation.local`이 읽히지 않아 곧바로 오류를 내고 꺼집니다. 반드시 위의
+`scripts/start-services.mjs`로 켜세요.
+
+**(선택) PC를 껐다 켜도 자동으로 다시 시작하게 하려면**: PowerShell에서 아래를 한 번만
+실행해둡니다. 그러면 다음부터는 이 PC에 로그인할 때마다(1분 후) 시스템이 자동으로 켜지고,
+매번 위 창을 직접 열지 않아도 됩니다.
+
 ```powershell
-cd C:\Dev\HuAIChatroomSystem
-node dist/apps/local-gateway/src/cli.js
+scripts/install-autostart.ps1
 ```
-
-두 창 모두 에러 없이 뭔가 계속 떠 있는 상태(멈추지 않고 대기 중)면 정상입니다. 이 두 창은
-**PC가 켜져 있는 동안 계속 열려 있어야** 시스템이 작동합니다(닫으면 봇이 멈춥니다).
 
 ## 12단계 — 설치 확인
 
@@ -499,6 +508,13 @@ node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js
 정식 주소 아님) 상태입니다. 완료 승인을 누르는 순간 그 링크가 정식(프로덕션) 주소로
 바뀝니다 — 승인 전에 결과물이 먼저 공개돼버리는 걸 막기 위한 설계입니다.
 
+## 데이터가 안전하게 보관됩니다
+
+방마다 쌓인 작업·승인·산출물 기록은 6시간마다 자동으로 스냅샷 파일로 백업됩니다(운영자가
+따로 뭘 하지 않아도 됩니다). 만에 하나 데이터가 잘못됐을 때 되돌리는 절차는
+`GITHUB_QUICKSTART.md`의 "방 백업·복구" 항목을 참고하세요 — 되돌리기는 PC 앞에서 명령을
+직접 실행해야 하는, 사람이 판단해서 하는 작업입니다.
+
 ## 그 밖의 명령어
 
 ```text
@@ -515,11 +531,12 @@ node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js
 
 | 증상 | 원인·해결 |
 |---|---|
-| 봇이 아무 반응이 없다 | 11단계의 두 PowerShell 창이 열려 있는지 확인. 닫혀 있으면 다시 실행 |
+| 봇이 아무 반응이 없다 | 11단계의 PowerShell 창(`node scripts/start-services.mjs`)이 열려 있는지 확인. 닫혀 있으면 다시 실행 |
 | 텔레그램에 "협업 운영센터 열기" 버튼이 안 보이거나, "승인 UI가 비활성화되었습니다"라는 안내만 나온다 | 9단계를 건너뛰었거나 `.env.operation.local`의 `BOT_SERVICE_MINIAPP_DIRECT_LINK`가 비어 있습니다. 9단계를 마친 뒤 서비스를 재시작합니다 |
 | `npm install`에서 멈추거나 에러 | 인터넷 연결 확인 후 `npm install` 다시 실행. 그래도 안 되면 Node.js 버전을 v24 LTS로 재설치 |
 | 창을 열자마자 바로 꺼진다(에러) | `.env.operation.local`에 빈 값이 없는지 확인(특히 4개 봇 토큰, Supabase URL/키) |
-| local-gateway 창이 `missing-env:LOCAL_GATEWAY_ID`를 출력하고 바로 꺼진다 | 8단계에서 `LOCAL_GATEWAY_ID`를 `.env.operation.local`에 채우지 않았습니다. 8단계 4번을 따라 실제 gateway_id 값을 채웁니다 |
+| `포트 8787 사용 중` 같은 메시지가 뜨고 바로 꺼진다 | 이미 다른 창(또는 예약 작업)으로 서비스가 떠 있습니다. 새로 또 띄우지 말고 기존 창을 그대로 쓰거나, 확실히 다 껐는지 확인한 뒤 다시 실행합니다 |
+| `logs\local-gateway.log`에 `missing-env:LOCAL_GATEWAY_ID`가 반복해서 찍힌다 | 8단계에서 `LOCAL_GATEWAY_ID`를 `.env.operation.local`에 채우지 않았습니다. 8단계 4번을 따라 실제 gateway_id 값을 채웁니다 |
 | 방에서 봇을 멘션해도 아무 반응이 없다(다른 항목은 다 정상) | 7단계에서 `BOT_SERVICE_*_BOT_USERNAME` 값을 5단계에서 만든 실제 봇 username으로 바꿨는지 확인합니다. 템플릿 예시값(`your_leader_bot` 등)이 그대로 남아 있으면 멘션을 인식하지 못합니다 |
 | "봇 여러 개가 같은 토큰" 비슷한 에러 | 5단계에서 봇 4개가 진짜 서로 다른 토큰인지 확인 |
 | 승인 버튼을 눌러도 반응이 늦다 | 정상입니다 — 실제 AI 실행은 몇 초~몇 분 걸립니다. 방에 "⏳ 작업 중" 표시가 주기적으로 올라옵니다 |

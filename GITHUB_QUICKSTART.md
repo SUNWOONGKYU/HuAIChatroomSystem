@@ -104,6 +104,12 @@ operation.example`에도 이 둘은 주석 처리돼 있습니다 — 굳이 채
 
 운영 기본 실행 제한은 15분입니다. 더 긴 작업은 작은 단위로 나누는 것이 기본 원칙입니다.
 
+산출물(.html)을 Vercel에 올리는 배포·승격도 각각 타임아웃을 둡니다 —
+`LOCAL_GATEWAY_ARTIFACT_DEPLOY_TIMEOUT_MS`(기본 180초), `LOCAL_GATEWAY_ARTIFACT_PROMOTE_TIMEOUT_MS`
+(기본 90초). vercel CLI가 멈추면(예: 토큰 만료로 인터랙티브 재로그인 프롬프트가 뜬 채 대기)
+그 시간을 넘길 때 프로세스 트리를 강제 종료합니다 — 예전에는 이 타임아웃이 없어 vercel CLI가
+멈추면 local-gateway 전체가 영구 정지했습니다.
+
 ## 4. Supabase 준비
 
 1. Supabase SQL editor 또는 CLI에서 `supabase/schema.sql`을 적용합니다.
@@ -284,14 +290,30 @@ Telegram 사진/파일 caption과 답장 대상 메시지는 라우터가 읽습
 
 ## 8. 서비스 실행
 
-운영 환경변수를 로드한 상태에서 다음 두 서비스를 실행합니다.
+운영에는 감독자 스크립트 하나로 bot-service·local-gateway 둘 다 띄웁니다. `.env.operation.local`을
+자동으로 읽고, 한쪽이 죽으면 다시 올리고, 로그 회전(`HUAI_LOG_MAX_BYTES`/`HUAI_LOG_MAX_BACKUPS`,
+기본 20MB·5개 백업)도 계속 감시합니다.
+
+```powershell
+node scripts/start-services.mjs
+```
+
+Windows 로그온 시 자동 기동을 원하면(재부팅 후에도 사람이 다시 켜지 않아도 되게) 1회만 등록합니다.
+
+```powershell
+scripts/install-autostart.ps1
+```
+
+각 서비스를 개별 콘솔에서 직접 띄워 로그를 바로 보고 싶을 때(디버깅 목적)만 아래처럼 실행합니다 —
+이 경우 감독자의 자동 재시작·로그 회전은 적용되지 않습니다.
 
 ```powershell
 node dist/apps/bot-service/src/cli.js
 node dist/apps/local-gateway/src/cli.js
 ```
 
-이미 실행 중인 운영 서비스를 현재 환경값으로 재시작하려면 다음 스크립트를 사용합니다.
+이미 실행 중인 운영 서비스를 현재 환경값(코드 변경 후 `.env.operation.local`을 고쳤을 때 등)으로
+재시작하려면 다음 스크립트를 사용합니다.
 
 ```powershell
 node scripts/restart-operation-services-from-live-env.mjs
@@ -311,7 +333,37 @@ Invoke-RestMethod http://127.0.0.1:8797/readyz
 "동작한다"고 판단하지 말고 `/readyz`의 `ok` 값을 봅니다. bot-service `/readyz`가 503을 주면
 응답 JSON의 `checks.supabase`(Supabase 연결 실패)와 `checks.receive`(Telegram 수신 중단 —
 polling이면 마지막 폴링이 오래됐다는 뜻, webhook이면 등록이 안 됐다는 뜻)를 확인합니다.
-자세한 원인별 대응은 `2026_08_12__OPERATION_INCIDENT_RUNBOOK.md`의 "Service Health"를 참고합니다.
+기동 직후 첫 polling 바퀴가 아직 안 돌았을 때는 `checks.receive.detail=no-successful-poll-yet`과
+함께 503이 정상입니다 — 한 바퀴 돌면 200으로 바뀝니다. 자세한 원인별 대응은
+`2026_08_12__OPERATION_INCIDENT_RUNBOOK.md`의 "Service Health"를 참고합니다.
+
+### 8-1. 방 백업·복구
+
+bot-service가 뜬 상태에서는 `status=active`인 방 전체를 6시간마다(`BOT_SERVICE_ROOM_BACKUP_MS`,
+기본 21600000ms) 자동 백업합니다. 방당 13개 테이블을 `sessions/rooms/recovery/<방>/<시각>.json`
++ `.sha256` 사이드카로 남기고, `huai_recovery_snapshots`에 장부 행을 씁니다. 방당 보관 상한은
+`HUAI_ROOM_BACKUP_MAX_SNAPSHOTS`(기본 240)이며 파일과 장부를 함께 정리합니다.
+
+수동 백업(운영자가 즉시 실행, `npm run backup:rooms`가 내부적으로
+`node --env-file=.env.operation.local scripts/create-room-backup.mjs`를 돌립니다):
+
+```powershell
+npm run backup:rooms
+npm run backup:rooms -- --room <roomId>
+npm run backup:rooms -- --dry-run
+```
+
+복구는 `scripts/restore-room-backup.mjs <스냅샷경로> [체크섬]`입니다. 기본은 dry-run이고,
+실제로 쓰려면 `--apply`를 붙인 뒤 터미널에서 정확히 `yes`를 입력해야 합니다(자동화용은
+`--yes`로 확인 프롬프트를 건너뜁니다). `.sha256` 사이드카가 있으면 체크섬 인자 없이도 됩니다.
+멱등이며 `huai_tasks`↔`huai_approvals` 순환 FK는 2-pass로 처리합니다. 불완전한 스냅샷은
+`--allow-incomplete` 없이는 거부합니다. 운영 절차는
+`2026_08_12__OPERATION_INCIDENT_RUNBOOK.md`의 "Room Backup & Recovery"를 참고합니다.
+
+### 8-2. 정체 제안 자동 정리
+
+방장이 응답하지 않고 쌓인 작업 제안을 bot-service가 1시간마다
+(`BOT_SERVICE_STALE_PROPOSAL_CLEANUP_ENABLED`/`_MS`) 자동으로 정리합니다.
 
 ## 9. Telegram smoke test
 
@@ -376,11 +428,17 @@ Telegram에는 작업 접수·진행 알림과 `협업 운영센터 열기` 링�
 
 ```powershell
 node --env-file=.env.operation.local scripts/set-telegram-bot-commands.mjs --apply
+npm run lint
 node scripts/verify-no-secrets.mjs
 npm run build
 npm run verify:doc-sync
 git status --short
 ```
+
+GitHub Actions(`.github/workflows/verify.yml`)가 push·PR마다 `npm ci` → typecheck → lint →
+`npm run verify:all`을 자동으로 돌립니다. eslint는 패키지 레이어 경계(허용 안 된 계층 간
+import)와 `no-eval`/`no-new-func`를 강제합니다 — 로컬에서 미리 잡으려면 커밋 전에 `npm run lint`를
+실행합니다.
 
 GitHub에는 `.env.operation.local`, Telegram 토큰, Supabase service role key, webhook secret,
 CLI 인증 파일을 올리지 않습니다. 운영 PC 반영 순서는 `git pull` → `npm install` → `npm run build`

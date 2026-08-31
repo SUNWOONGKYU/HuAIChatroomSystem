@@ -5,9 +5,15 @@ GitHub 배포 전 아래 항목을 확인합니다.
 ## 코드와 검증
 
 - [ ] `npm install` 또는 lockfile 기준 의존성 설치가 가능하다.
+- [ ] `npm run typecheck`가 통과한다.
+- [ ] `npm run lint`가 통과한다(패키지 레이어 경계 위반, `no-eval`/`no-new-func`를 잡는다).
 - [ ] `npm run build`가 통과한다.
-- [ ] `npm run verify:operation-ready`가 통과한다.
-- [ ] `node scripts/verify-no-secrets.mjs`가 통과한다.
+- [ ] `npm run verify:all`(= `verify:operation-ready`)이 통과한다 — typecheck·lint·gate12~gate52·
+      패키지 경계·스키마-마이그레이션 동기화·테스트 도달성·Supabase Edge Functions까지 전부 포함한다.
+- [ ] `node scripts/verify-no-secrets.mjs`가 통과한다(추적 파일 전체 스캔, 바이너리 블랙리스트,
+      PII 패턴, 제어문자로 쪼갠 시크릿까지 잡는다).
+- [ ] GitHub Actions(`.github/workflows/verify.yml`)가 push·PR마다 `npm ci` → typecheck → lint →
+      `verify:all`을 자동으로 돌리고 있다.
 - [ ] 고위험 작업만 3문항 퀴즈를 적용하고, 조회·분석·설명·검토 및 단순 저위험 변경은 퀴즈를 만들지 않는다.
 - [ ] `npm run build` 후 `node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js`가 통과한다.
 
@@ -37,6 +43,14 @@ GitHub 배포 전 아래 항목을 확인합니다.
 - [ ] 산출물 프로젝트(`huai-artifacts`)의 배포 보호가 꺼져 있다. 켜져 있으면 방장이 결과물을
       열 때 Vercel 로그인 화면으로 튕긴다.
 - [ ] 야간 작업(`HuAI-NightlyRoomArchive`)이 등록돼 있고, 마지막 실행 로그가 정상이다.
+- [ ] bot-service `/readyz`가 `ok:true`를 반환한다(Supabase 왕복 + Telegram 수신 경로 실측).
+      503이면 `checks.supabase`/`checks.receive`로 원인을 먼저 확인한다.
+- [ ] 방 자동 백업(`BOT_SERVICE_ROOM_BACKUP_ENABLED`, 기본 6시간 주기)이 켜져 있고,
+      `npm run backup:rooms`로 수동 백업이 실제로 되는지 한 번 확인했다.
+- [ ] `scripts/restore-room-backup.mjs`의 존재와 dry-run 동작을 운영자가 알고 있다(기본
+      dry-run, `--apply`는 터미널 확인 필요).
+- [ ] 정체 제안 자동 정리(`BOT_SERVICE_STALE_PROPOSAL_CLEANUP_ENABLED`, 기본 1시간 주기)가 켜져 있다.
+- [ ] Windows 로그온 자동 기동을 쓴다면 `scripts/install-autostart.ps1`이 등록돼 있다.
 
 ## 보안
 
@@ -49,10 +63,16 @@ GitHub 배포 전 아래 항목을 확인합니다.
 ## 운영자가 알아야 할 기본값
 
 - 기본 AI 실행 제한: 15분
+- 산출물 배포·승격 타임아웃: 180초 / 90초(`LOCAL_GATEWAY_ARTIFACT_DEPLOY_TIMEOUT_MS`/
+  `_PROMOTE_TIMEOUT_MS`) — 넘으면 멈춘 vercel CLI 프로세스 트리를 강제 종료한다.
 - Telegram은 접수·진행 알림을 제공하고 승인·보완·취소는 협업 운영센터에서만 수행한다.
 - AuditBot 자동 검증: 의미 있는 결과물 또는 직접 감사 요청이 있을 때만 수행
 - 공식 상태 저장소: Supabase DB
 - 실제 작업 실행: local-gateway가 허용된 프로젝트 폴더에서 수행
+- 방 자동 백업: 6시간 주기(`BOT_SERVICE_ROOM_BACKUP_MS`), 방당 스냅샷 보관 상한 240개
+  (`HUAI_ROOM_BACKUP_MAX_SNAPSHOTS`)
+- 정체 제안 자동 정리: 1시간 주기(`BOT_SERVICE_STALE_PROPOSAL_CLEANUP_MS`)
+- 로그 회전: 20MB(`HUAI_LOG_MAX_BYTES`)마다, 백업 5개(`HUAI_LOG_MAX_BACKUPS`)까지 보관
 
 ## 첫 운영 테스트
 

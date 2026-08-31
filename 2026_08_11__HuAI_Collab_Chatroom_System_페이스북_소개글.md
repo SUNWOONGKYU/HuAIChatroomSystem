@@ -4,7 +4,7 @@
 
 AI와 함께 일하는 공간을 Telegram 프로젝트방 안에 만들었습니다.
 
-HuAI Collab Chatroom System은 사람이 Telegram 방에서 평소처럼 요청하면, LeaderBot이 일을 제안으로 정리하고, CodexBot과 ClaudeBot이 (Claude Code·Codex·Antigravity 세 실행 엔진을 상황에 따라 돌아가며 써서) 실제 프로젝트 폴더에서 작업을 수행하며, AuditBot이 의미 있는 결과물을 독립 검증하는 협업 운영 시스템입니다.
+HuAI Collab Chatroom System은 사람이 Telegram 방에서 평소처럼 요청하면, LeaderBot이 일을 제안으로 정리하고, CodexBot과 ClaudeBot이 (Claude Code·Codex·Gemini 웹 세 실행 엔진을 상황에 따라 돌아가며 써서) 실제 프로젝트 폴더에서 작업을 수행하며, AuditBot이 의미 있는 결과물을 독립 검증하는 협업 운영 시스템입니다.
 
 별도 앱을 설치하지 않아도 됩니다. 사람은 Telegram에서 요청하고, 협업 운영센터에서 결정합니다. 중앙 오케스트레이터는 권한, 작업 상태, 실행 순서, 중복 처리, 검증 흐름을 관리하고, Supabase DB가 공식 작업 기록의 기준이 됩니다. 실제 코딩과 파일 작업은 작업 PC의 local-gateway를 통해 제한된 프로젝트 폴더에서 실행됩니다.
 
@@ -22,7 +22,7 @@ HuAI Collab Chatroom System은 “AI에게 일을 시키는 별도 화면”을 
 - CodexBot: Codex로 실제 코드·파일 작업을 수행하고 결과를 보고합니다.
 - ClaudeBot: Claude Code가 필요한 작업을 맡아 수행합니다.
 - AuditBot: 의미 있는 결과물을 독립적으로 검증하고, 사람이 직접 요청한 감사도 처리합니다.
-- (실행 엔진 3종) Claude Code·Codex·Antigravity 중 하나가 사용 한도에 걸리면 다른 엔진이 바로 이어받습니다.
+- (실행 엔진 3종) Claude Code·Codex·Gemini 웹 중 하나가 사용 한도에 걸리면 다른 엔진이 바로 이어받습니다(기존 Antigravity 기록은 Gemini 웹으로 호환 라우팅됩니다).
 
 사람은 복잡한 대시보드에 들어갈 필요 없이 Telegram에서 말하면 됩니다.
 질문은 LeaderBot이 바로 답하고, 실제 변경이나 실행이 필요한 말만 작업 제안으로 정리합니다.
@@ -35,7 +35,7 @@ HuAI Collab Chatroom System은 “AI에게 일을 시키는 별도 화면”을 
 @leader_chatroom_bot 이번 주 작업 내역 정리해서 보고서 파일로 만들어줘
 ```
 
-LeaderBot은 요청을 사람이 판단하기 쉬운 작업 제안으로 바꿉니다. ClaudeBot과 CodexBot을 함께 부르는 요청은 다중 AI 협의 작업으로 정리됩니다. 방장은 협업 운영센터에서 `승인`, `수정`, `반려`를 결정합니다. 승인된 작업은 중앙 오케스트레이터를 거쳐 Supabase DB에 기록되고, local-gateway가 연결된 작업 PC에서 Codex·Claude Code·Antigravity 중 하나를 실행합니다.
+LeaderBot은 요청을 사람이 판단하기 쉬운 작업 제안으로 바꿉니다. ClaudeBot과 CodexBot을 함께 부르는 요청은 다중 AI 협의 작업으로 정리됩니다. 방장은 협업 운영센터에서 `승인`, `수정`, `반려`를 결정합니다. 승인된 작업은 중앙 오케스트레이터를 거쳐 Supabase DB에 기록되고, local-gateway가 연결된 작업 PC에서 Codex·Claude Code·Gemini 웹 중 하나를 실행합니다(Gemini 웹은 전용 Chrome 세션의 응답 전용 경로로, 로컬 파일을 직접 수정하지 않습니다).
 
 실행 결과는 사람이 알아야 할 내용만 Telegram에 표시합니다. 긴 내부 로그, JSON 이벤트, hook 출력, 토큰 사용량, 불필요한 경로 나열은 숨깁니다. 다만 필요한 경우에는 `/trace <task_id>`로 공식 기록을 조회할 수 있습니다. 이 명령은 이벤트 종류와 시간, 산출물 URI와 버전, 검증 판정 이력을 Telegram에 직접 보여주되, 원문 payload와 비밀값은 노출하지 않습니다.
 
@@ -58,7 +58,7 @@ AuditBot은 모든 작은 응답마다 자동으로 붙지 않습니다. 보안,
 
 ## 게시용 한 문장
 
-사람, Codex, Claude Code, Antigravity, 독립 검증자가 Telegram 프로젝트방 하나에서 함께 일하고 기록까지 남는 AI 협업 사무실 구조를 만들었습니다.
+사람, Codex, Claude Code, Gemini 웹, 독립 검증자가 Telegram 프로젝트방 하나에서 함께 일하고 기록까지 남는 AI 협업 사무실 구조를 만들었습니다.
 
 ## 해시태그
 

@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1820" height="1100" viewBox="0 0 1820 1100" role="img" aria-labelledby="t d">
-  <title id="t">HuAI Collab Chatroom System 관계도 (2026-08-28)</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1820" height="1200" viewBox="0 0 1820 1200" role="img" aria-labelledby="t d">
+  <title id="t">HuAI Collab Chatroom System 관계도 (2026-09-01)</title>
   <desc id="d">방장의 텔레그램 주제, 작업 PC의 bot-service와 방별 게이트웨이, Supabase와 Vercel의 관계. 무엇이 어디에 저장되고 무엇이 무엇에 기대는지를 보여준다.</desc>
 
   <style>
@@ -35,7 +35,7 @@
     </marker>
   </defs>
 
-  <rect class="bg" x="0" y="0" width="1820" height="1100"/>
+  <rect class="bg" x="0" y="0" width="1820" height="1200"/>
 
   <text class="title" x="60" y="70">HuAI Collab Chatroom System — 관계도</text>
   <text class="sub" x="60" y="104">사람은 텔레그램만 쓰고, 실행은 작업 PC에서만 일어나며, 공개되는 것은 협업 운영센터와 결과물뿐이다</text>
@@ -59,84 +59,6 @@
   <text class="body" x="114" y="562">LeaderBot · ClaudeBot</text>
   <text class="body" x="114" y="594">CodexBot · AuditBot</text>
 
-  <!-- 가운데: 작업 PC -->
-  <rect class="panel" x="600" y="140" width="500" height="830" rx="10"/>
-  <rect class="panelHead" x="600" y="140" width="500" height="52" rx="10"/>
-  <text class="colHead" x="626" y="176">작업 PC (사람의 데스크톱)</text>
-
-  <rect class="cardGreen" x="630" y="220" width="440" height="150" rx="8"/>
-  <text class="cardHead" x="654" y="254">bot-service</text>
-  <text class="body" x="654" y="288">수신(polling, 기본값) · 권한 · 멱등 · 발신</text>
-  <text class="body" x="654" y="320">방 기억 파일을 디스크에서 읽는다</text>
-  <text class="note" x="654" y="352">공개 URL·터널 불필요(webhook은 선택)</text>
-
-  <rect class="cardGold" x="630" y="394" width="440" height="176" rx="8"/>
-  <text class="cardHead" x="654" y="428">local-gateway — 방마다 1개</text>
-  <text class="body" x="654" y="462">자기 gateway_id 로 온 일만 처리</text>
-  <text class="body" x="654" y="494">허용된 폴더 안에서만 실행</text>
-  <text class="body" x="654" y="526">웹 산출물은 프리뷰까지 여기서</text>
-  <text class="note" x="654" y="554">프로덕션 승격은 완료 승인 후 자동 진행</text>
-
-  <rect class="card" x="630" y="594" width="440" height="130" rx="8"/>
-  <text class="cardHead" x="654" y="628">실행 엔진 3종</text>
-  <text class="body" x="654" y="662">Claude Code · Codex · Gemini 웹</text>
-  <text class="body" x="654" y="694">한도에 걸리면 최대 3회 인계</text>
-
-  <rect class="card" x="630" y="748" width="440" height="200" rx="8"/>
-  <text class="cardHead" x="654" y="782">디스크</text>
-  <text class="body" x="654" y="816">방별 작업 폴더 (실행은 여기서만)</text>
-  <text class="body" x="654" y="848">sessions/rooms — 대화 원본·요약</text>
-  <text class="note" x="654" y="892">bot-service 와 게이트웨이가 같은</text>
-  <text class="note" x="654" y="918">기계에 있어야 이 경로가 산다</text>
-
-  <!-- 오른쪽: 클라우드 -->
-  <rect class="panel" x="1290" y="140" width="470" height="830" rx="10"/>
-  <rect class="panelHead" x="1290" y="140" width="470" height="52" rx="10"/>
-  <text class="colHead" x="1316" y="176">클라우드</text>
-
-  <rect class="cardDark" x="1320" y="220" width="410" height="192" rx="8"/>
-  <text class="bodyLight" x="1344" y="256" style="font-weight:700">Supabase Postgres</text>
-  <text class="bodyLight" x="1344" y="290">작업 · 승인(자동승인 포함) · 산출물</text>
-  <text class="bodyLight" x="1344" y="322">보고 전문 · 보관 장부</text>
-  <text class="bodyLight" x="1344" y="354">통신 기록은 60일 후 정리</text>
-  <text class="bodyLight" x="1344" y="386">최신 40턴은 나이와 무관히 보존</text>
-
-  <rect class="card" x="1320" y="436" width="410" height="130" rx="8"/>
-  <text class="cardHead" x="1344" y="470">Supabase Storage</text>
-  <text class="body" x="1344" y="504">대화 원본 jsonl (무손실 사본)</text>
-  <text class="body" x="1344" y="536">지우기 전에 반드시 있어야 한다</text>
-
-  <rect class="cardGold" x="1320" y="590" width="410" height="130" rx="8"/>
-  <text class="cardHead" x="1344" y="624">Vercel — huai-board</text>
-  <text class="body" x="1344" y="658">협업 운영센터 (Mini App)</text>
-  <text class="body" x="1344" y="690">전문 보기 · 완료 승인</text>
-
-  <rect class="cardGold" x="1320" y="744" width="410" height="186" rx="8"/>
-  <text class="cardHead" x="1344" y="778">Vercel — huai-artifacts</text>
-  <text class="body" x="1344" y="812">웹 산출물 — 프리뷰 → 프로덕션</text>
-  <text class="note" x="1344" y="848">완료 승인 전엔 프리뷰 주소만 있다</text>
-  <text class="note" x="1344" y="876">승인 후에만 프로덕션 주소로 승격</text>
-
-  <!-- 연결선 — 선을 먼저 전부 그리고, 라벨을 그 위에 얹는다 (라벨이 선에 잘리지 않도록) -->
-  <path class="flow" d="M 500 268 L 630 268"/>
-  <path class="flow" d="M 1070 290 L 1320 290"/>
-  <path class="flowGold" d="M 1070 430 L 1200 430 L 1200 338 L 1320 338"/>
-  <path class="flowGold" d="M 1070 500 L 1216 500 L 1216 836 L 1320 836"/>
-  <path class="flowGray" d="M 1070 540 L 1250 540 L 1250 790 L 1320 790"/>
-  <path class="flow" d="M 1070 866 L 1240 866 L 1240 500 L 1320 500"/>
-  <path class="flowGray" d="M 500 560 L 612 560 L 612 330 L 630 330"/>
-  <path class="flowGray" d="M 500 290 L 512 290 L 512 995 L 1264 995 L 1264 640 L 1320 640"/>
-  <path class="flowGray" d="M 1264 995 L 1264 912 L 1320 912"/>
-
-<text class="edgeLabel" x="516" y="275">지시·알림</text>
-  <text class="edgeLabel" x="1082" y="297">작업·승인 기록</text>
-  <text class="edgeLabel" x="1082" y="437">자기 방 일만</text>
-  <text class="edgeLabel" x="1082" y="507">프리뷰 배포</text>
-  <text class="edgeLabel" x="1082" y="547">승인 후 승격</text>
-  <text class="edgeLabel" x="1082" y="873">대화 원본 보관</text>
-  <text class="edgeLabel" x="524" y="567">폴링·발신</text>
-  <text class="edgeLabel" x="900" y="1002" text-anchor="middle">Telegram 메뉴 /center · 결과물 실행</text>
-
   <text class="note" x="60" y="700">저장 위치가 갈린 이유</text>
   <text class="body" x="60" y="736">원본은 무손실이라 지우기 전 필수 —</text>
   <text class="body" x="60" y="768">텔레그램은 지난 대화를 돌려주지 않는다.</text>
@@ -146,5 +68,92 @@
   <text class="body" x="60" y="912">개인회생 방의 실행이 회계 폴더를</text>
   <text class="body" x="60" y="944">열 수 없게 하기 위해서다.</text>
 
-  <text class="note" x="60" y="1050">2026-08-28 기준 · 실행 엔진 3종 · 메뉴 /center · 고정 메시지 제거 · 수신 기본 polling · 배포 전 승인 게이트</text>
+  <text class="note" x="60" y="990">readyz는 curl 200과 다르다</text>
+  <text class="body" x="60" y="1026">healthz는 생존만 본다 — 끊겨도 200.</text>
+  <text class="body" x="60" y="1058">readyz는 Supabase 왕복·수신 최신성</text>
+  <text class="body" x="60" y="1090">까지 실제로 확인해야 200을 낸다.</text>
+
+  <!-- 가운데: 작업 PC -->
+  <rect class="panel" x="600" y="140" width="500" height="930" rx="10"/>
+  <rect class="panelHead" x="600" y="140" width="500" height="52" rx="10"/>
+  <text class="colHead" x="626" y="176">작업 PC (사람의 데스크톱)</text>
+
+  <rect class="cardGreen" x="630" y="220" width="440" height="182" rx="8"/>
+  <text class="cardHead" x="654" y="254">bot-service (8787)</text>
+  <text class="body" x="654" y="288">수신(polling, 기본값) · 권한 · 멱등 · 발신</text>
+  <text class="body" x="654" y="320">방 기억 파일을 디스크에서 읽는다</text>
+  <text class="note" x="654" y="352">공개 URL·터널 불필요(webhook은 선택)</text>
+  <text class="note" x="654" y="384">/readyz — Supabase·수신 상태 확인</text>
+
+  <rect class="cardGold" x="630" y="426" width="440" height="208" rx="8"/>
+  <text class="cardHead" x="654" y="460">local-gateway — 방마다 1개 (8797)</text>
+  <text class="body" x="654" y="492">자기 gateway_id 로 온 일만 처리</text>
+  <text class="body" x="654" y="524">허용된 폴더 안에서만 실행</text>
+  <text class="body" x="654" y="556">웹 산출물은 프리뷰까지 여기서</text>
+  <text class="note" x="654" y="588">프로덕션 승격은 완료 승인 후 자동 진행</text>
+  <text class="note" x="654" y="620">/healthz·/readyz 로 대기 작업 리스 확인</text>
+
+  <rect class="card" x="630" y="658" width="440" height="130" rx="8"/>
+  <text class="cardHead" x="654" y="692">실행 엔진 3종</text>
+  <text class="body" x="654" y="726">Claude Code · Codex · Gemini 웹</text>
+  <text class="body" x="654" y="758">한도에 걸리면 최대 3회 인계</text>
+
+  <rect class="card" x="630" y="812" width="440" height="232" rx="8"/>
+  <text class="cardHead" x="654" y="846">디스크</text>
+  <text class="body" x="654" y="880">방별 작업 폴더 (실행은 여기서만)</text>
+  <text class="body" x="654" y="912">sessions/rooms — 대화 원본·요약</text>
+  <text class="body" x="654" y="946">sessions/rooms/recovery — 방 백업(6h)</text>
+  <text class="note" x="654" y="990">bot-service 와 게이트웨이가 같은</text>
+  <text class="note" x="654" y="1016">기계에 있어야 이 경로가 산다</text>
+
+  <!-- 오른쪽: 클라우드 -->
+  <rect class="panel" x="1290" y="140" width="470" height="930" rx="10"/>
+  <rect class="panelHead" x="1290" y="140" width="470" height="52" rx="10"/>
+  <text class="colHead" x="1316" y="176">클라우드</text>
+
+  <rect class="cardDark" x="1320" y="220" width="410" height="224" rx="8"/>
+  <text class="bodyLight" x="1344" y="256" style="font-weight:700">Supabase Postgres</text>
+  <text class="bodyLight" x="1344" y="290">작업 · 승인(자동승인 포함) · 산출물</text>
+  <text class="bodyLight" x="1344" y="322">보고 전문 · 보관 장부</text>
+  <text class="bodyLight" x="1344" y="354">통신 기록은 60일 후 정리</text>
+  <text class="bodyLight" x="1344" y="386">최신 40턴은 나이와 무관히 보존</text>
+  <text class="bodyLight" x="1344" y="418">복구 장부 huai_recovery_snapshots</text>
+
+  <rect class="card" x="1320" y="468" width="410" height="130" rx="8"/>
+  <text class="cardHead" x="1344" y="502">Supabase Storage</text>
+  <text class="body" x="1344" y="536">대화 원본 jsonl (무손실 사본)</text>
+  <text class="body" x="1344" y="568">지우기 전에 반드시 있어야 한다</text>
+
+  <rect class="cardGold" x="1320" y="622" width="410" height="130" rx="8"/>
+  <text class="cardHead" x="1344" y="656">Vercel — huai-board</text>
+  <text class="body" x="1344" y="690">협업 운영센터 (Mini App)</text>
+  <text class="body" x="1344" y="722">전문 보기 · 완료 승인</text>
+
+  <rect class="cardGold" x="1320" y="776" width="410" height="186" rx="8"/>
+  <text class="cardHead" x="1344" y="810">Vercel — huai-artifacts</text>
+  <text class="body" x="1344" y="844">웹 산출물 — 프리뷰 → 프로덕션</text>
+  <text class="note" x="1344" y="880">완료 승인 전엔 프리뷰 주소만 있다</text>
+  <text class="note" x="1344" y="908">승인 후에만 프로덕션 주소로 승격</text>
+
+  <!-- 연결선 — 선을 먼저 전부 그리고, 라벨을 그 위에 얹는다 (라벨이 선에 잘리지 않도록) -->
+  <path class="flow" d="M 500 268 L 630 268"/>
+  <path class="flow" d="M 1070 290 L 1320 290"/>
+  <path class="flowGold" d="M 1070 462 L 1200 462 L 1200 338 L 1320 338"/>
+  <path class="flowGold" d="M 1070 532 L 1216 532 L 1216 868 L 1320 868"/>
+  <path class="flowGray" d="M 1070 572 L 1250 572 L 1250 822 L 1320 822"/>
+  <path class="flow" d="M 1070 930 L 1240 930 L 1240 532 L 1320 532"/>
+  <path class="flowGray" d="M 500 560 L 612 560 L 612 330 L 630 330"/>
+  <path class="flowGray" d="M 500 290 L 512 290 L 512 1085 L 1264 1085 L 1264 672 L 1320 672"/>
+  <path class="flowGray" d="M 1264 1085 L 1264 944 L 1320 944"/>
+
+<text class="edgeLabel" x="516" y="275">지시·알림</text>
+  <text class="edgeLabel" x="1082" y="297">작업·승인 기록</text>
+  <text class="edgeLabel" x="1082" y="469">자기 방 일만</text>
+  <text class="edgeLabel" x="1082" y="539">프리뷰 배포(3분 타임아웃)</text>
+  <text class="edgeLabel" x="1082" y="579">승인 후 승격(1.5분)</text>
+  <text class="edgeLabel" x="1082" y="937">대화 원본 보관</text>
+  <text class="edgeLabel" x="524" y="567">폴링·발신</text>
+  <text class="edgeLabel" x="900" y="1092" text-anchor="middle">Telegram 메뉴 /center · 결과물 실행</text>
+
+  <text class="note" x="60" y="1150">2026-09-01 기준 · 실행 엔진 3종 · /readyz 헬스체크 · 6시간 방 백업 · 배포 타임아웃 · 메뉴 /center</text>
 </svg>

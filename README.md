@@ -24,6 +24,20 @@ HuAI Collab Chatroom System은 Telegram 비공개 프로젝트방을 사람과 �
 - local-gateway: 작업 PC에서 허용된 프로젝트 폴더와 adapter만 실행. 방마다 한 프로세스.
 - 협업 운영센터(Mini App): 작업·산출물·보고 전문을 보고 완료를 승인하는 화면
 
+### 운영 자동화
+
+- **자동 백업**: bot-service가 6시간마다(`BOT_SERVICE_ROOM_BACKUP_MS`) `status=active`인 방 전체를
+  스냅샷으로 남깁니다(방당 13개 테이블 + 체크섬 사이드카, `huai_recovery_snapshots`에 장부 기록).
+  운영자가 즉시 백업하려면 `npm run backup:rooms`, 되돌리려면 `scripts/restore-room-backup.mjs`를
+  씁니다(기본 dry-run, `--apply`는 터미널에서 "yes" 확인 필요).
+- **정체 제안 정리**: 1시간마다 방장이 응답하지 않고 쌓인 제안을 자동으로 정리합니다
+  (`BOT_SERVICE_STALE_PROPOSAL_CLEANUP_ENABLED`).
+- **로그 회전**: `logs/`의 서비스 로그가 기본 20MB(`HUAI_LOG_MAX_BYTES`)를 넘으면 자동 회전하고
+  백업 5개(`HUAI_LOG_MAX_BACKUPS`)까지만 보관합니다.
+- **서비스 상시 실행**: `node scripts/start-services.mjs` 하나로 bot-service·local-gateway를 함께
+  띄우고, 죽으면 자동으로 다시 올립니다. Windows 로그온 시 자동 기동을 원하면
+  `scripts/install-autostart.ps1`을 한 번 실행합니다.
+
 ### 실행 엔진 3종과 인계
 
 Claude Code · Codex · Gemini 웹 세 엔진을 씁니다. 기존 Antigravity(agy) 데이터는 Gemini 웹으로
@@ -130,7 +144,13 @@ npm run verify:supabase-store
 npm run verify:telegram-bot-commands
 npm run verify:doc-sync
 node scripts/verify-no-secrets.mjs
+npm run lint
 ```
+
+`npm run verify:all`(= `verify:operation-ready`)은 typecheck·lint·전체 gate(gate12~gate52)·
+패키지 경계·스키마-마이그레이션 동기화·테스트 도달성·Supabase Edge Functions까지 순서대로
+묶어서 실행하는 단일 진입점입니다. GitHub Actions(`.github/workflows/verify.yml`)가 push·PR마다
+`npm ci` → typecheck → lint → `verify:all` 순서로 같은 것을 돌립니다.
 
 ## 상태
 
@@ -140,12 +160,18 @@ Telegram 기반 핵심 운영 경로와 `/tasks`, `/task`, `/search`, `/trace` �
 저장소 루트의 SVG/PNG 두 쌍은 이 두 md와 같은 날짜(아래 최신 갱신일)로 맞춰 다시 그린
 것입니다 — 날짜가 이보다 오래된 이미지가 있다면 md가 최신입니다.
 
-최신 갱신일: 2026-08-28
+최신 갱신일: 2026-09-01
 실행 엔진: Claude · Codex · Gemini 웹 (3엔진, 기존 Antigravity 값은 Gemini 웹으로 호환)
 검증 상태: 방 4개 운영 흐름과 게임 로컬 상호작용 테스트는 통과했다. 게임의 실제 30초 생존과 공개 URL 브라우저 여정은 테스트 훅·환경 제약으로 완전 검증하지 않아 최종 게이트가 남아 있다.
 2026-08-23 반영: Telegram 수신 기본을 polling으로 전환(webhook 터널 불안정 문제 근본 해결) ·
 미니앱 승인/퀴즈 API JWT 게이트웨이 버그 수정 · 웹 산출물 배포 전 승인 게이트(프리뷰→프로덕션
 승격) · 승인 카테고리 분리(필수승인/자동허용) · Codex 사용량 한도 오분류 수정
+2026-08-29~31 반영: bot-service `/readyz`(Supabase 왕복·수신 경로 실측) 신설 · 방 자동 백업/복구
+CLI 추가(운영 프로젝트에서 백업·복구 실사용 검증 완료, 파괴적 복구 리허설은 전용 테스트 방에서만
+검증) · 정체 제안 자동 정리(1시간 주기) · 로그 회전 · 산출물 배포 타임아웃(멈춘 vercel CLI를
+강제 종료) · 미니앱 승인 중 처리 불가능한 결정(예: 없는 방) 종결 처리 · GitHub Actions CI ·
+eslint 계층 경계 강제 · DB 마이그레이션(FK 인덱스, allowed_adapters CHECK, 결정 outcome
+'failed') 운영 DB 적용 완료.
 
 ## 최신 문서 대조 기준 (2026-08-28)
 

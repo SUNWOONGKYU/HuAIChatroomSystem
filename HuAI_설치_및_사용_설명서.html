@@ -461,6 +461,8 @@ node scripts/start-services.mjs</code></pre>
     <p>창에 두 서비스가 떴다는 로그가 나오고 멈추지 않고 계속 떠 있으면 정상입니다. <b>PC가 켜져 있는 동안 이 창이 계속 열려 있어야</b> 시스템이 작동합니다.</p>
     <div class="warn-box">⚠️ <code>node dist/apps/bot-service/src/cli.js</code>처럼 서비스를 <b>직접</b> 실행하지 마세요. 그렇게 하면 <code>.env.operation.local</code>이 읽히지 않아서, 파일을 아무리 정확히 채웠어도 창이 열리자마자 <code>missing-env:SUPABASE_URL</code> 같은 오류를 내고 꺼집니다. 반드시 위의 <code>scripts/start-services.mjs</code>로 켜세요.</div>
     <div class="tip-box">PC를 재부팅했거나 이 창을 실수로 닫았다면, 시스템이 저절로 다시 켜지지 않습니다. PowerShell을 새로 열고 위 두 줄(<code>cd C:\Dev\HuAIChatroomSystem</code> → <code>node scripts/start-services.mjs</code>)을 다시 실행해야 합니다.</div>
+    <div class="tip-box"><b>(선택) 재부팅해도 자동으로 다시 켜지게 하려면</b> — PowerShell에서 <code>scripts/install-autostart.ps1</code>을 한 번만 실행해두면, 다음부터는 이 PC에 로그인할 때마다(1분 후) 시스템이 자동으로 켜집니다. 매번 위 창을 직접 열지 않아도 됩니다.</div>
+    <div class="tip-box"><b>백업은 자동으로 됩니다</b> — 방마다 쌓인 작업·승인·산출물 기록은 시스템이 뜬 상태에서 6시간마다 자동으로 스냅샷 파일로 백업됩니다. 로그 파일도 너무 커지지 않게 자동으로 정리(회전)됩니다. 만에 하나 데이터를 되돌려야 할 때는 <code>GITHUB_QUICKSTART.md</code>의 "방 백업·복구" 항목을 참고하세요 — 되돌리기는 사람이 PC 앞에서 직접 판단해서 실행하는 절차입니다.</div>
 
     <h3 class="section">10단계 — 설치 확인</h3>
     <p>텔레그램 그룹방에서:</p>
@@ -535,6 +537,7 @@ node scripts/start-services.mjs</code></pre>
       <tr><td>봇이 아무 반응이 없다</td><td>탭 03의 9단계 PowerShell 창이 열려 있는지 확인. 닫혀 있으면 <code>node scripts/start-services.mjs</code>로 다시 실행</td></tr>
       <tr><td><code>npm install</code>에서 멈추거나 에러</td><td>인터넷 연결 확인 후 다시 실행. 안 되면 Node.js를 v24 LTS로 재설치</td></tr>
       <tr><td>창을 열자마자 바로 꺼진다 — <code>missing-env:...</code></td><td>① 서비스를 <code>node dist/...cli.js</code>로 <b>직접</b> 켜지 않았는지 확인 — 반드시 <code>node scripts/start-services.mjs</code>로 켜야 <code>.env.operation.local</code>이 읽힙니다. ② 그래도 같으면 오류에 찍힌 이름(예: <code>BOT_SERVICE_LEADER_BOT_USERNAME</code>)이 <code>.env.operation.local</code>에 채워져 있는지 확인 — 봇 토큰 4개·사용자명 4개·Supabase URL/키가 자주 빠집니다</td></tr>
+      <tr><td>창을 열자마자 <code>포트 8787 사용 중</code> 같은 메시지가 뜨고 꺼진다</td><td>이미 다른 창이나 자동 기동(<code>install-autostart.ps1</code>)으로 서비스가 떠 있습니다. 새로 또 띄우지 말고 기존 것을 그대로 쓰거나, 확실히 다 종료한 뒤 다시 실행하세요</td></tr>
       <tr><td>"봇 여러 개가 같은 토큰" 비슷한 에러</td><td>봇 4개가 진짜 서로 다른 토큰인지 확인</td></tr>
       <tr><td>승인 버튼을 눌러도 반응이 늦다</td><td>정상입니다 — 실제 AI 실행은 몇 초~몇 분 걸립니다. 방에 "⏳ 작업 중" 표시가 주기적으로 올라옵니다</td></tr>
       <tr><td>Supabase SQL 실행에서 에러</td><td><code>supabase/schema.sql</code> 전체를 빠짐없이 붙여넣었는지 확인(일부만 붙여넣으면 실패)</td></tr>
@@ -627,7 +630,7 @@ node scripts/start-services.mjs</code></pre>
 
 </main>
 
-<footer>HuAI Collab Chatroom System<br>설치 및 사용 설명서<br>최신 갱신일 2026-08-28</footer>
+<footer>HuAI Collab Chatroom System<br>설치 및 사용 설명서<br>최신 갱신일 2026-09-01</footer>
 
 <script>
   var buttons = document.querySelectorAll('.tab-btn');
