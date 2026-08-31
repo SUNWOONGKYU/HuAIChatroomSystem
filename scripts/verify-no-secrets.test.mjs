@@ -114,6 +114,13 @@ test("GitHub fine-grained PAT 플레이스홀더는 통과한다", () => {
 
 test("Slack 토큰을 탐지한다", () => {
   const regex = regexFor("slack-token");
+  // 픽스처 값을 조각으로 이어 붙인다.
+  //
+  // 이 파일의 다른 픽스처와 달리 Slack 토큰은 GitHub 푸시 보호(secret scanning)의
+  // "Slack API Token" 패턴과 정확히 일치해서, 리터럴로 두면 푸시 자체가 거부된다
+  // (2026-08-31 실측 — GH013 으로 main 푸시가 막혔다). 가짜 값이지만 형태가 진짜와
+  // 같아서 생기는 일이다. 조각으로 나누면 우리 스캐너 테스트 의도는 그대로이고
+  // (regex 는 이어붙인 문자열을 보므로) GitHub 쪽 리터럴 매칭만 피한다.
   assert.match("SLACK_BOT_TOKEN=xo" + "xb-1234567890123-1234567890123-abcdefghijklmnopqrstuv", regex);
 });
 test("Slack 문서 플레이스홀더는 통과한다", () => {
