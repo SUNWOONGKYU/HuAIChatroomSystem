@@ -238,8 +238,15 @@ to dry-run — nothing is written unless `--apply` is passed.
 # 1. Preview: per-table total/already-existing/new row counts. Writes nothing.
 node --env-file=.env.operation.local scripts/restore-room-backup.mjs <snapshotPath> [expectedChecksum]
 
-# 2. Apply for real.
+# 2. Apply for real — prints the target (project URL / room id / per-table row counts)
+#    and then, in an interactive terminal, waits for you to type exactly "yes" before
+#    writing anything. Any other input (including empty) cancels with no writes.
 node --env-file=.env.operation.local scripts/restore-room-backup.mjs <snapshotPath> [expectedChecksum] --apply
+
+# 2b. Same, but skip the interactive "yes" prompt (non-interactive/scripted use —
+#     required if stdin is not a terminal, since without --yes a non-interactive
+#     --apply cancels immediately instead of hanging on input it can never receive).
+node --env-file=.env.operation.local scripts/restore-room-backup.mjs <snapshotPath> [expectedChecksum] --apply --yes
 ```
 
 Before touching Supabase, the script always re-runs the same integrity check as
@@ -259,9 +266,14 @@ captured are restored, and the script says so loudly, not silently).
 
 ### Current limitations (read before relying on this in a real incident)
 
-- **`--apply` has not been exercised against a real production Supabase project.** It has
-  only been tested against an in-memory fake store (`scripts/restore-room-backup.test.mjs`).
-  Before trusting it in a live incident, a human operator should dry-run it against a
+- **`--apply` has never actually written data to a real production Supabase project.**
+  Automated coverage is against an in-memory fake store
+  (`scripts/restore-room-backup.test.mjs`). The confirmation-gate rejection path (running
+  `--apply` without `--yes` and declining the "yes" prompt, so it exits with
+  `confirmation-declined` before touching anything) has been run once against a real
+  production Supabase project — that only proves the gate itself refuses cleanly, not that
+  a real write succeeds. Before trusting this in a live incident, a human operator should
+  dry-run it (and ideally exercise a real `--apply --yes` write) against a
   disposable/staging project first.
 - **`huai_verifications` is not backed up at all**, so any `huai_message_bindings` or
   `huai_revision_requests` row that references a `verification_id` can fail to restore with

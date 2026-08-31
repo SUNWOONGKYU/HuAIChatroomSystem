@@ -4,7 +4,17 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { patterns, findSecretHits, isScannable, collectFilesToScan, getOversizedSkips } from "./verify-no-secrets.mjs";
+import {
+  patterns,
+  findSecretHits,
+  isScannable,
+  collectFilesToScan,
+  getOversizedSkips,
+  getSkippedFiles,
+  looksBinary,
+  controlByteRatio,
+  stripNullBytes
+} from "./verify-no-secrets.mjs";
 
 function regexFor(name) {
   const found = patterns.find((pattern) => pattern.name === name);
@@ -268,5 +278,102 @@ test("findSecretHits 는 파일 경로와 패턴 이름을 함께 보고한다",
     assert.match(hits[0], /anthropic-api-key/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── 결함(5차 감사) 대응 — 널바이트 1개로 스캔 자체를 무음으로 건너뛰던 우회 ─────────
+//
+// 예전 looksBinary() 는 "첫 512바이트에 널바이트가 있는가"만 봤다. 정상 텍스트
+// 파일에 널바이트 하나만 심으면(뒤에 진짜 시크릿이 있어도) shouldScanContent() 가
+// 조용히 건너뛰고 collectFilesToScan() 결과에도, getOversizedSkips() 에도 아무
+// 흔적을 안 남긴 채 "Secret scan passed"(exit 0)로 끝났다. 이 블록은 그 구체적인
+// 우회가 이제 막혔는지 실제 스크립트를 서브프로세스로 실행해 검증한다 — 되돌리면
+// (looksBinary 를 "널바이트 존재 여부"로 되돌리면) 이 테스트는 exit 0 을 받아 실패한다.
+
+test("controlByteRatio — 정상 텍스트(탭/개행/캐리지리턴 포함)는 비율 0", () => {
+  const buffer = Buffer.from("line one\r\nline two\ttabbed\n한글도 포함", "utf8");
+  assert.equal(controlByteRatio(buffer), 0);
+});
+test("controlByteRatio — 진짜 바이너리(대부분 제어바이트)는 비율이 높다", () => {
+  const buffer = Buffer.alloc(600, 0x01);
+  assert.ok(controlByteRatio(buffer) >= 0.99);
+});
+test("controlByteRatio — 널바이트 1개만 섞인 텍스트는 비율이 미미하다(임계값 30% 에 한참 못 미침)", () => {
+  const buffer = Buffer.concat([Buffer.alloc(300, 0x61), Buffer.from([0]), Buffer.alloc(200, 0x61)]);
+  assert.ok(controlByteRatio(buffer) < 0.3);
+});
+
+test("stripNullBytes — 널바이트를 제거하고 앞뒤 텍스트를 이어붙인다", () => {
+  assert.equal(stripNullBytes("abc def"), "abcdef");
+});
+test("stripNullBytes — 널바이트가 없으면 그대로 돌려준다", () => {
+  assert.equal(stripNullBytes("no null bytes here"), "no null bytes here");
+});
+
+test("looksBinary — 널바이트 1개만 섞인 파일은 바이너리로 판정하지 않는다(예전엔 여기서 무음 스킵됐다)", () => {
+  const fixturePath = "scripts/__nullbyte-lookbinary-fixture.tmp.js";
+  const content = Buffer.concat([Buffer.alloc(300, 0x61), Buffer.from([0]), Buffer.alloc(200, 0x61)]);
+  writeFileSync(fixturePath, content);
+  try {
+    assert.equal(looksBinary(fixturePath), false);
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
+});
+test("looksBinary — 제어바이트 비율이 높은 진짜 바이너리는 여전히 바이너리로 판정한다", () => {
+  const fixturePath = "scripts/__binary-lookbinary-fixture.tmp.dat";
+  writeFileSync(fixturePath, Buffer.alloc(600, 0x01));
+  try {
+    assert.equal(looksBinary(fixturePath), true);
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
+});
+
+test("재현 — 첫 512바이트 안 널바이트 1개 뒤에 숨긴 telegram bot token 을 실제로 잡는다(5차 감사 우회)", () => {
+  const fixturePath = "scripts/__nullbyte-secret-scan-fixture.tmp.js";
+  const content = Buffer.concat([
+    Buffer.alloc(300, 0x61), // 정상 텍스트처럼 보이는 앞부분
+    Buffer.from([0]), // 널바이트 1개 — 예전엔 이거 하나로 파일 전체가 무음 스킵됐다
+    Buffer.alloc(150, 0x61),
+    Buffer.from("\nBOT_TOKEN=123456789:AAFooBarBaz0123456789AbCdEfGhIj\n", "utf8")
+  ]);
+  writeFileSync(fixturePath, content);
+  try {
+    const result = spawnSync(process.execPath, ["scripts/verify-no-secrets.mjs"], { encoding: "utf8" });
+    assert.equal(result.status, 1, `stdout=${result.stdout}\nstderr=${result.stderr}`);
+    assert.match(result.stderr, /Potential secret material found/);
+    assert.match(result.stderr, /telegram-bot-token/);
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
+});
+
+test("재현 — 진짜 바이너리(확장자 블랙리스트 밖)는 스킵되고 getSkippedFiles() 에 reason=binary 로 기록된다", () => {
+  const fixturePath = "scripts/__binary-secret-scan-fixture.tmp.dat";
+  writeFileSync(fixturePath, Buffer.alloc(600, 0x01));
+  try {
+    const normalize = (path) => path.replace(/\\/g, "/");
+    const files = collectFilesToScan().map(normalize);
+    assert.ok(!files.includes(fixturePath), "진짜 바이너리는 files 목록에 들어가면 안 된다");
+    const skipped = getSkippedFiles();
+    const entry = skipped.find((item) => normalize(item.path) === fixturePath);
+    assert.ok(entry, "getSkippedFiles() 에 기록돼야 한다");
+    assert.equal(entry.reason, "binary");
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
+});
+
+test("main() 은 시크릿 없이 바이너리 스킵만 있어도 초록불로 안 끝난다(exit 2) — 오버사이즈 스킵과 동일 취급", () => {
+  const fixturePath = "scripts/__binary-secret-scan-fixture.tmp.dat";
+  writeFileSync(fixturePath, Buffer.alloc(600, 0x01));
+  try {
+    const result = spawnSync(process.execPath, ["scripts/verify-no-secrets.mjs"], { encoding: "utf8" });
+    assert.equal(result.status, 2, `stdout=${result.stdout}\nstderr=${result.stderr}`);
+    assert.match(result.stderr, /Secret scan skipped/);
+    assert.match(result.stderr, /binary/);
+  } finally {
+    rmSync(fixturePath, { force: true });
   }
 });

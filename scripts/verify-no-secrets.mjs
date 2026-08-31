@@ -104,19 +104,33 @@ export function isScannable(path) {
 }
 
 // 확장자 블랙리스트에 없는 바이너리(예: 확장자가 아예 없는 바이너리, 목록에 없는
-// 포맷)를 걸러내는 보조 안전망. 첫 512바이트에 널바이트가 있으면 바이너리로 본다 —
-// 텍스트 인코딩(UTF-8 한글 포함)은 널바이트를 쓰지 않는다.
-function looksBinary(path) {
+// 포맷)를 걸러내는 보조 안전망.
+//
+// 결함(5차 감사) 대응 — 예전에는 "첫 512바이트에 널바이트가 하나라도 있으면
+// 바이너리"로 판정했다. 5차 평가관이 실증했듯 이건 그 자체가 공격 표면이었다 —
+// 첫 512바이트 안에 널바이트 하나만 심으면(나머지는 정상 텍스트), 뒤에 진짜
+// telegram bot token 이 있어도 shouldScanContent() 가 조용히 건너뛰고
+// "Secret scan passed"(exit 0)로 끝났다. 널바이트 "존재 여부"가 아니라 샘플 안
+// 제어문자(널 포함) "비율"로 판단하도록 바꾼다 — 진짜 바이너리는 샘플의 상당
+// 비율이 제어문자지만, "정상 텍스트 파일에 널바이트 1개 심기" 공격은 비율이
+// 미미하다(1/512 ≈ 0.2%). 임계값 30% 는 텍스트 인코딩(UTF-8 한글 포함, 탭/개행/
+// 캐리지리턴 제외)에서는 사실상 발생하지 않는 수준이면서, 진짜 바이너리는 넉넉히
+// 넘긴다.
+const BINARY_SAMPLE_BYTES = 512;
+const BINARY_CONTROL_BYTE_RATIO_THRESHOLD = 0.3;
+
+function readSampleBytes(path, size = BINARY_SAMPLE_BYTES) {
   let fd;
   try {
     fd = openSync(path, "r");
-    const buffer = Buffer.alloc(512);
+    const buffer = Buffer.alloc(size);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, bytesRead).includes(0);
+    return buffer.subarray(0, bytesRead);
   } catch {
     // 못 읽으면 다음 단계(readFileSync)에서 어차피 실패하거나 빈 내용으로 처리된다 —
-    // 여기서는 스캔 대상에서 빼지 않는다(과소 스캔보다 과다 스캔이 안전한 방향).
-    return false;
+    // 여기서는 null 을 돌려주고 looksBinary() 가 "바이너리 아님"으로 처리한다
+    // (과소 스캔보다 과다 스캔이 안전한 방향).
+    return null;
   } finally {
     if (fd !== undefined) {
       try {
@@ -126,6 +140,37 @@ function looksBinary(path) {
       }
     }
   }
+}
+
+// 탭(0x09)/개행(0x0A)/캐리지리턴(0x0D)은 텍스트 파일에도 흔하므로 제어문자 집계에서
+// 뺀다. 나머지 0x00~0x1F 제어문자와 널바이트(0x00)만 센다.
+export function controlByteRatio(buffer) {
+  if (!buffer || buffer.length === 0) return 0;
+  let controlCount = 0;
+  for (const byte of buffer) {
+    if (byte === 0x00 || (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d)) {
+      controlCount += 1;
+    }
+  }
+  return controlCount / buffer.length;
+}
+
+export function looksBinary(path) {
+  const sample = readSampleBytes(path);
+  if (sample === null) return false;
+  return controlByteRatio(sample) >= BINARY_CONTROL_BYTE_RATIO_THRESHOLD;
+}
+
+// 결함(5차 감사) 대응(추가 방어선) — "바이너리 아님"으로 판정돼 실제로 스캔되는
+// 파일이라도, 안에 낀 널바이트를 그대로 두면 그게 하필 시크릿 토큰 한가운데를
+// 가를 경우 패턴의 문자클래스([A-Za-z0-9_-] 등)가 거기서 끊겨 놓칠 수 있다.
+// 널바이트를 구분자로 보고 제거한 뒤(주변 텍스트는 그대로 붙여) 스캔에 넘긴다 —
+// 정상 텍스트에는 애초에 널바이트가 없으므로 이 치환은 정상 파일에 아무 영향이
+// 없다.
+const NULL_BYTE = String.fromCharCode(0);
+
+export function stripNullBytes(text) {
+  return text.indexOf(NULL_BYTE) === -1 ? text : text.split(NULL_BYTE).join("");
 }
 
 export function findSecretHits(file, text, scanPatterns = patterns) {
@@ -140,24 +185,41 @@ export function findSecretHits(file, text, scanPatterns = patterns) {
 // 결함(4차 감사) 대응 — 5MB 초과 파일은 이 배열에 기록만 되고 collectFilesToScan()
 // 호출자는 이걸 몰라서 최종 결과가 그냥 "Secret scan passed"(exit 0)로 끝났다(4차
 // 평가관이 6MB 파일에 진짜 값을 숨겨 재현). collectFilesToScan() 시작마다 비우고,
-// main() 이 getOversizedSkips() 로 읽어 최종 판정에 반영한다.
-let oversizedSkips = [];
+// main() 이 getSkippedFiles() 로 읽어 최종 판정에 반영한다.
+//
+// 결함(5차 감사) 대응 — 바이너리로 판정해 건너뛴 파일도 5MB 초과 스킵과 같은
+// 급으로 취급한다(둘 다 "내용을 못 봤다"는 점에서 동일한 위험이다). 오버사이즈
+// 전용이던 배열을 { path, reason } 목록으로 일반화해 바이너리 스킵도 같이
+// 기록한다 — 이제 어느 스킵이든 있으면 main() 이 초록불로 끝내지 않는다.
+let skippedFiles = [];
 
+// 하위호환 + 기존 테스트가 기대하는 "오버사이즈만" 조회.
 export function getOversizedSkips() {
-  return [...oversizedSkips];
+  return skippedFiles.filter((entry) => entry.reason === "oversized").map((entry) => entry.path);
+}
+
+export function getSkippedFiles() {
+  return skippedFiles.map((entry) => ({ ...entry }));
 }
 
 // isScannable(경로 판단) 을 통과한 파일이 실제로 내용을 읽어도 되는 크기·형태인지
-// 판단한다. 상한 초과는 로그로 알리고 oversizedSkips 에 기록한다(결함 1 지적사항 —
-// 아래 결함 4차 대응으로 이 기록이 최종 종료 상태에도 반영된다). 바이너리는 조용히
-// 넘긴다(이미 확장자 블랙리스트가 대부분 걸러내므로 여기 도달하는 바이너리는 드문 예외다).
+// 판단한다. 상한 초과·바이너리 판정 둘 다 로그로 알리고 skippedFiles 에 기록한다
+// (결함 1 지적사항 — 아래 main() 이 이 기록을 최종 종료 상태에 반영한다). 예전에는
+// 바이너리로 판정된 파일은 조용히 넘겼는데(이미 확장자 블랙리스트가 대부분 걸러내
+// 므로 여기 도달하는 바이너리는 드문 예외라는 전제였다), 5차 감사가 그 "조용히"가
+// 바로 공격 표면이라는 걸 실증했다.
 function shouldScanContent(path, stat) {
   if (stat.size > MAX_SCAN_BYTES) {
     console.error(`secret-scan-skip-oversized: ${path} (${stat.size} bytes > ${MAX_SCAN_BYTES})`);
-    oversizedSkips.push(path);
+    skippedFiles.push({ path, reason: "oversized" });
     return false;
   }
-  return !looksBinary(path);
+  if (looksBinary(path)) {
+    console.error(`secret-scan-skip-binary: ${path} (제어문자 비율 임계값 초과 — 진짜 바이너리로 판단)`);
+    skippedFiles.push({ path, reason: "binary" });
+    return false;
+  }
+  return true;
 }
 
 function collect(path, out) {
@@ -196,7 +258,7 @@ function gitFiles(args) {
 // roots 재귀 스캔(추적 여부 무관, 로컬 미스테이징 파일까지 보는 안전망)과 겹치는
 // 부분은 files.includes 로 중복 제거한다.
 export function collectFilesToScan() {
-  oversizedSkips = [];
+  skippedFiles = [];
   const files = [];
   for (const root of roots) collect(root, files);
 
@@ -221,13 +283,16 @@ export function collectFilesToScan() {
 // 하나라도 있으면 초록불로 끝내지 않는다 — "과소 스캔보다 과다 스캔이 안전한 방향"
 // (looksBinary() 주석과 같은 원칙)이므로, 못 본 내용이 있다는 사실 자체를 실패로 친다.
 // 실제 시크릿이 발견된 경우(exit 1)와 종료 상태를 구분해 CI 로그에서 원인을 바로
-// 알 수 있게 한다 — 실제 시크릿 없이 오버사이즈 스킵만 있으면 exit 2.
+// 알 수 있게 한다 — 실제 시크릿 없이 스킵(오버사이즈든 바이너리든)만 있으면 exit 2
+// (결함(5차 감사) 대응 — 바이너리 스킵도 이제 여기 합류한다).
 function main() {
   const files = collectFilesToScan();
-  const oversized = getOversizedSkips();
+  const skipped = getSkippedFiles();
   const hits = [];
   for (const file of files) {
-    const text = readFileSync(file, "utf8");
+    // 결함(5차 감사) 대응 — 널바이트가 (바이너리로 판정될 만큼은 아니게) 섞여 있어도
+    // 무시하지 않는다. 구분자로 보고 제거한 뒤 나머지 텍스트를 그대로 스캔한다.
+    const text = stripNullBytes(readFileSync(file, "utf8"));
     hits.push(...findSecretHits(file, text));
   }
 
@@ -237,12 +302,21 @@ function main() {
     process.exit(1);
   }
 
-  if (oversized.length > 0) {
+  if (skipped.length > 0) {
+    const oversized = skipped.filter((entry) => entry.reason === "oversized");
+    const binary = skipped.filter((entry) => entry.reason === "binary");
     console.error(
-      `Secret scan skipped ${oversized.length} oversized file(s) (> ${MAX_SCAN_BYTES} bytes) — 내용을 못 봤다. ` +
+      `Secret scan skipped ${skipped.length} file(s) — 내용을 못 봤다. ` +
       "축소하거나, 정말 필요하면 좁은 예외를 만들고 근거를 남겨라:"
     );
-    for (const path of oversized) console.error(`- ${path}`);
+    if (oversized.length > 0) {
+      console.error(`- oversized (> ${MAX_SCAN_BYTES} bytes):`);
+      for (const { path } of oversized) console.error(`  - ${path}`);
+    }
+    if (binary.length > 0) {
+      console.error(`- binary (제어문자 비율 임계값 초과):`);
+      for (const { path } of binary) console.error(`  - ${path}`);
+    }
     process.exit(2);
   }
 

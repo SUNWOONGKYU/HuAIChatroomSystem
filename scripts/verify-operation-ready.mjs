@@ -95,6 +95,21 @@ const STEPS = [
   // STEPS 배열에 추가하는 걸 잊는 것 자체가 gate47~49/verify:restore-room-backup
   // 주석이 경고하는 "고아 테스트" 결함과 같은 종류라, 만들면서 바로 등록한다.
   "verify:schema-migration-sync",
+  // 결함(5차 감사) 대응 — package.json 에 스크립트로는 존재했지만 이 STEPS 배열
+  // 어디에서도 참조되지 않아 4라운드 내내 아무도 못 잡은 고아 테스트 2건. 둘 다
+  // gate47~49/verify:restore-room-backup 주석이 경고한 것과 같은 종류의 결함이다.
+  //   - verify:onboard-telegram-room (443줄, 12개 테스트) — 신규 방 온보딩 멱등성,
+  //     service_role 키 유출 방지, 공유 봇 actor_id 보존 등 운영 핵심 경로.
+  //   - verify:live-formal-smoke-diagnostics (48줄, 4개 테스트) — 완전 오프라인이라
+  //     배제할 이유가 없다.
+  "verify:onboard-telegram-room",
+  "verify:live-formal-smoke-diagnostics",
+  // 결함(5차 감사) 대응(가장 높은 레버리지) — 고아 테스트가 매 라운드 새로 발견되는
+  // 패턴 자체를 막는 메타 테스트(scripts/verify-test-reachability.mjs). 저장소의
+  // 모든 *.test.{ts,mjs,js} 파일이 이 STEPS 그래프에서 실제로 도달 가능한지 검증한다.
+  // verify:secrets 앞, 다른 게이트들 뒤에 둔다 — 이 스텝 자신도 그래프의 일부이므로
+  // STEPS 에 실제로 등록해야 자기 자신을 검증할 때 "이 파일이 배선됐는지"가 통과한다.
+  "verify:test-reachability",
   "verify:structure",
   "verify:secrets"
 ];
@@ -121,6 +136,7 @@ export function commandForStep(step) {
   }
   if (step === "verify:restore-room-backup") return "node --test scripts/restore-room-backup.test.mjs";
   if (step === "verify:schema-migration-sync") return "node --test scripts/verify-schema-migration-sync.test.mjs";
+  if (step === "verify:test-reachability") return "node --test scripts/verify-test-reachability.test.mjs";
   return `npm run ${step}`;
 }
 

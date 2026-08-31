@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expectedNamedObjects, findSchemaDrift } from "./verify-schema-migration-sync.mjs";
+import { expectedNamedObjects, findSchemaDrift, stripSqlComments } from "./verify-schema-migration-sync.mjs";
 
 function makeFixture(migrationFiles) {
   const root = mkdtempSync(path.join(tmpdir(), "schema-sync-fixture-"));
@@ -92,6 +92,90 @@ test("findSchemaDrift 는 schema.sql 이 이름을 담고 있으면 통과한다
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ── 결함(5차 감사) 대응 — SQL 주석을 DDL 로 오인하던 것 ──────────────────────────
+// OP_RE 가 `--` 줄 주석을 벗겨내지 않아, "롤백(수동, 실행되지 않음)" 섹션의 예시
+// `-- drop index ...`/`-- drop table ...` 를 진짜 DROP 으로 파싱했다. 그 결과 실제로
+// CREATE 된 인덱스/제약이 present 맵에서 조용히 지워졌다(5차 평가관이
+// expectedNamedObjects() 를 직접 호출해 계측 — huai_outbox_target_room_created_idx 등
+// 3개가 추적 대상에서 빠짐). 아래는 그 정확한 재현이다.
+
+test("주석 처리된 롤백 DROP 은 실제 CREATE 를 지우지 않는다 — 5차 감사 재현(단어 그대로)", () => {
+  const { root, migrationsDir } = makeFixture({
+    "20260101000000_init.sql":
+      "create table if not exists widgets (\n  widget_id uuid primary key,\n  owner_id uuid not null\n);\n" +
+      "create index if not exists widgets_owner_idx on widgets (owner_id);\n\n" +
+      "-- =====================================================================\n" +
+      "-- 롤백 (수동, 실행되지 않음)\n" +
+      "-- =====================================================================\n" +
+      "--\n" +
+      "-- drop index if exists widgets_owner_idx;\n" +
+      "-- drop table if exists widgets;\n"
+  });
+  try {
+    const expected = expectedNamedObjects(migrationsDir);
+    assert.equal(expected.get("widgets_owner_idx"), "widgets", "주석 처리된 drop index 는 무시돼야 한다");
+    assert.ok(expected.has("widgets_owner_idx"), "widgets_owner_idx 가 추적 대상에서 빠지면 안 된다(5차 감사 재현)");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("주석 처리된 drop table 은 그 테이블 소속 인라인 constraint 도 지우지 않는다", () => {
+  const { root, migrationsDir } = makeFixture({
+    "20260101000000_init.sql":
+      "create table if not exists gadgets (\n  gadget_id uuid primary key,\n  constraint gadgets_id_check check (gadget_id is not null)\n);\n" +
+      "-- drop table if exists gadgets;\n"
+  });
+  try {
+    const expected = expectedNamedObjects(migrationsDir);
+    assert.equal(expected.get("gadgets_id_check"), "gadgets");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("블록 주석(/* */) 안의 DROP 도 진짜 DROP 으로 파싱하지 않는다", () => {
+  const { root, migrationsDir } = makeFixture({
+    "20260101000000_init.sql":
+      "create table if not exists sprockets (\n  sprocket_id uuid primary key\n);\n" +
+      "create index if not exists sprockets_id_idx on sprockets (sprocket_id);\n" +
+      "/* rollback example:\n   drop index if exists sprockets_id_idx;\n   drop table if exists sprockets;\n*/\n"
+  });
+  try {
+    const expected = expectedNamedObjects(migrationsDir);
+    assert.equal(expected.get("sprockets_id_idx"), "sprockets");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stripSqlComments — 문자열 리터럴 안의 -- 는 지우지 않는다(주석으로 오인 금지)", () => {
+  const sql = "select 'a -- not a comment' as literal; -- real comment\nselect 1;";
+  const stripped = stripSqlComments(sql);
+  assert.match(stripped, /'a -- not a comment'/);
+  assert.doesNotMatch(stripped, /real comment/);
+});
+
+test("stripSqlComments — 달러 인용 문자열($$...$$) 안의 -- 는 지우지 않는다(plpgsql 함수 본문)", () => {
+  const sql =
+    "create function f() returns void as $$\n" +
+    "begin\n" +
+    "  -- this looks like a comment but is inside the function body string\n" +
+    "  perform 1;\n" +
+    "end;\n" +
+    "$$ language plpgsql; -- real trailing comment\n";
+  const stripped = stripSqlComments(sql);
+  assert.match(stripped, /this looks like a comment but is inside the function body string/);
+  assert.doesNotMatch(stripped, /real trailing comment/);
+});
+
+test("stripSqlComments — 이스케이프된 홑따옴표('') 를 포함한 문자열 리터럴도 안전하게 지나간다", () => {
+  const sql = "select 'it''s -- tricky' as literal; -- comment after\n";
+  const stripped = stripSqlComments(sql);
+  assert.match(stripped, /'it''s -- tricky'/);
+  assert.doesNotMatch(stripped, /comment after/);
 });
 
 // ── 실제 repo 가드 ──────────────────────────────────────────────────────────
