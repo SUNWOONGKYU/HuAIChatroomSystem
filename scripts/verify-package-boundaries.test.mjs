@@ -7,7 +7,9 @@ import {
   discoverWorkspacePackages,
   actualInternalDependencies,
   declaredDependencies,
-  checkAllPackageBoundaries
+  checkAllPackageBoundaries,
+  findUnresolvableDynamicSpecifiers,
+  layerViolations
 } from "./verify-package-boundaries.mjs";
 
 // 결함 2(package.json 에 dependencies 필드 부재, 3차 라운드까지 연속 지적) 대응.
@@ -221,4 +223,248 @@ test("실제 repo: 8개 workspace package.json 의 dependencies 가 실제 impor
     [],
     "package.json dependencies 가 실제 import 그래프와 어긋난다 — 위 목록 참고"
   );
+});
+
+// ── 5차 감사 대응 — AST 전환 회귀 테스트 ────────────────────────────────
+// 두 독립 평가관이 프로브로 실증한 6가지 우회(정규식 기반 구현이 전부 놓쳤던 형태)를
+// 픽스처로 재현한다. 실제 저장소를 오염시키지 않도록 임시 디렉터리에만 만든다.
+function makeAstBypassFixtureWorkspace() {
+  const root = mkdtempSync(path.join(tmpdir(), "pkg-boundary-ast-bypass-fixture-"));
+  const pkg = (group, name) => {
+    const dir = path.join(root, group, name);
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    return dir;
+  };
+  const leafDir = pkg("packages", "leaf");
+  writeFileSync(path.join(leafDir, "package.json"), JSON.stringify({ name: "@hu-ai/leaf" }));
+  writeFileSync(path.join(leafDir, "src", "index.ts"), "export function thing(): number {\n  return 1;\n}\n");
+
+  const consumerDir = pkg("packages", "consumer");
+  writeFileSync(path.join(consumerDir, "package.json"), JSON.stringify({ name: "@hu-ai/consumer", dependencies: {} }));
+
+  return { root, leafDir, consumerDir };
+}
+
+test("우회 1/6 — 템플릿 리터럴 동적 import 도 탐지한다", () => {
+  const { root, consumerDir } = makeAstBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      "export async function probe() {\n  const mod = await import(`../../leaf/src/index.js`);\n  return mod;\n}\n"
+    );
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "템플릿 리터럴 동적 import 로 나가는 의존이 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("우회 2/6 — 변수 경유 동적 import 도 탐지한다", () => {
+  const { root, consumerDir } = makeAstBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      'export async function probe() {\n  const p = "../../leaf/src/index.js";\n  const mod = await import(p);\n  return mod;\n}\n'
+    );
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "변수 경유 동적 import 로 나가는 의존이 탐지돼야 한다(같은 파일 안 const 상수 전파)");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("우회 3/6 — 문자열 연결 동적 import 도 탐지한다", () => {
+  const { root, consumerDir } = makeAstBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      'export async function probe() {\n  const mod = await import("../../" + "leaf/src/index.js");\n  return mod;\n}\n'
+    );
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "문자열 연결로 만든 동적 import 경로도 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("우회 4/6 — createRequire(...) 결과를 변수에 담아 호출해도 탐지한다", () => {
+  const { root, consumerDir } = makeAstBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      'import { createRequire } from "node:module";\n' +
+        "export function probe() {\n" +
+        "  const req = createRequire(import.meta.url);\n" +
+        '  return req("../../leaf/src/index.js");\n' +
+        "}\n"
+    );
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "createRequire 변수 경유 require 호출도 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("우회 5/6 — createRequire(...)(\"@hu-ai/x\") 직접 체인 호출도 탐지한다", () => {
+  const { root, consumerDir } = makeAstBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      'import { createRequire } from "node:module";\n' +
+        "export function probe() {\n" +
+        '  return createRequire(import.meta.url)("@hu-ai/leaf");\n' +
+        "}\n"
+    );
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "createRequire(...)(...) 직접 체인 호출도 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("우회 6/6 — 재-export 체인(전이적 의존)을 이름 단위로 추적한다", () => {
+  const { root, leafDir, consumerDir } = makeAstBypassFixtureWorkspace();
+  const middleDir = path.join(root, "packages", "middle");
+  mkdirSync(path.join(middleDir, "src"), { recursive: true });
+  try {
+    writeFileSync(path.join(middleDir, "package.json"), JSON.stringify({ name: "@hu-ai/middle", dependencies: { "@hu-ai/leaf": "*" } }));
+    // middle 은 leaf 를 정직하게 선언하고 실제로 재-export 한다 — middle 자체는 위반이 아니다.
+    writeFileSync(path.join(middleDir, "src", "index.ts"), 'export { thing } from "../../leaf/src/index.js";\n');
+    // consumer 는 middle 만 import 한다(leaf 를 직접 import 하지 않는다) — 그런데 middle 이
+    // re-export 하는 leaf 의 심볼(thing)을 실제로 가져다 쓴다. package.json 에는 middle 만
+    // 선언돼 있고 leaf 는 없다 — "missing" 으로 잡혀야 한다.
+    writeFileSync(path.join(consumerDir, "package.json"), JSON.stringify({ name: "@hu-ai/consumer", dependencies: { "@hu-ai/middle": "*" } }));
+    writeFileSync(path.join(consumerDir, "src", "index.ts"), 'import { thing } from "../../middle/src/index.js";\nexport { thing };\n');
+
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "middle 을 거쳐 재-export 된 leaf 의 심볼을 실제로 쓰면 leaf 가 actual 의존에 잡혀야 한다");
+
+    const results = checkAllPackageBoundaries(root);
+    const consumerResult = results.find((r) => r.name === "@hu-ai/consumer");
+    assert.equal(consumerResult.ok, false);
+    assert.deepEqual(consumerResult.missing, ["@hu-ai/leaf"]);
+
+    const middleResult = results.find((r) => r.name === "@hu-ai/middle");
+    assert.equal(middleResult.ok, true, "middle 자신은 leaf 를 정직하게 선언했으니 위반이 아니다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("import 후 bare export(`import {x} from 'spec'; export {x};`)로 재-export 해도 원출처까지 추적한다", () => {
+  const { root, leafDir, consumerDir } = makeAstBypassFixtureWorkspace();
+  const middleDir = path.join(root, "packages", "middle");
+  mkdirSync(path.join(middleDir, "src"), { recursive: true });
+  try {
+    writeFileSync(path.join(middleDir, "package.json"), JSON.stringify({ name: "@hu-ai/middle", dependencies: { "@hu-ai/leaf": "*" } }));
+    // "export ... from" 문법이 아니라, 먼저 import 하고 별개의 bare export 문으로
+    // 내보내는 형태 — 실무에서 더 흔한 재-export 관용구다.
+    writeFileSync(
+      path.join(middleDir, "src", "index.ts"),
+      'import { thing } from "../../leaf/src/index.js";\nexport { thing };\n'
+    );
+    writeFileSync(path.join(consumerDir, "package.json"), JSON.stringify({ name: "@hu-ai/consumer", dependencies: { "@hu-ai/middle": "*" } }));
+    writeFileSync(path.join(consumerDir, "src", "index.ts"), 'import { thing } from "../../middle/src/index.js";\nexport { thing };\n');
+
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "import 후 bare export 로 만든 재-export 체인도 원출처(leaf)까지 추적돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("findUnresolvableDynamicSpecifiers 는 정적으로 확정 안 되는 동적 import 를 실패 대상으로 보고한다", () => {
+  const { root, consumerDir } = makeAstBypassFixtureWorkspace();
+  try {
+    // 함수 호출 결과(runtime 에만 결정되는 값)를 그대로 import() 에 넘기는 형태 —
+    // 상수 전파로도 확정 불가능해야 한다.
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      "function pickPath(): string {\n  return Math.random() > 0.5 ? \"a\" : \"b\";\n}\n" +
+        "export async function probe() {\n  return import(pickPath());\n}\n"
+    );
+    const unresolvable = findUnresolvableDynamicSpecifiers(root);
+    assert.equal(unresolvable.length, 1);
+    assert.equal(unresolvable[0].kind, "dynamic-import");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("findUnresolvableDynamicSpecifiers 는 확정되는 동적 import/require 는 보고하지 않는다", () => {
+  const { root, consumerDir } = makeAstBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      'export async function probe() {\n  await import("../../leaf/src/index.js");\n  const p = "../../leaf/src/index.js";\n  await import(p);\n}\n'
+    );
+    const unresolvable = findUnresolvableDynamicSpecifiers(root);
+    assert.deepEqual(unresolvable, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── 실제 repo 가드 ──────────────────────────────────────────────────────────
+test("실제 repo: 정적으로 확정 안 되는 동적 import()/require() 가 없다", () => {
+  const unresolvable = findUnresolvableDynamicSpecifiers();
+  assert.deepEqual(
+    unresolvable.map((u) => `${u.file}:${u.line}`),
+    [],
+    "정적으로 확정 안 되는 동적 import/require 가 있다 — 위 목록 참고(경고가 아니라 실패 대상)"
+  );
+});
+
+// 레이어 규칙은 package.json 선언 여부와 무관하게 강제돼야 한다.
+//
+// 배경: 이전 구현은 재-export 체인 위반을 declared/actual 대조로만 잡았다. 그래서
+// 전이 의존을 package.json 에 그대로 선언해버리면 declared==actual 이 맞아떨어져
+// 통과했다(eslint 는 파일 단위라 체인 저 너머를 못 보므로 아무도 못 잡는 경로였다).
+test("layerViolations: 선언했든 안 했든 레이어를 어기면 잡는다", () => {
+  // bot-service 는 ai-adapters 를 쓰면 안 된다(local-gateway 전용).
+  assert.deepEqual(
+    layerViolations("@hu-ai/bot-service", new Set(["@hu-ai/ai-adapters", "@hu-ai/contracts"])),
+    ["@hu-ai/ai-adapters"]
+  );
+  // 허용된 조합은 통과.
+  assert.deepEqual(
+    layerViolations("@hu-ai/bot-service", new Set(["@hu-ai/contracts", "@hu-ai/local-gateway"])),
+    []
+  );
+  // 최하위 레이어는 내부 의존 자체가 없어야 한다.
+  assert.deepEqual(layerViolations("@hu-ai/contracts", new Set(["@hu-ai/telegram-ui"])), ["@hu-ai/telegram-ui"]);
+  assert.deepEqual(layerViolations("@hu-ai/contracts", new Set()), []);
+  // orchestrator 는 contracts/telegram-ui 만.
+  assert.deepEqual(
+    layerViolations("@hu-ai/orchestrator", new Set(["@hu-ai/supabase-runtime"])),
+    ["@hu-ai/supabase-runtime"]
+  );
+});
+
+test("layerViolations: 표에 없는 패키지는 조용히 통과시키지 않는다", () => {
+  // 새 패키지가 생겼는데 표를 안 고치면, 그 패키지가 무엇을 import 하든 통과해버리는
+  // 조용한 구멍이 된다. 표를 갱신하라는 신호를 내야 한다.
+  const result = layerViolations("@hu-ai/브랜뉴", new Set());
+  assert.equal(result.length, 1);
+  assert.match(result[0], /레이어 표에 없는 패키지/);
+});
+
+test("실제 repo: 레이어 위반 0건", () => {
+  for (const result of checkAllPackageBoundaries()) {
+    assert.deepEqual(result.layerBreaks, [], `${result.name} 에 레이어 위반이 있다`);
+  }
 });

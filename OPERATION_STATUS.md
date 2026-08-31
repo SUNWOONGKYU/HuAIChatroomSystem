@@ -362,3 +362,55 @@ and `scripts/restore-room-backup.mjs`):
   (`취소됨 — 아무 것도 쓰지 않았다.`, exit code 1) instead of hanging — verified live in this
   pass by running `--apply` without `--yes` against the real project: it showed the summary and
   declined without writing anything.
+
+## 2026-08-31 KST — 스케줄러 무인 실행과 복구 쓰기 경로, 라이브 실증
+
+이 절 이전까지 이 문서는 두 가지를 미검증으로 남겨두고 있었다. 둘 다 이번에 실제 운영
+프로젝트에 대고 실행해 해소했고, 근거를 그대로 적는다.
+
+**1. 무인 스케줄러가 스스로 백업을 남긴다 — 검증됨**
+
+이전 증거는 운영자가 손으로 돌린 `npm run backup:rooms` 1회뿐이었고, 그래서 위 절은
+"코드 경로가 동작한다는 증거일 뿐, 스케줄러가 도는 것을 관측한 건 아니다"라고 스스로
+선을 그어뒀다. 이번에 `server.ts` 의 `maybeStartRoomBackup` 과 **동일한 배선**
+(`startRoomBackupLoop` + `listRoomIdsFromSupabase` + `createRoomBackupRestClient`)을
+주기만 15초로 줄여 사람 개입 없이 돌렸다. 3주기 동안 5개 방 × 3 = 15건 전부 성공했고,
+`huai_recovery_snapshots` 에 `created_by='bot-service-auto'` 로 15행이 남았다
+(수동 실행분 `operator-cli` 5행과 구분됨. 조회 시점 room 타입 총 20행).
+
+주기 값만 다를 뿐 실행 경로는 운영과 같다. 즉 bot-service 가 떠 있으면 자동 백업이
+실제로 돈다는 것이 이제 관측된 사실이다.
+
+**2. `restore-room-backup.mjs --apply` 의 실제 쓰기 경로 — 검증됨**
+
+이전까지는 확인 게이트의 *거부* 경로만 프로덕션에서 확인됐고 실제 쓰기는 in-memory
+fake store 테스트뿐이었다. 이번에 가장 작은 방(`8d6c738b`)의 스냅샷으로 실제 실행했다.
+
+먼저 dry-run 으로 13개 테이블 전부 `new=0`(모든 행이 이미 존재)임을 확인했다 — 즉
+적용해도 동일 값 upsert 라 데이터가 바뀌지 않는 상태에서만 실행했다. 결과 14/14 단계
+성공했고, 순환 FK 2-pass(`huai_tasks` 1차 승인 FK 해제 → `huai_events`/`huai_approvals`
+삽입 → 2차 승인 연결 복원)도 로그상 실제로 수행됐다.
+
+적용 전후를 직접 대조했다. room-scoped 10개 테이블 행 수가 전부 동일했고
+(`huai_room_members` 1, `huai_ai_actors` 4, `huai_task_proposals` 1, `huai_events` 22,
+`huai_approvals` 2, `huai_task_dependencies` 0, `huai_agent_personas` 0,
+`huai_task_reports` 3, `huai_tasks` 2, `huai_message_bindings` 0), `huai_tasks` 2건의
+`status` 와 `approved_by_approval_id` 가 스냅샷 값과 정확히 일치했다 — 2-pass 가 승인
+연결을 null 로 남기지 않고 원래대로 복원했다는 뜻이다.
+
+**남은 한계 (과장하지 않기 위해 명시)**: 이 실행은 "이미 존재하는 행을 같은 값으로
+다시 쓰는" 경로만 증명한다. 실제로 데이터가 소실된 방에 대해 `new>0` 인 상태로
+복원해 되살리는 시나리오는 아직 실행된 적이 없다. 그 검증에는 데이터를 지웠다
+되살리는 파괴적 리허설이 필요하고, 운영 방에서 할 일이 아니다.
+
+**부수 발견과 그 수정**: 백업이 체크섬을 DB(`huai_recovery_snapshots.checksum`)에만
+기록하고 `.sha256` 사이드카를 만들지 않아, 복구 스크립트가 사이드카가 없으면 체크섬을
+인자로 요구했다. 위 복구 검증에서도 DB 에서 체크섬을 꺼내 넘겨야 했다 — 정작 복구가
+필요한 상황(DB 손상·접근 불가)에서는 복구를 시작조차 못 한다는 뜻이라 그 자리에서
+고쳤다. `writeRoomBackupSnapshotToDisk` 가 스냅샷 옆에 `.sha256` 을 함께 쓰고,
+정리(prune)가 스냅샷과 사이드카를 짝지어 지운다(사이드카만 남아 쌓이지 않게).
+
+라이브 확인: 사이드카 도입 후 `npm run backup:rooms` 재실행(5/5 성공) → 방마다
+`.sha256` 생성 확인 → 체크섬 인자 **없이** 스냅샷 경로만으로 복구 dry-run 이 정상
+동작하는 것 확인. 사이드카 값이 같은 실행이 DB 에 기록한 checksum 과 일치함도 대조했다.
+DB 기록은 그대로 유지한다 — 둘이 어긋나면 그 자체가 변조·손상 신호다.

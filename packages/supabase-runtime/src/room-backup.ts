@@ -261,10 +261,13 @@ export async function buildRoomBackupSnapshot(deps: RoomBackupDeps, roomId: stri
  * 스냅샷을 결정적으로 직렬화하고 SHA-256 체크섬을 계산한다. 같은 스냅샷 객체를
  * 두 번 넣으면 항상 같은 content/checksum 을 낸다(키 순서를 뒤섞지 않으므로).
  */
+export function sha256Hex(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
 export function serializeRoomBackupSnapshot(snapshot: RoomBackupSnapshot): { content: string; checksum: string } {
   const content = JSON.stringify(snapshot, null, 2);
-  const checksum = createHash("sha256").update(content, "utf8").digest("hex");
-  return { content, checksum };
+  return { content, checksum: sha256Hex(content) };
 }
 
 export type WriteRoomBackupSnapshotInput = {
@@ -295,6 +298,15 @@ export async function writeRoomBackupSnapshotToDisk(
 
   await mkdirImpl(dir);
   await writeFileImpl(filePath, input.content);
+  // 체크섬 사이드카(.sha256)를 함께 남긴다.
+  //
+  // 왜: 체크섬을 huai_recovery_snapshots.checksum 에만 두면, 복구가 실제로 필요한
+  // 상황(= DB 가 망가졌거나 접근이 안 되는 상황)에서 정작 그 체크섬을 못 꺼낸다.
+  // restore-room-backup.mjs 는 사이드카가 없으면 체크섬을 인자로 요구하므로, 그때
+  // 복구를 시작조차 못 하게 된다 — 실제로 라이브 복구 검증 때 DB 에서 체크섬을 꺼내
+  // 인자로 넘겨야 했다. 스냅샷 파일 옆에 두면 DB 없이도 무결성 확인 후 복구할 수 있다.
+  // DB 쪽 기록도 그대로 유지한다(둘이 어긋나면 그 자체가 변조·손상 신호다).
+  await writeFileImpl(`${filePath}.sha256`, sha256Hex(input.content));
 
   return { storageUri: filePath, dir };
 }
@@ -361,6 +373,14 @@ export async function pruneRoomBackupSnapshots(
       deleted.push(name);
     } catch {
       // 다음 회차(6시간 뒤)에 다시 시도된다.
+    }
+    // 체크섬 사이드카도 같이 지운다. filesToPrune 는 .json 만 세므로(사이드카를
+    // 스냅샷 개수로 잘못 세지 않으려고) 사이드카는 정리 대상에 안 들어온다 —
+    // 여기서 짝을 맞춰 지우지 않으면 .sha256 만 영원히 쌓인다.
+    try {
+      await unlinkImpl(nodePath.join(dir, `${name}.sha256`));
+    } catch {
+      // 사이드카가 없던 과거 스냅샷이면 여기로 온다 — 무시해도 된다.
     }
   }
   return deleted;

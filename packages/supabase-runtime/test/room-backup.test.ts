@@ -7,6 +7,7 @@ import {
   maxSnapshotsPerRoomFromEnv,
   pruneRoomBackupSnapshotRows,
   pruneRoomBackupSnapshots,
+  sha256Hex,
   recordRoomBackupSnapshot,
   recoverySnapshotRowsToPrune,
   serializeRoomBackupSnapshot,
@@ -177,10 +178,13 @@ test("writeRoomBackupSnapshotToDisk writes the serialized content unchanged unde
 
   assert.equal(dirsCreated.length, 1);
   assert.match(dirsCreated[0], /fake-root[\\/]11111111-1111-4111-8111-111111111111$/);
-  assert.equal(writes.length, 1);
+  // 스냅샷 본문 + 체크섬 사이드카, 2개를 쓴다.
+  assert.equal(writes.length, 2);
   assert.equal(writes[0].content, content);
   assert.match(writes[0].path, /2026-08-29T01-02-03-456Z\.json$/);
   assert.equal(storageUri, writes[0].path);
+  assert.equal(writes[1].path, `${writes[0].path}.sha256`);
+  assert.equal(writes[1].content, sha256Hex(content));
 });
 
 test("recordRoomBackupSnapshot posts a huai_recovery_snapshots row matching the table columns", async () => {
@@ -275,7 +279,8 @@ test("recordRoomBackupSnapshot still writes a partial backup when only some tabl
   );
 
   assert.equal(result.ok, true);
-  assert.equal(writes.length, 1);
+  // 본문 + 사이드카.
+  assert.equal(writes.length, 2);
   const written = JSON.parse(writes[0].content) as RoomBackupSnapshot;
   assert.equal(written.missingTables.length, 1);
   assert.equal(written.missingTables[0]?.table, "huai_agent_personas");
@@ -327,8 +332,10 @@ test("pruneRoomBackupSnapshots: 상한을 넘는 오래된 파일을 실제로 �
   });
 
   assert.deepEqual(deleted, ["2026-08-01T00-00-00-000Z.json"]);
-  assert.equal(unlinked.length, 1);
+  // 스냅샷과 짝인 체크섬 사이드카까지 지우므로 unlink 는 2회다.
+  assert.equal(unlinked.length, 2);
   assert.match(unlinked[0]!, /2026-08-01T00-00-00-000Z\.json$/);
+  assert.match(unlinked[1]!, /2026-08-01T00-00-00-000Z\.json\.sha256$/);
 });
 
 test("pruneRoomBackupSnapshots: 디렉터리가 아직 없어도(첫 백업) 예외를 던지지 않는다", async () => {
@@ -350,7 +357,12 @@ test("pruneRoomBackupSnapshots: 개별 파일 삭제 실패가 나머지 삭제�
     }
   });
 
-  assert.equal(attempted.length, 2, "둘 다 시도는 됐어야 한다");
+  // 스냅샷 2개 × (본문 + 사이드카) = 4회 시도.
+  assert.equal(attempted.length, 4, "둘 다 시도는 됐어야 한다(각각 본문 + 사이드카)");
+  assert.deepEqual(
+    attempted.map((path) => path.split("\\").join("/")),
+    ["some/dir/a.json", "some/dir/a.json.sha256", "some/dir/b.json", "some/dir/b.json.sha256"]
+  );
   assert.deepEqual(deleted, ["b.json"], "실패한 a.json 은 결과에서 빠지지만 예외로 전체가 죽지는 않는다");
 });
 
@@ -382,8 +394,10 @@ test("recordRoomBackupSnapshot: 새 스냅샷을 쓴 뒤 같은 방 디렉터리
 
   assert.equal(result.ok, true);
   assert.ok(readdirCalledWith?.includes(ROOM_ID), "방 전용 디렉터리를 조회해야 한다");
-  assert.equal(unlinked.length, 1);
+  // 스냅샷 + 사이드카.
+  assert.equal(unlinked.length, 2);
   assert.match(unlinked[0]!, /2026-08-01T00-00-00-000Z\.json$/);
+  assert.match(unlinked[1]!, /2026-08-01T00-00-00-000Z\.json\.sha256$/);
 });
 
 test("recordRoomBackupSnapshot: 정리(readdir) 실패는 백업 자체의 성공 결과에 영향을 주지 않는다", async () => {
@@ -571,3 +585,41 @@ function fakeRequestReturningEmptyExcept(
     };
   };
 }
+
+// 체크섬 사이드카 — 라이브 복구 검증에서 발견한 결함 대응.
+// 체크섬이 DB(huai_recovery_snapshots.checksum)에만 있으면, 정작 복구가 필요한
+// 상황(DB 손상·접근 불가)에서 restore-room-backup.mjs 가 요구하는 체크섬을 못 꺼낸다.
+test("writeRoomBackupSnapshotToDisk 는 스냅샷 옆에 .sha256 사이드카를 함께 쓴다", async () => {
+  const written = new Map<string, string>();
+  const snapshot = { schemaVersion: 2, roomId: "room-1", capturedAt: "2026-08-31T00:00:00.000Z" } as never;
+  const content = JSON.stringify({ hello: "world" });
+
+  const result = await writeRoomBackupSnapshotToDisk({
+    snapshot,
+    content,
+    rootDir: "fake-root",
+    mkdir: async () => undefined,
+    writeFile: async (path, body) => { written.set(path, body); }
+  });
+
+  const sidecarPath = `${result.storageUri}.sha256`;
+  assert.equal(written.has(result.storageUri), true, "스냅샷 본문이 쓰여야 한다");
+  assert.equal(written.has(sidecarPath), true, "사이드카가 함께 쓰여야 한다");
+  // 사이드카 값은 serializeRoomBackupSnapshot 이 DB 에 넣는 체크섬과 같은 방식이어야 한다.
+  assert.equal(written.get(sidecarPath), sha256Hex(content));
+});
+
+test("정리할 때 스냅샷과 사이드카를 짝지어 지운다", async () => {
+  // filesToPrune 는 .json 만 세므로 사이드카는 정리 대상에 안 들어온다 —
+  // 짝을 맞춰 지우지 않으면 .sha256 만 남아 무한히 쌓인다.
+  const unlinked: string[] = [];
+  const deleted = await pruneRoomBackupSnapshots("dir", 1, {
+    readdir: async () => ["a.json", "a.json.sha256", "b.json", "b.json.sha256"],
+    unlink: async (path) => { unlinked.push(path.split("\\").join("/")); }
+  });
+
+  assert.deepEqual(deleted, ["a.json"]);
+  assert.equal(unlinked.includes("dir/a.json"), true);
+  assert.equal(unlinked.includes("dir/a.json.sha256"), true, "사이드카도 같이 지워야 한다");
+  assert.equal(unlinked.includes("dir/b.json"), false, "상한 안쪽 스냅샷은 남아야 한다");
+});
