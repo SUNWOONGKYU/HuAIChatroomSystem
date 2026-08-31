@@ -7,7 +7,13 @@
 //   node --env-file=.env.operation.local scripts/restore-room-backup.mjs <snapshotPath> [expectedChecksum]
 //     → dry-run. 아무 것도 쓰지 않는다. 테이블별 총 행수/이미 있는 행수/새로 넣을 행수만 보여준다.
 //   node --env-file=.env.operation.local scripts/restore-room-backup.mjs <snapshotPath> [expectedChecksum] --apply
-//     → 실제로 Supabase에 upsert한다.
+//     → 대상(프로젝트 URL/방 id/테이블별 행수)을 먼저 보여주고, 터미널에서 정확히 "yes"를
+//       입력해야 실제로 Supabase에 upsert한다(결함, 4차 평가 지적 — 플래그 하나로 바로 쓰는
+//       것은 비개발자 운영자가 오타·복사실수로 --apply를 잘못 붙이는 걸 막지 못했다).
+//   node ... scripts/restore-room-backup.mjs <snapshotPath> [expectedChecksum] --apply --yes
+//     → 확인 프롬프트를 건너뛰고 즉시 쓴다. CI/자동화 등 비대화형 환경 전용 — 기본은 항상
+//       확인을 요구한다. 비대화형 환경(터미널이 아닌 stdin)에서 --yes 없이 --apply만 주면
+//       입력을 기다리며 멈추지 않고 즉시 취소 처리한다(빈 입력은 "yes"가 아니므로).
 //   불완전한 스냅샷(missingTables가 있음)은 --apply 시 --allow-incomplete를 함께 주지
 //   않으면 거부한다 — 조용히 부분 복원하지 않기 위해서다.
 //
@@ -186,19 +192,40 @@ async function applyOperation(request, op) {
   }
 }
 
+// 결함(4차 평가) 대응 — 실제 터미널(TTY)에서만 사람에게 물어본다. TTY가 아닌데
+// (파이프/서비스로 실행됨) --yes 도 없이 --apply 가 들어오면, 입력을 기다리며 영원히
+// 멈추는 대신 빈 문자열을 돌려준다 — 아래 호출부가 "yes"가 아닌 모든 응답을 취소로
+// 처리하므로 안전하게(=아무 것도 안 쓰고) 종료된다.
+async function defaultConfirm(promptText) {
+  if (!process.stdin.isTTY) return "";
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(promptText);
+    return answer.trim();
+  } finally {
+    rl.close();
+  }
+}
+
 /**
  * 전체 복구 오케스트레이션. loadSnapshot/request/log 등을 주입받아 테스트에서
  * 실제 파일시스템·Supabase 없이 검증한다. 기본값만 실제 운영 배선(fs.readFile,
- * verifyRecoverySnapshotRehearsal)이다.
+ * verifyRecoverySnapshotRehearsal, 실제 stdin 프롬프트)이다.
  */
 export async function runRestoreRoomBackup({
   snapshotPath,
   expectedChecksum,
   apply = false,
   allowIncomplete = false,
+  // --apply 확인 프롬프트를 건너뛰는 플래그. 기본은 항상 확인을 요구한다(사람 승인 게이트).
+  yes = false,
+  // 확인 프롬프트에 함께 보여줄 대상 프로젝트 표시용 문자열(선택). CLI 진입점에서 SUPABASE_URL을 넘긴다.
+  targetUrl,
   request,
   readFile = fsReadFile,
   verify = verifyRecoverySnapshotRehearsal,
+  confirm = defaultConfirm,
   log = console.log,
   logError = console.error
 }) {
@@ -243,6 +270,25 @@ export async function runRestoreRoomBackup({
     return { ok: false, reason: "incomplete-snapshot-requires-allow-incomplete", missingTables: [...missingTableNames] };
   }
 
+  // 결함(4차 평가) 대응 — 플래그 하나(--apply)로 곧장 운영 DB에 쓰지 않는다. 무엇을
+  // 어디에 쓸 것인지(대상 프로젝트/방 id/테이블별 행 수) 먼저 요약해 보여주고, --yes가
+  // 없으면 터미널에서 정확히 "yes"를 입력해야 진행한다. 이 확인은 previewRestore를
+  // 다시 호출해서 만든다 — dry-run과 같은 함수라 여기서 보여주는 숫자가 실제로 쓸 값과
+  // 어긋나지 않는다.
+  const confirmationPreview = await previewRestore(request, snapshot, missingTableNames);
+  log(`--- 아래 내용을 실제 운영 DB(${targetUrl ?? "SUPABASE_URL 미지정"})에 씁니다 ---`);
+  log(`대상 방(room_id): ${snapshot.roomId}`);
+  for (const entry of confirmationPreview) log(formatPreviewLine(entry));
+  log(`----------------------------------------------------------`);
+
+  if (!yes) {
+    const answer = await confirm('계속하려면 정확히 "yes" 를 입력하세요 (그 외 입력은 모두 취소): ');
+    if (answer !== "yes") {
+      log("취소됨 — 아무 것도 쓰지 않았다.");
+      return { ok: false, reason: "confirmation-declined" };
+    }
+  }
+
   const operations = buildWriteOperations(snapshot, missingTableNames);
   const results = [];
   for (const op of operations) {
@@ -267,11 +313,13 @@ export async function runRestoreRoomBackup({
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
-  const args = process.argv.slice(2).filter((arg) => arg !== "--apply" && arg !== "--allow-incomplete");
+  const args = process.argv
+    .slice(2)
+    .filter((arg) => arg !== "--apply" && arg !== "--allow-incomplete" && arg !== "--yes");
   const [snapshotPath, expectedChecksum] = args;
   if (!snapshotPath) {
     console.error(
-      "usage: node restore-room-backup.mjs <snapshotPath> [expectedChecksum] [--apply] [--allow-incomplete]"
+      "usage: node restore-room-backup.mjs <snapshotPath> [expectedChecksum] [--apply [--yes]] [--allow-incomplete]"
     );
     process.exit(1);
   }
@@ -285,6 +333,8 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "
     expectedChecksum,
     apply: process.argv.includes("--apply"),
     allowIncomplete: process.argv.includes("--allow-incomplete"),
+    yes: process.argv.includes("--yes"),
+    targetUrl: url,
     request
   });
 

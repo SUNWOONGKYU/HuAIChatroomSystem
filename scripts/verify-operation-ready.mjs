@@ -2,6 +2,11 @@
 
 const STEPS = [
   "typecheck",
+  // 결함(4차 감사) 대응 — verify:package-boundaries(선언 대조)는 STEPS 에 있었지만
+  // 경계를 실제로 강제하는 eslint no-restricted-imports/no-restricted-syntax 룰은
+  // 별도 CI 스텝으로만 돌고 로컬 `npm run verify:all` 한 번으로는 안 걸렸다(평가관 지적).
+  // typecheck 직후, 다른 게이트보다 먼저 돌려 빠르게 실패시킨다.
+  "lint",
   "verify:gate12",
   "verify:gate13",
   "verify:gate14",
@@ -85,6 +90,11 @@ const STEPS = [
   // 실행되게 한다 — 이 STEPS 배열에 추가하는 걸 잊는 것 자체가 gate47~49 주석이
   // 경고하는 "고아 테스트" 결함과 같은 종류다.
   "verify:restore-room-backup",
+  // 결함 6(4차 감사) 대응 — supabase/schema.sql 이 supabase/migrations/ 누적 상태와
+  // 다시 드리프트되지 않게 막는 가드(scripts/verify-schema-migration-sync.mjs). 이
+  // STEPS 배열에 추가하는 걸 잊는 것 자체가 gate47~49/verify:restore-room-backup
+  // 주석이 경고하는 "고아 테스트" 결함과 같은 종류라, 만들면서 바로 등록한다.
+  "verify:schema-migration-sync",
   "verify:structure",
   "verify:secrets"
 ];
@@ -96,11 +106,21 @@ export function operationReadySteps() {
 export function commandForStep(step) {
   if (step === "verify:structure") return "node scripts/verify-structure.mjs";
   if (step === "verify:secrets") return "node scripts/verify-no-secrets.mjs";
-  // package.json 에 별도 스크립트 줄을 추가하지 않고도 돌게 한다(structure/secrets 와
-  // 같은 패턴) — supabase/functions 는 이 저장소의 tsc 빌드 대상(apps/**, packages/**)
-  // 밖이라 npm run build 로는 컴파일되지 않는다.
-  if (step === "verify:supabase-functions") return "node scripts/verify-supabase-functions.mjs";
+  // 결함(4차 감사) 대응 — package.json 의 "verify:supabase-functions" 는
+  // "node scripts/verify-supabase-functions.mjs && node --test scripts/verify-supabase-functions.test.mjs"
+  // 두 절반인데, 여기는 앞 절반만 하드코딩돼 있었다 — verify:all 이 이 스텝을 돌 때
+  // 뒤 절반(단위 테스트 8건)이 통째로 안 돌고 있었다(3차 감사가 지적한 "고아 테스트"가
+  // 이 우회로 살아남은 것). npm run 대신 하드코딩하는 이유 자체는 여전히 유효하다 —
+  // supabase/functions 는 이 저장소의 tsc 빌드 대상(apps/**, packages/**) 밖이라
+  // npm run build 로 컴파일되지 않을 뿐, package.json 의 명령 내용까지 바꿀 이유는
+  // 아니었다. 그래서 package.json 값을 그대로 복사한다 — 아래
+  // "commandForStep 의 하드코딩 분기는 package.json 과 어긋나지 않는다" 테스트가
+  // (verify-operation-ready.test.mjs) 다시 어긋나면 실패시킨다.
+  if (step === "verify:supabase-functions") {
+    return "node scripts/verify-supabase-functions.mjs && node --test scripts/verify-supabase-functions.test.mjs";
+  }
   if (step === "verify:restore-room-backup") return "node --test scripts/restore-room-backup.test.mjs";
+  if (step === "verify:schema-migration-sync") return "node --test scripts/verify-schema-migration-sync.test.mjs";
   return `npm run ${step}`;
 }
 

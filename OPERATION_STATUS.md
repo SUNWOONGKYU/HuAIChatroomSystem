@@ -1,9 +1,10 @@
 # HuAI Collab Chatroom Operation Status
 
 Last verified: 2026-08-31 KST (see the "2026-08-31 KST — Migration application + room backup
-evidence" section near the bottom for what changed today). Sections in this file are dated but not always in strict
-file order — each describes a point-in-time state; when two sections disagree, the later date
-wins regardless of position in the file.
+evidence" section and, superseding its dry-run-only backup finding, the later "2026-08-31 KST —
+Manual live backup executed" section near the bottom for what changed today). Sections in this
+file are dated but not always in strict file order — each describes a point-in-time state; when
+two sections disagree, the later date wins regardless of position in the file.
 
 This file is the current runtime evidence anchor for Telegram operation status reports.
 Do not treat older Gate setup documents as proof that operation is still incomplete.
@@ -295,3 +296,69 @@ procedure and its documented limitations. It defaults to dry-run and has only be
 against an in-memory fake Supabase store (`scripts/restore-room-backup.test.mjs`, 12/12 passing)
 — it has deliberately not been run with `--apply` against any real Supabase project, production
 or otherwise, in this pass.
+
+## 2026-08-31 KST — Manual live backup executed (5차 감사 대응); supersedes "zero rows" above
+
+The "Room backup automation" section above was dry-run only and explicitly said not to report
+backup automation as confirmed until a `huai_recovery_snapshots` row with `snapshot_type='room'`
+was actually observed. That has now happened — this section records the real (non-dry-run) run
+and what it does and does not prove.
+
+**What was run** (real writes, not dry-run):
+
+```
+npm run backup:rooms
+```
+
+Result: all 5 active rooms backed up successfully (`성공 5건, 실패 0건`). Per-room evidence,
+each independently confirmed after the run:
+
+| room_id (short) | tasks | events | artifacts | approvals | file written | `huai_recovery_snapshots` row |
+|---|---|---|---|---|---|---|
+| 9a477b32 | 58 | 798 | 221 | 194 | `sessions/rooms/recovery/9a477b32.../2026-08-31T06-46-52-981Z.json` | `3c1028df-...` |
+| 8d6c738b | 2 | 22 | 1 | 2 | `.../8d6c738b.../2026-08-31T06-46-53-884Z.json` | `41a4f819-...` |
+| 61aa6200 | 10 | 78 | 46 | 13 | `.../61aa6200.../2026-08-31T06-46-54-758Z.json` | `f9548799-...` |
+| 847d1638 | 1 | 19 | 8 | 1 | `.../847d1638.../2026-08-31T06-46-55-569Z.json` | `32c85c5d-...` |
+| ba26dd59 | 4 | 33 | 0 | 8 | `.../ba26dd59.../2026-08-31T06-46-56-379Z.json` | `7ccc4c13-...` |
+
+Verification steps actually performed, all against the live production Supabase project:
+
+1. **Files exist**: `find sessions/rooms/recovery -name "*.json"` shows all 5 new files above.
+2. **DB rows exist**: a direct REST read of
+   `huai_recovery_snapshots?snapshot_type=eq.room&order=created_at.desc` returned exactly these
+   5 new rows (checksums matching the CLI output). This is the first time `snapshot_type='room'`
+   rows have ever existed in this project.
+3. **Rehearsal passed for all 5**: `node scripts/verify-recovery-snapshot-rehearsal.mjs <path>
+   <checksum>` printed `OK ... missingTables=none` for every room — checksum match and
+   in-snapshot referential integrity both hold on real data, not just fixtures.
+4. **Restore dry-run passed for the largest room** (9a477b32, the 798-event room):
+   `node --env-file=.env.operation.local scripts/restore-room-backup.mjs <path> <checksum>`
+   (no `--apply`) printed a full per-table preview, `new=0` on every table because the snapshot
+   was taken from the same live data it was previewed against — i.e. the restore plan the tool
+   would execute matches reality exactly. `--apply` was never run in this pass.
+
+**What this still does not prove** (the distinction the section above was already careful about,
+and remains true): this was a manual operator CLI run (`backup:rooms`, `created_by:
+"operator-cli"`), not the unattended 6-hour scheduler (`maybeStartRoomBackup` /
+`room-backup-scheduler.ts`) completing a cycle on its own. bot-service was not confirmed running
+continuously for a full `BOT_SERVICE_ROOM_BACKUP_MS` interval during this check. Do not report
+this as "the automated scheduler has been observed running" — report it as "the backup code path
+now has direct live evidence of working end-to-end (query → serialize → write file → write
+ledger row → pass integrity rehearsal → restore plan matches reality), executed manually."
+
+**Also fixed this pass** (결함, 4차 독립 평가 지적 대응, in `packages/supabase-runtime/src/room-backup.ts`
+and `scripts/restore-room-backup.mjs`):
+
+- `huai_recovery_snapshots` rows for `snapshot_type='room'` are now pruned automatically to the
+  same per-room cap as the on-disk files (`HUAI_ROOM_BACKUP_MAX_SNAPSHOTS`, default 240),
+  immediately after each successful snapshot write — no `--apply`-style human gate, on the same
+  reasoning as the file-level prune (a newer snapshot always supersedes it; not a sole copy of
+  irrecoverable data). Confirmed live: the 5 runs above each triggered a row-prune check (no-op
+  this time, since each room had 0-1 prior room-type rows, well under the cap of 240).
+- `scripts/restore-room-backup.mjs --apply` no longer writes on the flag alone. It first prints
+  the target project URL, room id, and per-table row counts, then requires typing exactly `yes`
+  at a terminal prompt; `--yes` skips the prompt for CI/automation. In a non-interactive shell
+  (no TTY) without `--yes`, it now prints the same summary and declines immediately
+  (`취소됨 — 아무 것도 쓰지 않았다.`, exit code 1) instead of hanging — verified live in this
+  pass by running `--apply` without `--yes` against the real project: it showed the summary and
+  declined without writing anything.

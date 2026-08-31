@@ -44,23 +44,46 @@ function listTsFiles(dir) {
   return results;
 }
 
-const IMPORT_SPECIFIER_RE = /\bfrom\s+"([^"]+)"/g;
+// 결함(4차 감사) 대응 — 원래 `\bfrom\s+"([^"]+)"` 는 정적 "import ... from"/"export ...
+// from" 문만 잡았다. 4차 평가관이 두 가지 우회를 실증했다:
+//   1) 동적 import: `await import("../../../ai-adapters/src/index.js")` — "from" 이 없어
+//      정규식이 아예 매치 안 함.
+//   2) bare import: `import "@hu-ai/ai-adapters"` — 아래 옛 로직이
+//      `if (!specifier.startsWith("."))  continue` 로 상대경로가 아닌 specifier 를
+//      명시적으로 건너뛰어서 대상에서 제외했다.
+// "import "@hu-ai/x";" 처럼 "from" 도 괄호도 없는 부작용-전용(side-effect-only) 정적
+// import 형태도 위 두 우회를 고치는 과정에서 직접 실측해 발견해 세 번째 대안으로 추가했다
+// (실측 확인: `import "@hu-ai/ai-adapters";` 는 "from"도 "import(" 도 없어 처음 두
+// 대안만으로는 여전히 못 잡았다). 이제 "from \"...\"", "import(\"...\")",
+// "import \"...\"(from 없음)" 세 형태를 모두 캡처하고, bare "@hu-ai/x" specifier 도
+// 대상에 포함한다.
+const IMPORT_SPECIFIER_RE =
+  /\bfrom\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\bimport\s+["']([^"']+)["']/g;
 
-// packageDir 의 src/ 아래 모든 .ts 파일에서 다른 워크스페이스 패키지로 나가는
-// 상대경로 import(export ... from 포함)를 찾아, 실제로 가리키는 패키지 이름 집합을 낸다.
-// 자기 자신을 가리키는 경로(같은 패키지 안 상대 import)는 제외한다.
+// packageDir 의 src/ 아래 모든 .ts 파일에서 다른 워크스페이스 패키지로 나가는 import
+// (정적 import/export ... from, 동적 import(), 상대경로, bare "@hu-ai/x" 모두 포함)를
+// 찾아, 실제로 가리키는 패키지 이름 집합을 낸다. 자기 자신을 가리키는 경로(같은 패키지
+// 안 상대 import, 또는 자기 자신의 bare 이름)는 제외한다.
 export function actualInternalDependencies(target, allPackages) {
   const names = new Set();
   for (const file of listTsFiles(target.srcDir)) {
     const text = readFileSync(file, "utf8");
     for (const match of text.matchAll(IMPORT_SPECIFIER_RE)) {
-      const specifier = match[1];
-      if (!specifier.startsWith(".")) continue; // bare import(@hu-ai/x, node:x 등)는 대상 아님 — 실측상 전부 상대경로다.
-      const resolvedBase = path.resolve(path.dirname(file), specifier);
-      const owner = allPackages.find((candidate) =>
-        candidate.name !== target.name &&
-        (resolvedBase === candidate.dir || resolvedBase.startsWith(candidate.dir + path.sep))
-      );
+      const specifier = match[1] ?? match[2] ?? match[3];
+      if (specifier.startsWith(".")) {
+        const resolvedBase = path.resolve(path.dirname(file), specifier);
+        const owner = allPackages.find((candidate) =>
+          candidate.name !== target.name &&
+          (resolvedBase === candidate.dir || resolvedBase.startsWith(candidate.dir + path.sep))
+        );
+        if (owner) names.add(owner.name);
+        continue;
+      }
+      // bare import — "@hu-ai/<pkg>" 또는 "@hu-ai/<pkg>/<subpath>" 형태만 내부 워크스페이스
+      // 패키지로 본다(node:x, 외부 npm 패키지 등은 대상 아님).
+      const bareMatch = /^(@hu-ai\/[^/]+)/.exec(specifier);
+      if (!bareMatch) continue;
+      const owner = allPackages.find((candidate) => candidate.name === bareMatch[1] && candidate.name !== target.name);
       if (owner) names.add(owner.name);
     }
   }

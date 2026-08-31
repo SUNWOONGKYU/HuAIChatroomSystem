@@ -30,7 +30,10 @@ GitHub 배포 전 아래 항목을 확인합니다.
 - [ ] Edge Function 은 `--no-verify-jwt` 로 배포돼 있다. 빼면 텔레그램 인증 헤더가 게이트웨이에
       막혀 협업 운영센터가 통째로 "인증 실패"가 된다.
 - [ ] Edge Function 시크릿에 `TELEGRAM_LEADER_BOT_TOKEN` 이 있다.
-- [ ] 협업 운영센터 페이지가 `huai-board` 프로젝트로 배포됐다(빌드가 `.vercel` 링크를 다시 박는다).
+- [ ] 협업 운영센터 페이지가 `huai-board` 프로젝트로 배포됐다(빌드가 `.vercel` 링크를 다시 박는다.
+      등록·빌드·배포 전체 절차는 `GITHUB_QUICKSTART.md` 6단계 참고).
+- [ ] `BOT_SERVICE_MINIAPP_DIRECT_LINK`가 채워져 있다. 비어 있으면 제안 승인·수정·반려·완료
+      승인·보완 요청 키보드 자체가 만들어지지 않는다.
 - [ ] 산출물 프로젝트(`huai-artifacts`)의 배포 보호가 꺼져 있다. 켜져 있으면 방장이 결과물을
       열 때 Vercel 로그인 화면으로 튕긴다.
 - [ ] 야간 작업(`HuAI-NightlyRoomArchive`)이 등록돼 있고, 마지막 실행 로그가 정상이다.
@@ -61,7 +64,7 @@ Telegram 그룹에서 아래 예제로 smoke test를 수행합니다.
 
 정상 기준:
 
-- LeaderBot이 작업 제안을 만든다.
-- 방장의 `실행` 버튼이 처리된다.
+- LeaderBot이 작업 제안과 `협업 운영센터 열기` 버튼을 만든다.
+- 방장이 협업 운영센터(Mini App)에서 누른 `실행`이 처리된다.
 - CodexBot 또는 ClaudeBot이 결과를 보고한다.
 - 내부 JSON, hook log, token, stack trace가 Telegram에 노출되지 않는다.

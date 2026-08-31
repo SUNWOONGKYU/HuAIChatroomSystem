@@ -67,6 +67,9 @@ LOCAL_GATEWAY_MAX_RUNTIME_MS=900000
 LOCAL_GATEWAY_LEASE_MS=960000
 LOCAL_GATEWAY_ALLOWED_ROOTS=
 LOCAL_GATEWAY_ID=
+BOT_SERVICE_MINIAPP_DIRECT_LINK=
+VERCEL_BOARD_PROJECT_ID=
+VERCEL_BOARD_ORG_ID=
 GEMINI_WEB_SESSION_SCRIPT=<YOUR_HOME>\.codex\skills\웹세션-자동화\session.js
 GEMINI_WEB_CHAT_URL=
 GEMINI_WEB_BRIDGE_ENTRYPOINT=<YOUR_PROJECT_ROOT>\scripts\gemini-web-adapter.mjs
@@ -84,6 +87,12 @@ LOCAL_GATEWAY_ALLOWED_ADAPTERS=codex,claude_code,gemini_web,antigravity
 `LOCAL_GATEWAY_ID`는 `supabase-store.ts`의 `requiredEnv`가 부팅 시 강제하는 값입니다
 (없으면 local-gateway가 `missing-env:LOCAL_GATEWAY_ID`로 즉시 죽습니다). 아래 4단계에서
 방을 시딩할 때 나오는 `gateway_id` 값을 그대로 씁니다.
+
+`BOT_SERVICE_MINIAPP_DIRECT_LINK`를 비워 두면 부팅은 되지만, 제안 승인·수정·반려·완료
+승인·보완 요청을 만드는 키보드 자체가 하나도 생성되지 않습니다(`leader-planning-store.ts`
+/ `chat-command-store.ts`) — 사실상 아무 작업도 승인할 수 없습니다. 값을 채우려면 먼저
+아래 6단계(협업 운영센터 Mini App 등록·배포)를 완료해야 합니다. `VERCEL_BOARD_PROJECT_ID`
+/ `VERCEL_BOARD_ORG_ID`도 6단계에서 만드는 Vercel 프로젝트 정보이므로 지금은 비워 둡니다.
 
 운영 기본 실행 제한은 15분입니다. 더 긴 작업은 작은 단위로 나누는 것이 기본 원칙입니다.
 
@@ -136,7 +145,110 @@ node scripts/apply-telegram-webhooks.mjs --apply
 Windows 작업 스케줄러 등으로 주기 실행해 자동 감지·복구하거나, 애초에 polling을 쓰는 쪽이
 운영 부담이 적습니다.
 
-## 6. Telegram 작업 지시 방식
+## 6. 협업 운영센터(Mini App) 등록·배포
+
+`BOT_SERVICE_MINIAPP_DIRECT_LINK`가 비어 있으면 제안 승인·수정·반려·완료 승인·보완 요청
+키보드가 전혀 만들어지지 않습니다(3단계 참고) — 이 단계는 건너뛸 수 없습니다.
+
+### 6-1. Vercel CLI 로그인
+
+```powershell
+npm install -g vercel
+vercel login
+```
+
+브라우저가 열리며 Vercel 계정 인증을 요구합니다. 이 로그인은 아래 6-2뿐 아니라, 운영 중
+`local-gateway`가 실행 산출물(.html)을 올리는 `LOCAL_GATEWAY_ARTIFACT_VERCEL_PROJECT`
+배포(`artifact-publisher.ts`)에도 그대로 쓰이는 같은 머신 단위 CLI 인증입니다.
+
+### 6-2. Mini App 프론트엔드 빌드
+
+```powershell
+node --env-file=.env.operation.local scripts/build-miniapp-web.mjs
+```
+
+`supabase/miniapp-web/`의 `index.html`·`egg-game.html`·`robots.txt`를 `dist/miniapp-web/`로
+복사하면서 `index.html`의 `__MINIAPP_FUNCTIONS_BASE_URL__` 자리표시자를 실제 Supabase
+Functions 주소로 채웁니다(`MINIAPP_FUNCTIONS_BASE_URL`이 없으면 `SUPABASE_URL`에서
+`<project-ref>.functions.supabase.co`로 자동 유도 — `scripts/build-miniapp-web.mjs`).
+`VERCEL_BOARD_PROJECT_ID`/`VERCEL_BOARD_ORG_ID`가 이미 있으면 `dist/miniapp-web/.vercel/`도
+같이 써서 다음 배포를 같은 Vercel 프로젝트에 고정합니다.
+
+### 6-3. Vercel에 배포
+
+`*.supabase.co`는 HTML 응답을 `text/plain`으로 덮어써 Mini App 페이지를 직접 못 올립니다
+(`scripts/build-miniapp-web.mjs` 상단 주석) — 그래서 별도 정적 호스팅(Vercel)에 올립니다.
+
+```powershell
+cd dist/miniapp-web
+vercel deploy --prod --yes --name huai-board
+cd ../..
+```
+
+출력 마지막 줄의 `https://*.vercel.app` 주소를 메모해 둡니다(6-5에서 씁니다). 첫 배포면
+Vercel이 `huai-board`라는 새 프로젝트를 만듭니다 — 그 프로젝트 Settings → General에서
+Project ID(`prj_...`)와 Org/Team ID(`team_...`)를 확인해 `.env.operation.local`의
+`VERCEL_BOARD_PROJECT_ID`/`VERCEL_BOARD_ORG_ID`에 채워 두면, 이후 빌드가 `dist/miniapp-web`를
+지울 때마다(6-2가 매번 그렇게 합니다) 사라지는 `.vercel/` 연결 정보를 다시 박아 같은
+프로젝트로 배포를 고정합니다 — 채우지 않으면 다음 빌드·배포가 폴더 이름으로 새 프로젝트를
+또 만듭니다.
+
+### 6-4. Supabase Edge Functions 배포
+
+Mini App 화면은 `supabase/functions/board`, `miniapp-proposals`, `miniapp-approve`,
+`miniapp-tasks`, `miniapp-quiz` 5개 Edge Function을 호출합니다. 이 저장소는
+`supabase/config.toml`을 포함하지 않으므로 새 체크아웃은 기본적으로 CLI-link 안 된 상태입니다
+(`2026_08_12__OPERATION_INCIDENT_RUNBOOK.md` "Database Migration After a Code Update" 참고) —
+먼저 연결합니다.
+
+```powershell
+supabase link --project-ref <ref>
+```
+
+그 뒤 함수 5개를 배포합니다. `--no-verify-jwt`를 빼면 Mini App의 Telegram 인증 헤더가
+Supabase 기본 JWT 검증에 막혀 협업 운영센터가 통째로 "인증 실패"가 됩니다
+(`GITHUB_RELEASE_CHECKLIST.md`).
+
+```powershell
+supabase functions deploy board --no-verify-jwt
+supabase functions deploy miniapp-proposals --no-verify-jwt
+supabase functions deploy miniapp-approve --no-verify-jwt
+supabase functions deploy miniapp-tasks --no-verify-jwt
+supabase functions deploy miniapp-quiz --no-verify-jwt
+```
+
+함수가 Mini App의 Telegram `initData` 서명을 검증하는 데 쓰는 시크릿을 등록합니다
+(`supabase/functions/_shared/telegram-init-data.ts`):
+
+```powershell
+supabase secrets set TELEGRAM_LEADER_BOT_TOKEN=<LeaderBot 토큰>
+```
+
+`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`는 Supabase가 Edge Function에 자동 주입하므로
+따로 설정할 필요가 없습니다.
+
+### 6-5. BotFather에 Mini App 등록
+
+1. `@BotFather`에게 `/newapp`을 보내고 LeaderBot을 선택합니다.
+2. 제목·설명·아이콘을 입력합니다.
+3. Web App URL에 6-3에서 받은 Vercel 주소를 입력합니다.
+4. Short name(영문/숫자, 예: `board`)을 입력합니다.
+
+등록이 끝나면 Direct Link는 `https://t.me/<LeaderBot username>/<short name>` 형태입니다
+(예: `https://t.me/my_leader_chatroom_bot/board`).
+
+### 6-6. 환경변수에 반영
+
+```text
+BOT_SERVICE_MINIAPP_DIRECT_LINK=https://t.me/my_leader_chatroom_bot/board
+```
+
+값은 반드시 `https://t.me/`로 시작해야 그룹 채팅에서도 Mini App으로 열립니다(`web_app` 타입
+인라인 버튼은 Telegram 공식 문서상 사설 채팅 전용이라 그룹에서 안 눌립니다 — 그래서 이
+저장소는 Direct Link 방식을 씁니다, `packages/telegram-ui/src/index.ts`). 이미 서비스가
+떠 있다면 아래 8단계의 재시작 스크립트로 반영합니다.
+
+## 7. Telegram 작업 지시 방식
 
 LeaderBot은 사람 말을 아래 유형으로 분류합니다. 사람끼리 하는 일반 대화는 멘션하지 않고 그냥 말하면 됩니다. AI에게 맡길 말만 `@leader_chatroom_bot`으로 보냅니다.
 
@@ -162,7 +274,7 @@ Telegram 사진/파일 caption과 답장 대상 메시지는 라우터가 읽습
   > CodexBot에게 넘길 작업 내용을 함께 적어주세요.
   > 예: @leader_chatroom_bot CodexBot에게 현재 오류 원인을 찾아 수정해줘
 
-## 7. 서비스 실행
+## 8. 서비스 실행
 
 운영 환경변수를 로드한 상태에서 다음 두 서비스를 실행합니다.
 
@@ -193,7 +305,7 @@ Invoke-RestMethod http://127.0.0.1:8797/readyz
 polling이면 마지막 폴링이 오래됐다는 뜻, webhook이면 등록이 안 됐다는 뜻)를 확인합니다.
 자세한 원인별 대응은 `2026_08_12__OPERATION_INCIDENT_RUNBOOK.md`의 "Service Health"를 참고합니다.
 
-## 8. Telegram smoke test
+## 9. Telegram smoke test
 
 Telegram 그룹에서 다음처럼 입력합니다.
 
@@ -203,13 +315,13 @@ Telegram 그룹에서 다음처럼 입력합니다.
 
 정상 흐름:
 
-1. LeaderBot이 작업 제안을 표시합니다.
-2. 방장이 `실행` 버튼을 누릅니다.
+1. LeaderBot이 작업 제안과 `협업 운영센터 열기` 버튼을 표시합니다.
+2. 방장이 그 버튼으로 협업 운영센터(Mini App)를 열고 `실행` 버튼을 누릅니다.
 3. LeaderBot이 작업 시작을 짧게 보고합니다.
 4. CodexBot이 실행 결과를 보고합니다.
 5. Telegram에는 내부 JSON, hook log, token, stack trace가 노출되지 않습니다.
 
-## 9. 운영 사용법
+## 10. 운영 사용법
 
 일반 작업:
 
@@ -252,7 +364,7 @@ Telegram에는 작업 접수·진행 알림과 `협업 운영센터 열기` 링�
 
 > 2026-08-23 승인 게이트 리팩터 이전에는 완료 버튼이 방에 `검증`·`보완`·`완료` 3개로 붙었습니다(`buildCompletionKeyboard`). 그 경로는 현재 프로덕션에서 호출되지 않습니다.
 
-## 10. GitHub·운영 배포
+## 11. GitHub·운영 배포
 
 ```powershell
 node --env-file=.env.operation.local scripts/set-telegram-bot-commands.mjs --apply
@@ -280,7 +392,7 @@ node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js
 
 `apps/bot-service/test/synthetic-leader-planning-webhook.test.ts`가 가상 방의 방장 5001·참여자 9001 4턴을 주입해 최근 대화 기반 계획과 제목·목적·범위·완료조건 proposal을 검증합니다. 실제 Telegram/Supabase 전송이나 운영 DB 쓰기는 없습니다.
 
-## 11. 배포 전 최종 확인
+## 12. 배포 전 최종 확인
 
 ```powershell
 npm run verify:operation-ready

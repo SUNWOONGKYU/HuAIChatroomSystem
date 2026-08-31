@@ -21,7 +21,14 @@ const roots = ["apps", "packages", "supabase", "scripts"];
 const CHAT_ID_PLACEHOLDER_EXCLUSION = "1234567890|0{9,}\\d?";
 
 export const patterns = [
-  { name: "telegram-bot-token", regex: /\b\d{5,}:[A-Za-z0-9_-]{20,}\b/ },
+  // 결함(4차 감사) 대응 — 원래 접미부 문자클래스 [A-Za-z0-9_-] 는 개행(\n)을 포함하지
+  // 않아, 토큰을 줄바꿈으로 쪼개면(`123456789:ABC...\ndefGh...`) 매치가 끊겨 통과했다
+  // (4차 평가관 실증 — scripts/verify-no-secrets.test.mjs 재현 테스트 참고). 콜론 뒤
+  // 접미부 문자클래스에만 \n 을 추가해 개행을 사이에 두고 쪼갠 토큰도 하나로 이어붙여
+  // 잡는다. 콜론 앞 숫자열(\d{5,})은 그대로 둔다 — 실측된 우회는 접미부 분할이었고,
+  // 숫자열까지 개행 허용을 넓히면 "버전 12345\n:뒤에 20자 이상 식별자가 오는 무관한
+  // 코드"까지 오탐할 위험이 커진다(콜론 뒤 분할보다 훨씬 흔한 코드 패턴).
+  { name: "telegram-bot-token", regex: /\b\d{5,}:[A-Za-z0-9_\n-]{20,}\b/ },
   { name: "service-role-key", regex: /\bservice_role_[A-Za-z0-9_-]{16,}\b/ },
   { name: "private-key-block", regex: /BEGIN (RSA|OPENSSH|PRIVATE) KEY/ },
   // 특정 PC 에만 있는 경로. 코드·템플릿에 박히면 다른 PC 에서 조용히 없는 파일을 가리킨다.
@@ -130,12 +137,24 @@ export function findSecretHits(file, text, scanPatterns = patterns) {
   return hits;
 }
 
+// 결함(4차 감사) 대응 — 5MB 초과 파일은 이 배열에 기록만 되고 collectFilesToScan()
+// 호출자는 이걸 몰라서 최종 결과가 그냥 "Secret scan passed"(exit 0)로 끝났다(4차
+// 평가관이 6MB 파일에 진짜 값을 숨겨 재현). collectFilesToScan() 시작마다 비우고,
+// main() 이 getOversizedSkips() 로 읽어 최종 판정에 반영한다.
+let oversizedSkips = [];
+
+export function getOversizedSkips() {
+  return [...oversizedSkips];
+}
+
 // isScannable(경로 판단) 을 통과한 파일이 실제로 내용을 읽어도 되는 크기·형태인지
-// 판단한다. 상한 초과는 로그로 알리고(결함 1 지적사항), 바이너리는 조용히 넘긴다(이미
-// 확장자 블랙리스트가 대부분 걸러내므로 여기 도달하는 바이너리는 드문 예외다).
+// 판단한다. 상한 초과는 로그로 알리고 oversizedSkips 에 기록한다(결함 1 지적사항 —
+// 아래 결함 4차 대응으로 이 기록이 최종 종료 상태에도 반영된다). 바이너리는 조용히
+// 넘긴다(이미 확장자 블랙리스트가 대부분 걸러내므로 여기 도달하는 바이너리는 드문 예외다).
 function shouldScanContent(path, stat) {
   if (stat.size > MAX_SCAN_BYTES) {
     console.error(`secret-scan-skip-oversized: ${path} (${stat.size} bytes > ${MAX_SCAN_BYTES})`);
+    oversizedSkips.push(path);
     return false;
   }
   return !looksBinary(path);
@@ -164,13 +183,20 @@ function gitFiles(args) {
   }
 }
 
-// 결함 2 대응 — roots(apps/packages/supabase/scripts) 바깥, 저장소 루트에 떨어지는
-// 파일은 지금까지 스캔 대상이 아니었다. 실제로 outbox_all.json/tax_outbox2.json 에
+// 결함 2(3차 라운드) 대응 — roots(apps/packages/supabase/scripts) 바깥, 저장소 루트에
+// 떨어지는 파일은 한때 스캔 대상이 아니었다. 실제로 outbox_all.json/tax_outbox2.json 에
 // 진짜 telegram chat_id·승인/작업 전문이 들어 있었는데 이 스캔은 초록불이었다(둘 다
-// .gitignore 로도 막았지만, 강제로 add 되는 경우까지 대비해 스캔도 넓힌다). git 이
-// 이미 알고 있는(추적 중이거나 커밋 대기 중인) 파일만 본다 — 매번 늘어나는 무관한
-// 임시 파일까지 스캔하면 신호 대비 잡음만 커진다.
+// .gitignore 로도 막았지만, 강제로 add 되는 경우까지 대비해 스캔도 넓힌다).
+//
+// 결함(4차 감사) 대응 — 위 수정은 "루트 직속" 추적 파일만 봤다(경로에 "/"나 "\\" 가
+// 없는 것만). roots 바깥이면서 저장소 루트도 아닌 서브디렉터리(docs/, .github/,
+// _archive/, assets/ 등)는 git 이 추적하는 파일이어도 한 번도 스캔 대상이 아니었다 —
+// 커밋되고 나면 CI 포함 영구히 안 본다(4차 평가관이 collectFilesToScan() 실제 출력으로
+// 확인). 이제 "루트 직속"이라는 제약을 없애고 git 이 추적하는 저장소 전체 파일을 본다.
+// roots 재귀 스캔(추적 여부 무관, 로컬 미스테이징 파일까지 보는 안전망)과 겹치는
+// 부분은 files.includes 로 중복 제거한다.
 export function collectFilesToScan() {
+  oversizedSkips = [];
   const files = [];
   for (const root of roots) collect(root, files);
 
@@ -179,11 +205,9 @@ export function collectFilesToScan() {
   const rootTemplates = readdirSync(".").filter((name) => /^\.env.*\.example$/.test(name));
   for (const template of rootTemplates) files.push(template);
 
-  const trackedRootFiles = gitFiles(["ls-files", "--"]).filter(
-    (path) => !path.includes("/") && !path.includes("\\")
-  );
+  const trackedFiles = gitFiles(["ls-files", "--"]);
   const stagedFiles = gitFiles(["diff", "--cached", "--name-only", "--diff-filter=ACM"]);
-  for (const path of new Set([...trackedRootFiles, ...stagedFiles])) {
+  for (const path of new Set([...trackedFiles, ...stagedFiles])) {
     if (!existsSync(path) || !isScannable(path) || files.includes(path)) continue;
     if (shouldScanContent(path, statSync(path))) files.push(path);
   }
@@ -191,8 +215,16 @@ export function collectFilesToScan() {
   return files;
 }
 
+// 결함(4차 감사) 대응 — 5MB 초과 파일은 secret-scan-skip-oversized 로그만 남기고 스캔은
+// exit 0("Secret scan passed")로 끝났다 — 로그를 안 보는 사람 입장에선 사실상 무음
+// 스킵이다(4차 평가관이 6MB 지점에 진짜 값을 숨긴 파일로 재현). 정책: 스킵된 파일이
+// 하나라도 있으면 초록불로 끝내지 않는다 — "과소 스캔보다 과다 스캔이 안전한 방향"
+// (looksBinary() 주석과 같은 원칙)이므로, 못 본 내용이 있다는 사실 자체를 실패로 친다.
+// 실제 시크릿이 발견된 경우(exit 1)와 종료 상태를 구분해 CI 로그에서 원인을 바로
+// 알 수 있게 한다 — 실제 시크릿 없이 오버사이즈 스킵만 있으면 exit 2.
 function main() {
   const files = collectFilesToScan();
+  const oversized = getOversizedSkips();
   const hits = [];
   for (const file of files) {
     const text = readFileSync(file, "utf8");
@@ -203,6 +235,15 @@ function main() {
     console.error("Potential secret material found:");
     for (const hit of [...new Set(hits)]) console.error(`- ${hit}`);
     process.exit(1);
+  }
+
+  if (oversized.length > 0) {
+    console.error(
+      `Secret scan skipped ${oversized.length} oversized file(s) (> ${MAX_SCAN_BYTES} bytes) — 내용을 못 봤다. ` +
+      "축소하거나, 정말 필요하면 좁은 예외를 만들고 근거를 남겨라:"
+    );
+    for (const path of oversized) console.error(`- ${path}`);
+    process.exit(2);
   }
 
   console.log("Secret scan passed.");

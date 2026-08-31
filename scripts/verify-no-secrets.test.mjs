@@ -3,13 +3,30 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { patterns, findSecretHits, isScannable, collectFilesToScan } from "./verify-no-secrets.mjs";
+import { spawnSync } from "node:child_process";
+import { patterns, findSecretHits, isScannable, collectFilesToScan, getOversizedSkips } from "./verify-no-secrets.mjs";
 
 function regexFor(name) {
   const found = patterns.find((pattern) => pattern.name === name);
   assert.ok(found, `패턴 ${name} 이 정의돼 있어야 한다`);
   return found.regex;
 }
+
+// 결함(4차 감사) 대응 — telegram-bot-token 접미부 문자클래스가 개행(\n)을 안 받아,
+// 토큰을 줄바꿈으로 쪼개면 매치가 끊겨 통과했다(4차 평가관 실증). 콜론 뒤 접미부에만
+// \n 을 허용해 재붙임한다.
+test("텔레그램 봇 토큰을 탐지한다(줄바꿈 없는 정상 형태)", () => {
+  const regex = regexFor("telegram-bot-token");
+  assert.match("BOT_TOKEN=123456789:AAFooBarBaz0123456789AbCdEfGhIj", regex);
+});
+test("줄바꿈으로 쪼갠 텔레그램 봇 토큰도 탐지한다 — 4차 감사 우회 재현", () => {
+  const regex = regexFor("telegram-bot-token");
+  assert.match("leak: 123456789:ABCdefGHI\nJKLmnoPQRstuVWXyz12", regex);
+});
+test("숫자열:콜론 뒤가 20자 미만이면(줄바꿈으로 쪼개도) 통과한다", () => {
+  const regex = regexFor("telegram-bot-token");
+  assert.doesNotMatch("id: 123456789:short\nmore", regex);
+});
 
 // 결함 2 대응 — 벤더 API 키 접두사 8종. 실제 키 모양(양성)은 잡고, 문서·예제
 // 플레이스홀더(음성)는 통과해야 한다.
@@ -123,6 +140,54 @@ test("collectFilesToScan 은 apps/packages/supabase/scripts 바깥, 저장소 �
   // 실제 추적 파일이라, 이게 결과에 들어와야 그 구멍이 막힌 것이다.
   const files = collectFilesToScan();
   assert.ok(files.includes("README.md"), "루트 추적 파일이 스캔 대상에 들어와야 한다");
+});
+
+// 결함(4차 감사) 대응 — "루트 직속" 추적 파일만 보던 스캔은 roots 바깥·저장소 루트도
+// 아닌 서브디렉터리(docs/, .github/, _archive/, assets/ 등)를 커밋 이후 영구히 못 봤다
+// (4차 평가관이 collectFilesToScan() 실제 출력으로 확인). 그 각 디렉터리에서 실제로
+// 추적 중인 파일 하나씩을 대표로 뽑아 스캔 대상에 들어오는지 회귀 테스트로 고정한다.
+test("collectFilesToScan 은 roots 바깥의 추적 서브디렉터리(docs/.github/_archive/assets)도 포함한다", () => {
+  const files = collectFilesToScan();
+  assert.ok(files.includes("docs/kpi-measurement.json"), "docs/ 아래 추적 파일이 스캔 대상에 들어와야 한다");
+  assert.ok(files.includes(".github/workflows/verify.yml"), ".github/ 아래 추적 파일이 스캔 대상에 들어와야 한다");
+  assert.ok(files.includes("_archive/gates/README.md"), "_archive/ 아래 추적 파일이 스캔 대상에 들어와야 한다");
+  assert.ok(files.includes("assets/telegram-bot-profiles/README.md"), "assets/ 아래 추적 파일이 스캔 대상에 들어와야 한다");
+});
+
+// 결함(4차 감사) 대응 — 5MB 초과 파일은 secret-scan-skip-oversized 로그만 남기고
+// files 목록에서는 조용히 빠졌다. getOversizedSkips() 로 그 사실이 최종 판정에
+// 반영될 수 있게 기록되는지 확인한다(roots 안에 있는 파일이라야 collect() 의 파일시스템
+// 재귀 스캔이 git add 없이도 잡는다 — 실제 저장소 파일을 잠깐 만들었다가 지운다).
+test("5MB 초과 파일은 files 목록에서 빠지고 getOversizedSkips() 에 기록된다", () => {
+  const fixturePath = "scripts/__oversized-secret-scan-fixture.tmp.js";
+  writeFileSync(fixturePath, "x".repeat(5 * 1024 * 1024 + 10));
+  try {
+    // collect() 는 node:path 의 join() 을 쓰는데, 이건 플랫폼 기본 구분자를 쓴다 —
+    // Windows 에서는 백슬래시로 합쳐지므로("scripts\\__oversized-...") 비교 전에 슬래시를
+    // 통일한다(gitFiles() 쪽 경로는 git 이 항상 "/" 로 내놓아 이 문제가 없다 — 바로 위
+    // 테스트가 fixturePath 를 그대로 비교해도 통과하는 이유).
+    const normalize = (path) => path.replace(/\\/g, "/");
+    const files = collectFilesToScan().map(normalize);
+    assert.ok(!files.includes(fixturePath), "5MB 초과 파일은 files 목록에 들어가면 안 된다");
+    assert.ok(getOversizedSkips().map(normalize).includes(fixturePath), "getOversizedSkips() 에 기록돼야 한다");
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
+});
+
+// 결함 2(4차 감사) 대응 — 오버사이즈 스킵이 있으면 시크릿이 안 걸려도 초록불(exit 0)로
+// 끝나면 안 된다. 실제 스크립트를 서브프로세스로 돌려 종료 코드까지 확인한다(exit 1은
+// 실제 시크릿 발견과 겹치므로, 구분되는 exit 2로 명확히 분리했는지 검증).
+test("main() 은 시크릿 없이 오버사이즈 스킵만 있어도 초록불로 안 끝난다(exit 2)", () => {
+  const fixturePath = "scripts/__oversized-secret-scan-fixture.tmp.js";
+  writeFileSync(fixturePath, "x".repeat(5 * 1024 * 1024 + 10));
+  try {
+    const result = spawnSync(process.execPath, ["scripts/verify-no-secrets.mjs"], { encoding: "utf8" });
+    assert.equal(result.status, 2, `stdout=${result.stdout}\nstderr=${result.stderr}`);
+    assert.match(result.stderr, /Secret scan skipped/);
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
 });
 
 // 결함(2차 감사) 대응 — 자격증명 모양이 아닌 PII/운영데이터(진짜 telegram chat_id).

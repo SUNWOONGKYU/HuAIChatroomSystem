@@ -9,7 +9,7 @@
 Gemini 웹은 계획·검토·텍스트 결과에 사용되며 로컬 파일 수정은 하지 않습니다.
 방장 승인·통제는 협업 운영센터에서 처리합니다.
 
-최신 갱신일: 2026-08-28
+최신 갱신일: 2026-08-31
 
 ---
 
@@ -23,9 +23,10 @@ Gemini 웹은 계획·검토·텍스트 결과에 사용되며 로컬 파일 수
 | Node.js | 이 시스템 자체가 Node.js로 만들어져 있습니다 | 무료 |
 | Supabase 계정 | 작업 기록·승인 이력·산출물 주소를 저장하는 DB | 무료 플랜으로 충분 |
 | Telegram 계정 + 봇 4개 | 사람이 지시하고 결과를 받는 화면 | 무료 |
-| Vercel 계정 | AI가 만든 웹 결과물(예: HTML 페이지)을 인터넷에 올려 폰에서 열어보는 용도 | 무료 플랜으로 충분 |
+| Vercel 계정 | AI가 만든 웹 결과물(예: HTML 페이지)과 협업 운영센터(Mini App) 화면을 인터넷에 올려 폰에서 열어보는 용도 | 무료 플랜으로 충분 |
 
-예상 소요 시간: 처음이면 30~50분 정도 걸립니다. 대부분 "계정 만들고 값 복사해서 붙여넣기"입니다.
+예상 소요 시간: 처음이면 50~90분 정도 걸립니다. 대부분 "계정 만들고 값 복사해서 붙여넣기"이지만,
+9단계(협업 운영센터 만들기)는 CLI 설치·빌드·배포가 들어가 시간이 조금 더 걸립니다.
 
 ---
 
@@ -128,7 +129,7 @@ npm run build
      https://api.telegram.org/bot<봇토큰>/getUpdates
      ```
    - 화면에 나오는 텍스트에서 `"chat":{"id":` 뒤에 나오는 숫자가 그룹 chat_id입니다
-     (예: `-1004334034373`). 메모해둡니다.
+     (예: `-1000000000000`). 메모해둡니다.
 4. **내 텔레그램 user_id 알아내기**:
    - 텔레그램에서 `@userinfobot`을 검색해서 아무 메시지나 보냅니다.
    - 숫자로 된 내 Id를 알려줍니다. 메모해둡니다. (이 값이 나중에 "방장 권한"의 기준이 됩니다 —
@@ -201,7 +202,7 @@ git에 올라가지는 않습니다.)
 3. 화면에 SQL 문장들이 출력됩니다. 이 전체를 복사해서 Supabase SQL Editor(4단계에서 썼던
    그 화면)에 새 쿼리로 붙여넣고 Run을 누릅니다.
 
-4. **이 PC의 `LOCAL_GATEWAY_ID` 채우기(중요 — 안 하면 10단계에서 게이트웨이가 바로 죽습니다)**:
+4. **이 PC의 `LOCAL_GATEWAY_ID` 채우기(중요 — 안 하면 11단계에서 게이트웨이가 바로 죽습니다)**:
    방금 출력된 SQL 마지막 줄(`commit;`) 바로 위 줄을 보면 이렇게 생겼습니다(실제 값은
    다릅니다):
 
@@ -227,13 +228,124 @@ node scripts/onboard-telegram-room.mjs --room-id <room-id> --chat-id <chat-id> -
 gateway_id가 다르므로(게이트웨이 프로세스 하나는 방 하나만 맡습니다), 두 번째 방부터는
 `LOCAL_GATEWAY_EXTRA_INSTANCES`(`.env.operation.example` 참고)로 게이트웨이를 추가합니다.
 
-## 9단계 — Claude Code / Codex 로그인
+## 9단계 — 협업 운영센터(Mini App) 만들기
+
+왜: 작업 제안을 승인·수정·반려하고 완료를 승인하는 화면은 텔레그램 메시지 안에 직접 있지
+않습니다. 텔레그램에는 **"협업 운영센터 열기"라는 버튼 하나만** 오고, 그 버튼을 누르면
+열리는 별도 화면(Mini App)에 실행·수정·반려·완료 승인 버튼이 있습니다. 이 화면을 직접
+인터넷에 올리고, 그 주소를 봇에게 알려줘야 합니다.
+
+⚠️ **이 단계를 건너뛰면 안 됩니다.** 건너뛰면 "협업 운영센터 열기" 버튼 자체가 아예
+안 뜨고, "협업 운영센터 링크가 설정되지 않아 승인 UI가 비활성화되었습니다"라는 안내만
+계속 나옵니다 — 어떤 작업도 승인할 수 없는 상태가 됩니다.
+
+### 9-1. Vercel CLI 설치 + 로그인
+
+1. PowerShell에서 (한 번만):
+
+   ```powershell
+   npm install -g vercel
+   vercel login
+   ```
+
+2. 브라우저 창이 열리면 4단계에서 만든(또는 새로 만들) Vercel 계정으로 로그인합니다.
+   화면에 "Success!" 비슷한 메시지가 뜨면 성공입니다.
+
+### 9-2. 협업 운영센터 화면 빌드 + 배포
+
+1. PowerShell에서 프로젝트 폴더로 이동한 상태에서:
+
+   ```powershell
+   cd C:\Dev\HuAIChatroomSystem
+   node --env-file=.env.operation.local scripts/build-miniapp-web.mjs
+   ```
+
+   `dist\miniapp-web` 폴더에 협업 운영센터 화면 파일이 만들어집니다.
+
+2. 그 폴더를 Vercel에 올립니다:
+
+   ```powershell
+   cd dist\miniapp-web
+   vercel deploy --prod --yes --name huai-board
+   cd ..\..
+   ```
+
+   실행이 끝나면 화면 마지막 줄에 `https://huai-board-xxxxx.vercel.app` 같은 형태의 주소가
+   나옵니다 — **이 주소를 메모해둡니다** (9-4에서 씁니다).
+
+### 9-3. Supabase 쪽 서버(Edge Functions) 배포
+
+왜: 방금 올린 화면은 데이터를 직접 갖고 있지 않습니다. Supabase에 있는 서버 함수
+5개(`board`, `miniapp-proposals`, `miniapp-approve`, `miniapp-tasks`, `miniapp-quiz`)를
+통해 작업 목록·승인 상태를 가져오고 보냅니다. 이것도 올려야 화면이 실제로 동작합니다.
+
+1. Supabase CLI를 설치합니다(한 번만) — 공식 설치 방법:
+   https://supabase.com/docs/guides/cli
+2. 이 프로젝트를 Supabase 프로젝트와 연결합니다(`<ref>`는 4단계에서 메모한 Project URL
+   `https://<ref>.supabase.co`의 `<ref>` 부분):
+
+   ```powershell
+   supabase link --project-ref <ref>
+   ```
+
+3. 함수 5개를 배포합니다(`--no-verify-jwt`를 반드시 붙입니다 — 빼면 협업 운영센터
+   전체가 "인증 실패"가 됩니다):
+
+   ```powershell
+   supabase functions deploy board --no-verify-jwt
+   supabase functions deploy miniapp-proposals --no-verify-jwt
+   supabase functions deploy miniapp-approve --no-verify-jwt
+   supabase functions deploy miniapp-tasks --no-verify-jwt
+   supabase functions deploy miniapp-quiz --no-verify-jwt
+   ```
+
+4. 서버 함수가 "이 요청이 진짜 텔레그램에서 왔는지" 확인하는 데 쓸 LeaderBot 토큰을
+   등록합니다(5단계에서 메모한 LeaderBot 토큰):
+
+   ```powershell
+   supabase secrets set TELEGRAM_LEADER_BOT_TOKEN=<LeaderBot 토큰>
+   ```
+
+### 9-4. BotFather에 Mini App 등록
+
+1. 텔레그램에서 `BotFather`와의 대화를 다시 엽니다.
+2. `/newapp`을 보냅니다.
+3. 어느 봇에 연결할지 물어보면 **LeaderBot**을 선택합니다.
+4. 제목, 설명, 아이콘(정사각형 이미지 하나)을 순서대로 물어봅니다 — 아무 값이나 넣어도
+   됩니다.
+5. "Web App URL"을 물어보면 9-2에서 메모한 Vercel 주소를 붙여넣습니다.
+6. "Short name"(짧은 이름, 영문/숫자만, 예: `board`)을 물어보면 입력합니다.
+7. 등록이 끝나면 이 Mini App의 주소(Direct Link)는 다음 형태가 됩니다:
+
+   ```text
+   https://t.me/<LeaderBot username>/<short name>
+   ```
+
+   예: `https://t.me/my_leader_chatroom_bot/board`
+
+### 9-5. 이 주소를 설정 파일에 넣기
+
+1. `.env.operation.local`을 메모장으로 다시 엽니다.
+2. `BOT_SERVICE_MINIAPP_DIRECT_LINK`로 시작하는 줄을 찾습니다(맨 앞에 `#`이 붙어 주석
+   처리돼 있으면 `#`을 지워서 활성화합니다).
+3. `=` 뒤에 9-4에서 만든 Direct Link를 붙여넣습니다:
+
+   ```text
+   BOT_SERVICE_MINIAPP_DIRECT_LINK=https://t.me/my_leader_chatroom_bot/board
+   ```
+
+4. 저장하고 메모장을 닫습니다.
+
+⚠️ 아직 서비스를 실행하지 않은 상태라면 다음 11단계에서 이 값을 자동으로 읽습니다. 이미
+서비스가 떠 있는 상태에서 이 값을 바꿨다면 서비스를 재시작해야 반영됩니다.
+
+## 10단계 — Claude Code / Codex 로그인
 
 이 PC에 Claude Code와 Codex CLI가 설치·로그인돼 있어야 실제 작업 실행이 됩니다(이 부분은
 각 도구의 공식 설치 절차를 따르며, 이 문서 범위를 벗어납니다 — 이미 설치돼 있다면 이
 단계는 건너뛰어도 됩니다).
 
-## 10단계 — 서비스 실행하기
+## 11단계 — 서비스 실행하기
 
 PowerShell 창을 **2개** 엽니다(각각 하나씩 계속 띄워둘 겁니다).
 
@@ -252,7 +364,7 @@ node dist/apps/local-gateway/src/cli.js
 두 창 모두 에러 없이 뭔가 계속 떠 있는 상태(멈추지 않고 대기 중)면 정상입니다. 이 두 창은
 **PC가 켜져 있는 동안 계속 열려 있어야** 시스템이 작동합니다(닫으면 봇이 멈춥니다).
 
-## 11단계 — 설치 확인
+## 12단계 — 설치 확인
 
 텔레그램 그룹방에 가서 아래처럼 쳐봅니다(봇 이름은 실제로 만든 username으로):
 
@@ -280,11 +392,16 @@ LeaderBot이 이걸 "작업 제안"으로 정리해서 목적·범위·완료 �
 
 ## 승인하기
 
-작업 제안 아래에 버튼이 뜹니다:
+작업 제안 아래에 텔레그램 버튼이 직접 뜨지 않습니다. 대신 **"협업 운영센터 열기"** 링크
+버튼 하나가 옵니다 — 이걸 누르면 별도 화면(Mini App, 9단계에서 만든 그 화면)이 열리고,
+거기에 실행·수정·반려 버튼이 있습니다:
 
 - **실행**: 승인하고 진짜 작업을 시작합니다.
 - **수정**: 제안 내용을 다시 다듬어달라고 요청합니다.
 - **반려**: 이 제안은 진행하지 않습니다.
+
+⚠️ 9단계(협업 운영센터 만들기)를 건너뛰었다면 "협업 운영센터 열기" 버튼 자체가 뜨지 않고,
+"승인 UI가 비활성화되었습니다"라는 안내만 옵니다 — 그럴 땐 9단계부터 다시 합니다.
 
 **예외 — 자동허용**: 파일을 전혀 안 바꾸는 조회·분석·설명성 지시는 이 버튼 자체가 뜨지
 않고 바로 실행이 시작됩니다(방에 "🟢 자동 시작" 안내만 뜹니다). 판단이 애매하면 시스템은
@@ -340,7 +457,8 @@ node --test dist/apps/bot-service/test/synthetic-leader-planning-webhook.test.js
 
 | 증상 | 원인·해결 |
 |---|---|
-| 봇이 아무 반응이 없다 | 10단계의 두 PowerShell 창이 열려 있는지 확인. 닫혀 있으면 다시 실행 |
+| 봇이 아무 반응이 없다 | 11단계의 두 PowerShell 창이 열려 있는지 확인. 닫혀 있으면 다시 실행 |
+| 텔레그램에 "협업 운영센터 열기" 버튼이 안 보이거나, "승인 UI가 비활성화되었습니다"라는 안내만 나온다 | 9단계를 건너뛰었거나 `.env.operation.local`의 `BOT_SERVICE_MINIAPP_DIRECT_LINK`가 비어 있습니다. 9단계를 마친 뒤 서비스를 재시작합니다 |
 | `npm install`에서 멈추거나 에러 | 인터넷 연결 확인 후 `npm install` 다시 실행. 그래도 안 되면 Node.js 버전을 v24 LTS로 재설치 |
 | 창을 열자마자 바로 꺼진다(에러) | `.env.operation.local`에 빈 값이 없는지 확인(특히 4개 봇 토큰, Supabase URL/키) |
 | local-gateway 창이 `missing-env:LOCAL_GATEWAY_ID`를 출력하고 바로 꺼진다 | 8단계에서 `LOCAL_GATEWAY_ID`를 `.env.operation.local`에 채우지 않았습니다. 8단계 4번을 따라 실제 gateway_id 값을 채웁니다 |

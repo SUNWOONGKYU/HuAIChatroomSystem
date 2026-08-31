@@ -237,6 +237,7 @@ test("runRestoreRoomBackup: --allow-incomplete 를 주면 있는 테이블만 �
     snapshotPath: "fake.json",
     apply: true,
     allowIncomplete: true,
+    yes: true,
     request: store.request,
     readFile: fakeReadFile(snapshot),
     verify: alwaysOkVerify(),
@@ -249,6 +250,102 @@ test("runRestoreRoomBackup: --allow-incomplete 를 주면 있는 테이블만 �
   assert.ok(!store.calls.some((call) => call.path.startsWith("/huai_events")));
   const skippedEvents = result.results.find((r) => r.table === "huai_events");
   assert.equal(skippedEvents.skipped, true);
+});
+
+// ---- --apply 확인 가드(결함, 4차 평가 지적) -----------------------------------
+// 플래그 하나(--apply)로 곧장 운영 DB에 쓰던 것을, 명시적 확인(터미널에서 "yes" 입력,
+// 또는 --yes로 건너뛰기) 없이는 쓰지 못하도록 막는다. 비대화형 환경에서 실수로
+// --apply만 주고 --yes를 빠뜨렸을 때 영원히 멈추지 않고 안전하게(=취소로) 끝나는지도 함께 검증한다.
+
+test("runRestoreRoomBackup: --yes 없이 apply 하면 확인을 요청하고, \"yes\" 가 아니면 아무 것도 쓰지 않는다", async () => {
+  const store = createFakeStore();
+  const snapshot = buildSnapshot({ aiActors: [{ actor_id: "a1", room_id: "room-1" }] });
+  let confirmPrompted = false;
+
+  const result = await runRestoreRoomBackup({
+    snapshotPath: "fake.json",
+    apply: true,
+    request: store.request,
+    readFile: fakeReadFile(snapshot),
+    verify: alwaysOkVerify(),
+    confirm: async () => {
+      confirmPrompted = true;
+      return "no thanks";
+    },
+    log: () => {},
+    logError: () => {}
+  });
+
+  assert.equal(confirmPrompted, true, "확인을 요청했어야 한다");
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "confirmation-declined");
+  assert.ok(!store.calls.some((call) => call.method === "POST"), "확인 없이는 아무 것도 쓰면 안 된다");
+});
+
+test("runRestoreRoomBackup: 확인 프롬프트에 정확히 \"yes\" 를 입력하면 진행한다", async () => {
+  const store = createFakeStore();
+  const snapshot = buildSnapshot({ aiActors: [{ actor_id: "a1", room_id: "room-1" }] });
+
+  const result = await runRestoreRoomBackup({
+    snapshotPath: "fake.json",
+    apply: true,
+    request: store.request,
+    readFile: fakeReadFile(snapshot),
+    verify: alwaysOkVerify(),
+    confirm: async () => "yes",
+    log: () => {},
+    logError: () => {}
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(store.tables.get("huai_ai_actors"), [{ actor_id: "a1", room_id: "room-1" }]);
+});
+
+test("runRestoreRoomBackup: --yes 를 주면 확인 프롬프트를 아예 호출하지 않는다(CI/자동화용)", async () => {
+  const store = createFakeStore();
+  const snapshot = buildSnapshot({ aiActors: [{ actor_id: "a1", room_id: "room-1" }] });
+  let confirmCalled = false;
+
+  const result = await runRestoreRoomBackup({
+    snapshotPath: "fake.json",
+    apply: true,
+    yes: true,
+    request: store.request,
+    readFile: fakeReadFile(snapshot),
+    verify: alwaysOkVerify(),
+    confirm: async () => {
+      confirmCalled = true;
+      return "yes";
+    },
+    log: () => {},
+    logError: () => {}
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(confirmCalled, false);
+});
+
+test("runRestoreRoomBackup: dry-run(apply 없음)은 확인 프롬프트를 호출하지 않는다", async () => {
+  const store = createFakeStore();
+  const snapshot = buildSnapshot({ aiActors: [{ actor_id: "a1", room_id: "room-1" }] });
+  let confirmCalled = false;
+
+  const result = await runRestoreRoomBackup({
+    snapshotPath: "fake.json",
+    request: store.request,
+    readFile: fakeReadFile(snapshot),
+    verify: alwaysOkVerify(),
+    confirm: async () => {
+      confirmCalled = true;
+      return "yes";
+    },
+    log: () => {},
+    logError: () => {}
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.dryRun, true);
+  assert.equal(confirmCalled, false);
 });
 
 // ---- 멱등성 -----------------------------------------------------------------
@@ -264,6 +361,7 @@ test("runRestoreRoomBackup: 같은 스냅샷을 두 번 apply 해도 행이 중�
     const result = await runRestoreRoomBackup({
       snapshotPath: "fake.json",
       apply: true,
+      yes: true,
       request: store.request,
       readFile: fakeReadFile(snapshot),
       verify: alwaysOkVerify(),
@@ -308,6 +406,7 @@ test("runRestoreRoomBackup: huai_approvals/huai_events 는 ignore-duplicates 로
   await runRestoreRoomBackup({
     snapshotPath: "fake.json",
     apply: true,
+    yes: true,
     request: store.request,
     readFile: fakeReadFile(snapshot),
     verify: alwaysOkVerify(),
@@ -315,8 +414,10 @@ test("runRestoreRoomBackup: huai_approvals/huai_events 는 ignore-duplicates 로
     logError: () => {}
   });
 
-  const approvalsCall = store.calls.find((call) => call.path.startsWith("/huai_approvals"));
-  const eventsCall = store.calls.find((call) => call.path.startsWith("/huai_events"));
+  // POST로 좁힌다 — apply 전 확인 미리보기(previewRestore)가 같은 테이블에 GET도
+  // 먼저 날리므로, 필터 없이 find하면 그 GET(prefer 없음)이 먼저 잡힌다.
+  const approvalsCall = store.calls.find((call) => call.method === "POST" && call.path.startsWith("/huai_approvals"));
+  const eventsCall = store.calls.find((call) => call.method === "POST" && call.path.startsWith("/huai_events"));
   assert.match(approvalsCall.prefer, /ignore-duplicates/);
   assert.match(eventsCall.prefer, /ignore-duplicates/);
 });
@@ -340,6 +441,7 @@ test("runRestoreRoomBackup: 한 테이블이 실패해도 나머지는 계속 �
   const result = await runRestoreRoomBackup({
     snapshotPath: "fake.json",
     apply: true,
+    yes: true,
     request: failingRequest,
     readFile: fakeReadFile(snapshot),
     verify: alwaysOkVerify(),

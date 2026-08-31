@@ -73,13 +73,20 @@ create table if not exists huai_telegram_bots (
   -- 어느 방에서 어느 actor 가 실제로 처리하는지는 huai_ai_actors 를
   -- room_id + role 로 조회해서 얻는다.
   role text not null,
-  actor_id uuid references huai_ai_actors(actor_id) on delete set null,
+  actor_id uuid,
   token_secret_ref text not null,
   webhook_secret_ref text not null,
   status text not null default 'active',
   created_at timestamptz not null default now(),
   constraint huai_telegram_bots_status_check check (status in ('active', 'inactive', 'disabled')),
-  constraint huai_telegram_bots_role_check check (role in ('leader', 'claude_leader', 'codex_leader', 'auditor'))
+  constraint huai_telegram_bots_role_check check (role in ('leader', 'claude_leader', 'codex_leader', 'auditor')),
+  -- 결함(4차 감사) 대응 — 20260815120000_huai_telegram_bots_shared_across_rooms.sql 이
+  -- 이 FK 를 명시적으로 이름 붙여 재정의했다(actor 삭제돼도 봇 계정은 남아야 하므로
+  -- on delete set null). 인라인 column reference 로 두면 Postgres 가 같은 이름을
+  -- 자동 생성해 실제 DB 구조는 동일했지만, 이 파일 텍스트에는 그 이름이 안 보여
+  -- 마이그레이션-스키마 정합 검사(스크립트)가 드리프트로 오판했다 — 이름을 명시해
+  -- 검사와 실제 구조를 모두 명확히 맞춘다.
+  constraint huai_telegram_bots_actor_id_fkey foreign key (actor_id) references huai_ai_actors(actor_id) on delete set null
 );
 
 create table if not exists huai_telegram_updates (
@@ -201,6 +208,12 @@ create unique index if not exists huai_tasks_approved_proposal_unique
 on huai_tasks (proposal_id)
 where proposal_id is not null;
 
+-- 결함(4차 감사) 대응 — 20260816160000_huai_tasks_topic_scope.sql 이 만든 인덱스가
+-- 이 파일엔 반영되지 않아 드리프트였다. 현황판이 "이 방 + 이 주제"로 조회할 때 방
+-- 인덱스만으로는 못 받쳐준다.
+create index if not exists huai_tasks_room_thread_idx
+  on huai_tasks (room_id, telegram_message_thread_id);
+
 create table if not exists huai_task_dependencies (
   dependency_id uuid primary key default gen_random_uuid(),
   room_id uuid not null references huai_rooms(room_id) on delete cascade,
@@ -254,6 +267,13 @@ create table if not exists huai_verifications (
   created_at timestamptz not null default now(),
   constraint huai_verifications_verdict_check check (verdict in ('pass', 'conditional_pass', 'fail'))
 );
+
+-- 결함(4차 감사) 대응 — 20260829090000_huai_missing_fk_indexes.sql 이 만든 FK 인덱스가
+-- 이 파일엔 반영되지 않아 드리프트였다(아래 huai_events_*/huai_message_bindings_* 도
+-- 같은 마이그레이션에서 나온 것들이다). Postgres 는 FK 에 자동으로 인덱스를 만들지
+-- 않는다 — task_id 로 검증 이력을 거르는 조회가 인덱스 없이 순차 스캔됐다.
+create index if not exists huai_verifications_task_idx
+  on huai_verifications (task_id);
 
 create table if not exists huai_reports (
   report_id uuid primary key default gen_random_uuid(),
@@ -400,6 +420,13 @@ create table if not exists huai_events (
   created_at timestamptz not null default now()
 );
 
+-- 결함(4차 감사) 대응 — 20260829090000_huai_missing_fk_indexes.sql 반영 누락.
+create index if not exists huai_events_room_idx
+  on huai_events (room_id, created_at desc);
+
+create index if not exists huai_events_task_idx
+  on huai_events (task_id);
+
 create table if not exists huai_outbox (
   huai_outbox_id uuid primary key default gen_random_uuid(),
   event_id uuid references huai_events(event_id) on delete cascade,
@@ -432,6 +459,12 @@ comment on column huai_outbox.room_id is
 
 create index if not exists huai_outbox_target_room_created_idx
   on huai_outbox (target_kind, room_id, created_at);
+
+-- 결함(3차 감사) 대응, 스키마 반영은 결함(4차 감사) 대응 — scripts/prune-archived-rows.mjs
+-- 의 방 단위 정리 쿼리(room_id=eq.X&created_at=lt.Y)는 target_kind 조건이 없어 위
+-- huai_outbox_target_room_created_idx(target_kind 가 선행 컬럼)를 못 쓴다.
+create index if not exists huai_outbox_room_created_idx
+  on huai_outbox (room_id, created_at);
 
 -- Mini App 결정 재생 폴러용 커서.
 -- Mini App 은 결정을 huai_approvals 에 기록만 하고, 봇 서비스가 그걸 폴링해
@@ -601,7 +634,17 @@ create table if not exists huai_gateway_instances (
   allowed_adapters jsonb not null default '["claude_code","codex","gemini_web"]'::jsonb,
   last_heartbeat_at timestamptz,
   created_at timestamptz not null default now(),
-  constraint huai_gateway_instances_status_check check (status in ('online', 'offline', 'draining', 'disabled'))
+  constraint huai_gateway_instances_status_check check (status in ('online', 'offline', 'draining', 'disabled')),
+  -- 결함(4차 감사) 대응 — 20260829100000/20260830000000(NOT VALID 로 추가 후 운영 DB
+  -- 전 행 확인하고 validate constraint 로 승격, 위반 0건)에서 반영됐지만 이 파일엔
+  -- 빠져 있었다. 허용 값은 packages/contracts/src/index.ts 의 AiAdapterType 과 맞춘다.
+  -- jsonb 컨테인먼트(<@)는 "모든 원소가 허용 목록의 부분집합인가"를 검사하며 빈
+  -- 배열도 통과시킨다 — 그래서 아래 두 번째 제약(빈 배열 금지)이 따로 필요하다.
+  constraint huai_gateway_instances_allowed_adapters_check check (jsonb_typeof(allowed_adapters) = 'array' and allowed_adapters <@ '["claude_code", "codex", "gemini_web", "antigravity"]'::jsonb),
+  -- 결함(4차 감사) 대응 — 20260831000000/20260831010000(마찬가지로 NOT VALID 후 운영 DB
+  -- 전 행 확인·validate, 위반 0건) 반영 누락. allowed_adapters = '[]' 인 게이트웨이는
+  -- 스키마상 유효해 보이지만 아무 실행도 못 맡는 무의미한 상태다.
+  constraint huai_gateway_instances_allowed_adapters_nonempty_check check (jsonb_array_length(allowed_adapters) > 0)
 );
 
 create table if not exists huai_execution_attempts (
@@ -642,6 +685,13 @@ create table if not exists huai_message_bindings (
   constraint huai_message_bindings_kind_check check (binding_kind in ('event', 'task', 'report', 'verification', 'proposal', 'approval')),
   constraint huai_message_bindings_direction_check check (direction in ('inbound', 'outbound'))
 );
+
+-- 결함(4차 감사) 대응 — 20260829090000_huai_missing_fk_indexes.sql 반영 누락.
+create index if not exists huai_message_bindings_task_idx
+  on huai_message_bindings (task_id);
+
+create index if not exists huai_message_bindings_room_idx
+  on huai_message_bindings (room_id);
 
 create table if not exists huai_audit_logs (
   audit_id uuid primary key default gen_random_uuid(),

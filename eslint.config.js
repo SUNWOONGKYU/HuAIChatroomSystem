@@ -24,8 +24,30 @@ const typedPlugins = { "@typescript-eslint": tsPlugin };
 // 무관하게, 그리고 "packages/" 프리픽스 유무와도 무관하게 항상 잡힌다.
 function forbiddenPackagePatterns(packageNames, contextLabel) {
   return packageNames.map((name) => ({
-    regex: `(^|/)${name}/(src/|$)`,
+    regex: `(^|/)${name}(/|$)`,
     message: `${contextLabel} 는 ${name} 을 import 할 수 없다(계층 위반).`
+  }));
+}
+
+// 결함(4차 감사) 대응 — 위 정규식은 원래 `${name}/(src/|$)` 였다: 이름 뒤에 반드시
+// "/" 가 붙어야 매치되는데, bare import("@hu-ai/ai-adapters", 서브패스 없음)는 이름
+// 뒤에 "/" 가 안 붙으므로 조용히 통과했다(4차 평가관이 직접 프로브로 실증). `${name}(/|$)`
+// 로 바꿔 "이름 뒤에 / 가 오거나, 이름으로 문자열이 끝나거나" 둘 다 잡는다 — 상대경로
+// "../../ai-adapters/src/..." 와 bare "@hu-ai/ai-adapters"(서브패스 있든 없든) 모두 커버한다.
+//
+// no-restricted-imports(ESLint 코어, node_modules/eslint/lib/rules/no-restricted-imports.js
+// 확인함)는 ImportDeclaration 리스너만 등록하고 ImportExpression(동적 import(...))은 아예
+// 안 본다 — 4차 평가관이 `await import("../../../ai-adapters/src/index.js")` 로 실증했다.
+// no-restricted-syntax + esquery 셀렉터(ImportExpression > Literal)로 별도 방어선을 편다.
+//
+// esquery 의 정규식 리터럴 문법은 "/" 를 델리미터로 쓰기 때문에, 델리미터 바깥에서
+// "/" 를 리터럴로 쓰면(이스케이프해도) 파싱 에러가 난다(node_modules/esquery 로 직접
+// 테스트해 확인함) — 그래서 `(^|/)` 대신 문자클래스로 감싼 `(^|[/])` 형태를 쓴다
+// (문자클래스 안의 "/" 는 델리미터로 해석되지 않는다).
+function forbiddenDynamicImportSelectors(packageNames, contextLabel) {
+  return packageNames.map((name) => ({
+    selector: `ImportExpression > Literal[value=/(^|[/])${name}([/]|$)/]`,
+    message: `${contextLabel} 는 ${name} 을 동적 import 할 수 없다(계층 위반).`
   }));
 }
 
@@ -116,7 +138,11 @@ export default [
           ["contracts", "workflow", "telegram-ui", "orchestrator", "ai-adapters", "supabase-runtime"],
           "이 패키지는 최하위 레이어라 다른 패키지를"
         )
-      }]
+      }],
+      "no-restricted-syntax": ["error", ...forbiddenDynamicImportSelectors(
+        ["contracts", "workflow", "telegram-ui", "orchestrator", "ai-adapters", "supabase-runtime"],
+        "이 패키지는 최하위 레이어라 다른 패키지를"
+      )]
     }
   },
   {
@@ -127,7 +153,11 @@ export default [
           ["workflow", "telegram-ui", "orchestrator", "supabase-runtime"],
           "ai-adapters 는 contracts 외 패키지를"
         )
-      }]
+      }],
+      "no-restricted-syntax": ["error", ...forbiddenDynamicImportSelectors(
+        ["workflow", "telegram-ui", "orchestrator", "supabase-runtime"],
+        "ai-adapters 는 contracts 외 패키지를"
+      )]
     }
   },
   {
@@ -138,7 +168,11 @@ export default [
           ["workflow", "ai-adapters", "supabase-runtime"],
           "orchestrator 는 contracts/telegram-ui 외 패키지를"
         )
-      }]
+      }],
+      "no-restricted-syntax": ["error", ...forbiddenDynamicImportSelectors(
+        ["workflow", "ai-adapters", "supabase-runtime"],
+        "orchestrator 는 contracts/telegram-ui 외 패키지를"
+      )]
     }
   },
   {
@@ -149,7 +183,11 @@ export default [
           ["ai-adapters"],
           "supabase-runtime 은 contracts/telegram-ui/orchestrator/workflow 외 패키지를"
         )
-      }]
+      }],
+      "no-restricted-syntax": ["error", ...forbiddenDynamicImportSelectors(
+        ["ai-adapters"],
+        "supabase-runtime 은 contracts/telegram-ui/orchestrator/workflow 외 패키지를"
+      )]
     }
   },
   {
@@ -160,7 +198,11 @@ export default [
           ["ai-adapters"],
           "bot-service 는 local-gateway 전용인 ai-adapters 를"
         )
-      }]
+      }],
+      "no-restricted-syntax": ["error", ...forbiddenDynamicImportSelectors(
+        ["ai-adapters"],
+        "bot-service 는 local-gateway 전용인 ai-adapters 를"
+      )]
     }
   },
   {
@@ -171,7 +213,11 @@ export default [
           ["telegram-ui", "orchestrator", "workflow"],
           "local-gateway 는 contracts/ai-adapters/supabase-runtime 외 패키지를"
         )
-      }]
+      }],
+      "no-restricted-syntax": ["error", ...forbiddenDynamicImportSelectors(
+        ["telegram-ui", "orchestrator", "workflow"],
+        "local-gateway 는 contracts/ai-adapters/supabase-runtime 외 패키지를"
+      )]
     }
   }
 ];

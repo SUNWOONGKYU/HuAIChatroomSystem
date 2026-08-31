@@ -366,6 +366,57 @@ export async function pruneRoomBackupSnapshots(
   return deleted;
 }
 
+// 결함(4차 감사) 대응 — 파일은 pruneRoomBackupSnapshots 로 방당 240개로 정리되지만,
+// huai_recovery_snapshots 의 장부 행은 아무도 지우지 않아 무한히 쌓인다(방 5개 x 6시간
+// 주기면 연 7,300행). 파일 정리와 다른 정책을 쓰면 "파일은 지워졌는데 장부 행만 남는다"
+// 또는 그 반대가 되어 서로 어긋나므로, 같은 상한(maxSnapshotsPerRoomFromEnv)으로 같은
+// 시점(새 스냅샷을 성공적으로 기록한 직후)에 정리한다. prune-archived-rows.mjs 의
+// outbox/events 와 달리 이 행은 "텔레그램에서 되가져올 수 없는 유일한 사본"이 아니라
+// 더 새 스냅샷이 항상 뒤이어 남는 로그 회전 성격이므로(파일 정리 쪽 주석과 동일 근거),
+// --apply 같은 사람 승인 게이트 없이 자동으로 지운다.
+export type RecoverySnapshotRow = { snapshot_id: string; created_at: string };
+
+// 순수 함수 — filesToPrune 와 같은 원칙. 파일명(ISO 문자열)은 사전순=시간순이라 그대로
+// 정렬했지만, DB 행은 created_at 컬럼 문자열을 직접 비교해 오래된 것부터 고른다.
+export function recoverySnapshotRowsToPrune(rows: readonly RecoverySnapshotRow[], maxCount: number): string[] {
+  const sorted = [...rows].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  if (sorted.length <= maxCount) return [];
+  return sorted.slice(0, sorted.length - maxCount).map((row) => row.snapshot_id);
+}
+
+/**
+ * 방 하나의 huai_recovery_snapshots(snapshot_type='room') 행 중 최근 maxCount 개를
+ * 넘는 오래된 행을 지운다. pruneRoomBackupSnapshots(파일)과 같은 best-effort 원칙 —
+ * 조회·삭제가 실패해도 예외를 던지지 않고 빈 배열을 돌려준다. 정리 실패가 백업 자체의
+ * 성공 여부에 영향을 주면 안 된다.
+ */
+export async function pruneRoomBackupSnapshotRows(
+  deps: Pick<RoomBackupDeps, "request">,
+  roomId: string,
+  maxCount: number
+): Promise<string[]> {
+  try {
+    const listResponse = await deps.request(
+      "GET",
+      `/huai_recovery_snapshots?room_id=eq.${encodeURIComponent(roomId)}&snapshot_type=eq.room&select=snapshot_id,created_at`
+    );
+    const rows = await listResponse.json<RecoverySnapshotRow[]>();
+    const idsToDelete = recoverySnapshotRowsToPrune(rows ?? [], maxCount);
+    if (idsToDelete.length === 0) return [];
+
+    const deleteResponse = await deps.request(
+      "DELETE",
+      `/huai_recovery_snapshots?snapshot_id=in.(${idsToDelete.map((id) => encodeURIComponent(id)).join(",")})`
+    );
+    await deleteResponse.expectOk();
+    return idsToDelete;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(JSON.stringify({ type: "room_backup_snapshot_row_prune_failed", roomId, reason }));
+    return [];
+  }
+}
+
 export type RecordRoomBackupSnapshotResult =
   | { ok: true; snapshotStorageUri: string; checksum: string }
   | { ok: false; reason: string };
@@ -425,6 +476,11 @@ export async function recordRoomBackupSnapshot(
     if (response.status !== 409) {
       await response.expectOk();
     }
+
+    // 결함(4차 감사) 대응 — 새 장부 행을 쓴 직후(위와 같은 이유로 쓰기가 성공한 뒤에만),
+    // 파일 정리와 같은 상한으로 오래된 장부 행을 지운다. 실패해도 { ok: true } 에
+    // 영향을 주지 않는다(pruneRoomBackupSnapshotRows 자체가 이미 예외를 삼킨다).
+    await pruneRoomBackupSnapshotRows(deps, roomId, deps.maxSnapshotsPerRoom ?? maxSnapshotsPerRoomFromEnv());
 
     return { ok: true, snapshotStorageUri: storageUri, checksum };
   } catch (error) {

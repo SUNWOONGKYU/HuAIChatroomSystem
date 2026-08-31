@@ -123,6 +123,91 @@ test("checkAllPackageBoundaries 는 선언 누락과 죽은 선언을 각각 구
   }
 });
 
+// 결함(4차 감사) 대응 — 4차 평가관이 프로브로 실증한 세 가지 우회를 회귀 테스트로 고정한다.
+function makeBypassFixtureWorkspace() {
+  const root = mkdtempSync(path.join(tmpdir(), "pkg-boundary-bypass-fixture-"));
+  const pkg = (group, name) => {
+    const dir = path.join(root, group, name);
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    return dir;
+  };
+
+  const contractsDir = pkg("packages", "contracts");
+  writeFileSync(path.join(contractsDir, "package.json"), JSON.stringify({ name: "@hu-ai/contracts" }));
+  writeFileSync(path.join(contractsDir, "src", "index.ts"), "export const x = 1;\n");
+
+  const aiAdaptersDir = pkg("packages", "ai-adapters");
+  writeFileSync(path.join(aiAdaptersDir, "package.json"), JSON.stringify({ name: "@hu-ai/ai-adapters" }));
+  writeFileSync(path.join(aiAdaptersDir, "src", "index.ts"), "export const z = 1;\n");
+
+  // package.json 에는 아무 dependencies 도 선언하지 않는다 — 세 우회 모두 "선언 누락"
+  // 으로 잡혀야 한다.
+  const orchestratorDir = pkg("packages", "orchestrator");
+  writeFileSync(
+    path.join(orchestratorDir, "package.json"),
+    JSON.stringify({ name: "@hu-ai/orchestrator", dependencies: {} })
+  );
+  return { root, orchestratorDir };
+}
+
+test("동적 import(\"...\") 로 나가는 상대경로 import 도 탐지한다 — 4차 감사 우회 재현", () => {
+  const { root, orchestratorDir } = makeBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(orchestratorDir, "src", "index.ts"),
+      'export async function probe() {\n  const mod = await import("../../ai-adapters/src/index.js");\n  return mod;\n}\n'
+    );
+    const packages = discoverWorkspacePackages(root);
+    const orchestrator = packages.find((p) => p.name === "@hu-ai/orchestrator");
+    const actual = actualInternalDependencies(orchestrator, packages);
+    assert.ok(actual.has("@hu-ai/ai-adapters"), "동적 import 로 나가는 의존이 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("bare import(\"@hu-ai/x\") 도 탐지한다 — 4차 감사 우회 재현", () => {
+  const { root, orchestratorDir } = makeBypassFixtureWorkspace();
+  try {
+    writeFileSync(path.join(orchestratorDir, "src", "index.ts"), 'import { z } from "@hu-ai/ai-adapters";\nexport { z };\n');
+    const packages = discoverWorkspacePackages(root);
+    const orchestrator = packages.find((p) => p.name === "@hu-ai/orchestrator");
+    const actual = actualInternalDependencies(orchestrator, packages);
+    assert.ok(actual.has("@hu-ai/ai-adapters"), "bare import 로 나가는 의존이 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("from/괄호 없는 부작용-전용 bare import(\"@hu-ai/x\";)도 탐지한다", () => {
+  const { root, orchestratorDir } = makeBypassFixtureWorkspace();
+  try {
+    writeFileSync(path.join(orchestratorDir, "src", "index.ts"), 'import "@hu-ai/ai-adapters";\n');
+    const packages = discoverWorkspacePackages(root);
+    const orchestrator = packages.find((p) => p.name === "@hu-ai/orchestrator");
+    const actual = actualInternalDependencies(orchestrator, packages);
+    assert.ok(actual.has("@hu-ai/ai-adapters"), "부작용-전용 bare import 도 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("외부 npm 패키지·node: bare import 는 내부 의존으로 오탐하지 않는다", () => {
+  const { root, orchestratorDir } = makeBypassFixtureWorkspace();
+  try {
+    writeFileSync(
+      path.join(orchestratorDir, "src", "index.ts"),
+      'import { readFileSync } from "node:fs";\nimport something from "some-external-package";\nexport { readFileSync, something };\n'
+    );
+    const packages = discoverWorkspacePackages(root);
+    const orchestrator = packages.find((p) => p.name === "@hu-ai/orchestrator");
+    const actual = actualInternalDependencies(orchestrator, packages);
+    assert.deepEqual([...actual], []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ── 실제 repo 가드 ──────────────────────────────────────────────────────────
 // 2026-08-31 시점: package.json 8개 모두 dependencies 필드가 없어 이 테스트는
 // 실패한다(정상 — 선언 자체가 없으니까). 소대장이 보고서의 8개 before/after JSON 을

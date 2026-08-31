@@ -1,5 +1,6 @@
 {
   "measuredAt": "2026-08-16T08:11:24.120Z",
+  "_note": "결함(4차 감사) 대응 — 시크릿 스캐너 스캔 범위를 저장소 전체 추적 파일로 넓히면서 이 문서에 실제 운영 telegram chatId 4건이 그대로 커밋돼 있던 것을 발견했다(roomId·title은 이 파일 존재 목적인 '측정이 실제로 일어났다는 증거'로 남기고, PII인 chatId만 이 저장소가 이미 쓰는 placeholder 관례(0{9,}\\d?)로 마스킹했다). 재측정 시 scripts/measure-live-kpi.mjs 로 생성되는 최신 파일도 이 필드가 실제 chatId 를 담지 않도록 주의할 것.",
   "rooms": {
     "activeInDb": 21,
     "reachableOnTelegram": 4,
@@ -7,22 +8,22 @@
       {
         "roomId": "9a477b32-15ed-46e3-b575-9488ff09efb6",
         "title": "HuAI Collab Chatroom",
-        "chatId": "-1004334034373"
+        "chatId": "-1000000000001"
       },
       {
         "roomId": "8d6c738b-5786-42d8-ac7e-e003ba0d40db",
         "title": "개인회생 신청",
-        "chatId": "-1004428017336"
+        "chatId": "-1000000000002"
       },
       {
         "roomId": "61aa6200-1619-49cc-ae88-fc9f993b3aed",
         "title": "상증세법 주식가치평가",
-        "chatId": "-1004315119076"
+        "chatId": "-1000000000003"
       },
       {
         "roomId": "847d1638-d23b-43a8-a445-54ecb29560f7",
         "title": "DCF기업가치평가",
-        "chatId": "-1004321704366"
+        "chatId": "-1000000000004"
       }
     ]
   },

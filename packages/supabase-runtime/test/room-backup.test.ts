@@ -5,8 +5,10 @@ import {
   buildRoomBackupSnapshot,
   filesToPrune,
   maxSnapshotsPerRoomFromEnv,
+  pruneRoomBackupSnapshotRows,
   pruneRoomBackupSnapshots,
   recordRoomBackupSnapshot,
+  recoverySnapshotRowsToPrune,
   serializeRoomBackupSnapshot,
   writeRoomBackupSnapshotToDisk,
   type RoomBackupRestRequest,
@@ -403,6 +405,131 @@ test("recordRoomBackupSnapshot: 정리(readdir) 실패는 백업 자체의 성�
   );
 
   assert.equal(result.ok, true, "정리 실패가 백업 성공 여부를 뒤집으면 안 된다");
+});
+
+// 결함(4차 감사) 대응 — 파일은 방당 240개로 정리되는데 huai_recovery_snapshots 의
+// 장부 행은 아무도 지우지 않아 무한히 쌓였다. recoverySnapshotRowsToPrune 는 그
+// 판단을 담당하는 순수 함수다(filesToPrune 과 같은 원칙, 대상이 created_at 문자열).
+
+test("recoverySnapshotRowsToPrune: 상한 이하면 아무 것도 지우지 않는다", () => {
+  const rows = [
+    { snapshot_id: "s1", created_at: "2026-08-01T00:00:00.000Z" },
+    { snapshot_id: "s2", created_at: "2026-08-02T00:00:00.000Z" }
+  ];
+  assert.deepEqual(recoverySnapshotRowsToPrune(rows, 5), []);
+});
+
+test("recoverySnapshotRowsToPrune: 상한을 넘으면 created_at 이 오래된 것부터 지운다", () => {
+  const rows = [
+    { snapshot_id: "s3", created_at: "2026-08-03T00:00:00.000Z" },
+    { snapshot_id: "s1", created_at: "2026-08-01T00:00:00.000Z" },
+    { snapshot_id: "s2", created_at: "2026-08-02T00:00:00.000Z" }
+  ];
+  assert.deepEqual(recoverySnapshotRowsToPrune(rows, 1), ["s1", "s2"]);
+});
+
+test("pruneRoomBackupSnapshotRows: 상한 초과분을 GET 후 DELETE 로 실제로 지운다", async () => {
+  const calls: Array<{ method: string; path: string }> = [];
+  const request: RoomBackupRestRequest = async (method, path) => {
+    calls.push({ method, path });
+    if (method === "GET") {
+      return {
+        status: 200,
+        async expectOk() {},
+        async json<T>() {
+          return [
+            { snapshot_id: "s2", created_at: "2026-08-02T00:00:00.000Z" },
+            { snapshot_id: "s1", created_at: "2026-08-01T00:00:00.000Z" }
+          ] as unknown as T;
+        }
+      };
+    }
+    return { status: 200, async expectOk() {}, async json<T>() { return undefined as T; } };
+  };
+
+  const deleted = await pruneRoomBackupSnapshotRows({ request }, ROOM_ID, 1);
+
+  assert.deepEqual(deleted, ["s1"]);
+  const getCall = calls.find((call) => call.method === "GET");
+  assert.equal(
+    getCall?.path,
+    `/huai_recovery_snapshots?room_id=eq.${ROOM_ID}&snapshot_type=eq.room&select=snapshot_id,created_at`
+  );
+  const deleteCall = calls.find((call) => call.method === "DELETE");
+  assert.equal(deleteCall?.path, "/huai_recovery_snapshots?snapshot_id=in.(s1)");
+});
+
+test("pruneRoomBackupSnapshotRows: 지울 게 없으면 DELETE 를 호출하지 않는다", async () => {
+  const calls: Array<{ method: string; path: string }> = [];
+  const request: RoomBackupRestRequest = async (method, path) => {
+    calls.push({ method, path });
+    return { status: 200, async expectOk() {}, async json<T>() { return [] as unknown as T; } };
+  };
+
+  const deleted = await pruneRoomBackupSnapshotRows({ request }, ROOM_ID, 240);
+
+  assert.deepEqual(deleted, []);
+  assert.equal(calls.some((call) => call.method === "DELETE"), false);
+});
+
+test("pruneRoomBackupSnapshotRows: 조회/삭제 실패는 예외를 던지지 않고 빈 배열을 돌려준다", async () => {
+  const request: RoomBackupRestRequest = async () => {
+    throw new Error("network-down");
+  };
+
+  const deleted = await pruneRoomBackupSnapshotRows({ request }, ROOM_ID, 1);
+  assert.deepEqual(deleted, []);
+});
+
+test("recordRoomBackupSnapshot: 새 장부 행을 쓴 뒤 같은 방의 상한 초과 장부 행을 정리한다", async () => {
+  const calls: Array<{ method: string; path: string }> = [];
+  const request: RoomBackupRestRequest = async (method, path) => {
+    calls.push({ method, path });
+    if (method === "GET" && path.startsWith("/huai_recovery_snapshots")) {
+      return {
+        status: 200,
+        async expectOk() {},
+        async json<T>() {
+          return [
+            { snapshot_id: "old1", created_at: "2026-08-01T00:00:00.000Z" },
+            { snapshot_id: "old2", created_at: "2026-08-02T00:00:00.000Z" }
+          ] as unknown as T;
+        }
+      };
+    }
+    if (method === "GET") return { status: 200, async expectOk() {}, async json<T>() { return [] as unknown as T; } };
+    return { status: 201, async expectOk() {}, async json<T>() { return undefined as T; } };
+  };
+
+  const result = await recordRoomBackupSnapshot(
+    { request, mkdir: async () => undefined, writeFile: async () => undefined, maxSnapshotsPerRoom: 1 },
+    ROOM_ID
+  );
+
+  assert.equal(result.ok, true);
+  const deleteCall = calls.find((call) => call.method === "DELETE" && call.path.startsWith("/huai_recovery_snapshots"));
+  assert.ok(deleteCall, "장부 행 정리 DELETE 가 호출됐어야 한다");
+  // 가짜 request 는 GET 을 호출 시점과 무관하게 항상 old1(2026-08-01)/old2(2026-08-02)
+  // 두 행을 돌려준다(새로 POST 한 행은 이 인메모리 목록에 반영되지 않는다). 상한이 1이므로
+  // 그 중 더 오래된 old1 만 초과분으로 지워진다.
+  assert.match(deleteCall!.path, /snapshot_id=in\.\(old1\)/);
+});
+
+test("recordRoomBackupSnapshot: 장부 행 정리 실패는 백업 자체의 성공 결과에 영향을 주지 않는다", async () => {
+  const request: RoomBackupRestRequest = async (method, path) => {
+    if (method === "GET" && path.startsWith("/huai_recovery_snapshots")) {
+      throw new Error("list-failed");
+    }
+    if (method === "GET") return { status: 200, async expectOk() {}, async json<T>() { return [] as unknown as T; } };
+    return { status: 201, async expectOk() {}, async json<T>() { return undefined as T; } };
+  };
+
+  const result = await recordRoomBackupSnapshot(
+    { request, mkdir: async () => undefined, writeFile: async () => undefined },
+    ROOM_ID
+  );
+
+  assert.equal(result.ok, true, "장부 정리 실패가 백업 성공 여부를 뒤집으면 안 된다");
 });
 
 function fullEmptySnapshot(): RoomBackupSnapshot {
