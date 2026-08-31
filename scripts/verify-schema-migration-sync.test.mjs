@@ -178,6 +178,41 @@ test("stripSqlComments — 이스케이프된 홑따옴표('') 를 포함한 문
   assert.doesNotMatch(stripped, /comment after/);
 });
 
+// ── 결함(6차 감사) 대응 — 중첩 블록 주석(nested /* */) ──────────────────────────
+// OP_RE 가 아니라 stripSqlComments 자체의 결함이다: `sql.indexOf("*/", i + 2)` 로
+// "맨 처음 나오는 */" 에서 무조건 닫아버려서, 표준 SQL 이 허용하는 중첩 블록 주석
+// (`/* 바깥 /* 안쪽 */ 여전히 바깥 */`)을 만나면 안쪽 `*/` 에서 바깥 주석이 조기
+// 종료된다. 그 결과 "여전히 주석 안이어야 할" 텍스트(예: 롤백 예시의 drop table)가
+// 실제 SQL 로 파싱돼, 방금 만든 인덱스가 present 맵에서 지워진다.
+
+test("stripSqlComments — 중첩 블록 주석(/* /* */ */) 은 안쪽 */ 에서 끊기지 않고 바깥쪽 */ 까지 전부 지워진다", () => {
+  const sql = "before /* outer /* inner */ still outer */ after";
+  const stripped = stripSqlComments(sql);
+  assert.doesNotMatch(stripped, /still outer/, "중첩 주석 중간 부분이 주석 밖으로 새면 안 된다");
+  assert.match(stripped, /after/, "바깥 주석이 끝난 뒤의 real 텍스트는 남아야 한다");
+});
+
+test("중첩 블록 주석 안의 DROP(롤백 예시)이 조기 종료로 진짜 DROP 처럼 오인되지 않는다 — 6차 감사 재현", () => {
+  const { root, migrationsDir } = makeFixture({
+    "20260101000000_init.sql":
+      "create table if not exists gizmos (\n  gizmo_id uuid primary key\n);\n" +
+      "create index if not exists gizmos_id_idx on gizmos (gizmo_id);\n" +
+      "/* rollback example (nested comment) /* inner note */ still inside outer comment:\n" +
+      "drop table if exists gizmos;\n" +
+      "*/\n"
+  });
+  try {
+    const expected = expectedNamedObjects(migrationsDir);
+    assert.equal(
+      expected.get("gizmos_id_idx"),
+      "gizmos",
+      "중첩 주석 안의 drop table 이 조기 종료로 인해 진짜로 실행된 것처럼 오인돼 인덱스가 지워지면 안 된다"
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ── 실제 repo 가드 ──────────────────────────────────────────────────────────
 // supabase/migrations/ 가 누적해 온 인덱스·제약이 supabase/schema.sql 에 전부 반영돼
 // 있는지 실제 저장소로 확인한다. 4차 감사가 이 상태(FK 인덱스 5개, 결함 관련

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -212,6 +212,51 @@ test("외부 npm 패키지·node: bare import 는 내부 의존으로 오탐하�
   }
 });
 
+// ── 결함(6차 감사) 대응 — 경로 판정(packageOf/addDirectOwner) 이 순수 문자열 비교라
+// 놓치던 두 가지: symlink 실경로, Windows 대소문자 변형 경로. 6차 평가관 A 가 실증한
+// 그대로 재현한다.
+test("node_modules/@hu-ai/<pkg> 심볼릭 링크 실경로를 거친 상대경로 import 도 소유 판정에 잡힌다", () => {
+  const { root, orchestratorDir } = makeBypassFixtureWorkspace();
+  try {
+    const scopeDir = path.join(root, "node_modules", "@hu-ai");
+    mkdirSync(scopeDir, { recursive: true });
+    // npm workspaces 가 실제로 만드는 것과 같은 형태 — node_modules/@hu-ai/<pkg> 가
+    // packages/<pkg> 를 가리키는 심볼릭 링크(디렉터리).
+    symlinkSync(path.join(root, "packages", "ai-adapters"), path.join(scopeDir, "ai-adapters"), process.platform === "win32" ? "junction" : "dir");
+    writeFileSync(
+      path.join(orchestratorDir, "src", "index.ts"),
+      'import { z } from "../../../node_modules/@hu-ai/ai-adapters/src/index.js";\nexport { z };\n'
+    );
+    const packages = discoverWorkspacePackages(root);
+    const orchestrator = packages.find((p) => p.name === "@hu-ai/orchestrator");
+    const actual = actualInternalDependencies(orchestrator, packages);
+    assert.ok(actual.has("@hu-ai/ai-adapters"), "node_modules 심볼릭 링크 실경로를 거친 의존도 탐지돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  "Windows 대소문자 변형 경로(대문자로 바꿔 쓴 패키지 디렉터리명)도 소유 판정에 잡힌다",
+  { skip: process.platform !== "win32" ? "Windows 전용 — 파일시스템이 대소문자를 구분하지 않는 플랫폼에서만 의미가 있다" : false },
+  () => {
+    const { root, orchestratorDir } = makeBypassFixtureWorkspace();
+    try {
+      // 실제 디렉터리는 "ai-adapters"(소문자)인데 import 는 대소문자를 바꿔 쓴다.
+      writeFileSync(
+        path.join(orchestratorDir, "src", "index.ts"),
+        'import { z } from "../../Ai-Adapters/src/index.js";\nexport { z };\n'
+      );
+      const packages = discoverWorkspacePackages(root);
+      const orchestrator = packages.find((p) => p.name === "@hu-ai/orchestrator");
+      const actual = actualInternalDependencies(orchestrator, packages);
+      assert.ok(actual.has("@hu-ai/ai-adapters"), "Windows 에서 대소문자만 다른 경로도 같은 파일을 가리키므로 탐지돼야 한다");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+);
+
 // ── 실제 repo 가드 ──────────────────────────────────────────────────────────
 // 2026-08-31 시점: package.json 8개 모두 dependencies 필드가 없어 이 테스트는
 // 실패한다(정상 — 선언 자체가 없으니까). 소대장이 보고서의 8개 before/after JSON 을
@@ -384,6 +429,45 @@ test("import 후 bare export(`import {x} from 'spec'; export {x};`)로 재-expor
     const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
     const actual = actualInternalDependencies(consumer, packages);
     assert.ok(actual.has("@hu-ai/leaf"), "import 후 bare export 로 만든 재-export 체인도 원출처(leaf)까지 추적돼야 한다");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 결함(6차 감사) 대응 — export * as ns from(네임스페이스 재-export) 체인 추적은
+// resolveEntry()/buildFileExportTable() 에 이미 구현돼 있었지만(NAMESPACE_ORIGINAL_NAME
+// 분기), 이 코드베이스 실제 파일 중에는 이 패턴을 쓰는 곳이 없어서 자동 테스트가
+// 없었다(당시 담당자가 "미검증"이라고 정직하게 보고했다). 6차 평가관 C 가 수동으로
+// 재현해 잡히는 걸 확인했으니, 이제 픽스처로 고정한다.
+test("export * as ns from(네임스페이스 재-export) 체인도 이름 단위로 원출처까지 추적한다", () => {
+  const { root, leafDir, consumerDir } = makeAstBypassFixtureWorkspace();
+  const middleDir = path.join(root, "packages", "middle");
+  mkdirSync(path.join(middleDir, "src"), { recursive: true });
+  try {
+    writeFileSync(path.join(middleDir, "package.json"), JSON.stringify({ name: "@hu-ai/middle", dependencies: { "@hu-ai/leaf": "*" } }));
+    // middle 은 leaf 전체를 "ns" 라는 이름 하나의 네임스페이스로 재-export 한다.
+    writeFileSync(path.join(middleDir, "src", "index.ts"), 'export * as ns from "../../leaf/src/index.js";\n');
+    // consumer 는 middle 만 import 한다(leaf 를 직접 import 하지 않는다) — 그런데
+    // middle 이 재-export 하는 네임스페이스(ns)를 실제로 가져다 쓴다. package.json 에는
+    // middle 만 선언돼 있고 leaf 는 없다 — "missing" 으로 잡혀야 한다.
+    writeFileSync(path.join(consumerDir, "package.json"), JSON.stringify({ name: "@hu-ai/consumer", dependencies: { "@hu-ai/middle": "*" } }));
+    writeFileSync(
+      path.join(consumerDir, "src", "index.ts"),
+      'import { ns } from "../../middle/src/index.js";\nexport const value = ns.thing();\n'
+    );
+
+    const packages = discoverWorkspacePackages(root);
+    const consumer = packages.find((p) => p.name === "@hu-ai/consumer");
+    const actual = actualInternalDependencies(consumer, packages);
+    assert.ok(actual.has("@hu-ai/leaf"), "export * as ns from 을 거친 네임스페이스 재-export 도 원출처(leaf)까지 추적돼야 한다");
+
+    const results = checkAllPackageBoundaries(root);
+    const consumerResult = results.find((r) => r.name === "@hu-ai/consumer");
+    assert.equal(consumerResult.ok, false);
+    assert.deepEqual(consumerResult.missing, ["@hu-ai/leaf"]);
+
+    const middleResult = results.find((r) => r.name === "@hu-ai/middle");
+    assert.equal(middleResult.ok, true, "middle 자신은 leaf 를 정직하게 선언했으니 위반이 아니다");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

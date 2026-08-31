@@ -137,8 +137,9 @@ npm run build
 
 ## 7단계 — 설정 파일 만들기
 
-왜: 위에서 모은 값들(Supabase URL, 봇 토큰 4개, chat_id, 내 user_id)을 시스템이 읽는
-파일 하나에 모아둡니다.
+왜: 위에서 모은 값들(Supabase URL, 봇 토큰 4개)을 시스템이 읽는 파일 하나에 모아둡니다.
+6단계에서 메모해둔 그룹 chat_id와 내 user_id는 이 파일이 아니라 8단계 등록 명령의
+인자로 씁니다 — 그리로 미뤄둡니다.
 
 1. 파일 탐색기에서 받은 폴더(`C:\Dev\HuAIChatroomSystem`) 안의 `.env.operation.example`
    파일을 찾습니다. (파일 탐색기에서 점(`.`)으로 시작하는 파일이 안 보이면, 보기 메뉴에서
@@ -151,8 +152,6 @@ npm run build
    |---|---|
    | `SUPABASE_URL` | 4단계의 Project URL |
    | `SUPABASE_SERVICE_ROLE_KEY` | 4단계의 service_role 키 |
-   | `BOT_SERVICE_TELEGRAM_CHAT_ID` | 6단계의 그룹 chat_id |
-   | `BOT_SERVICE_OWNER_TELEGRAM_USER_ID` | 6단계의 내 user_id |
    | `BOT_SERVICE_LEADER_BOT_TOKEN` | LeaderBot 토큰 |
    | `BOT_SERVICE_CLAUDE_BOT_TOKEN` | ClaudeBot 토큰 |
    | `BOT_SERVICE_CODEX_BOT_TOKEN` | CodexBot 토큰 |
@@ -248,8 +247,8 @@ gateway_id가 다르므로(게이트웨이 프로세스 하나는 방 하나만 
    vercel login
    ```
 
-2. 브라우저 창이 열리면 4단계에서 만든(또는 새로 만들) Vercel 계정으로 로그인합니다.
-   화면에 "Success!" 비슷한 메시지가 뜨면 성공입니다.
+2. 브라우저 창이 열리면 시작 전 체크리스트에서 준비한(또는 지금 새로 만들) Vercel
+   계정으로 로그인합니다. 화면에 "Success!" 비슷한 메시지가 뜨면 성공입니다.
 
 ### 9-2. 협업 운영센터 화면 빌드 + 배포
 
@@ -371,9 +370,38 @@ gateway_id가 다르므로(게이트웨이 프로세스 하나는 방 하나만 
 
 ## 10단계 — Claude Code / Codex 로그인
 
-이 PC에 Claude Code와 Codex CLI가 설치·로그인돼 있어야 실제 작업 실행이 됩니다(이 부분은
-각 도구의 공식 설치 절차를 따르며, 이 문서 범위를 벗어납니다 — 이미 설치돼 있다면 이
-단계는 건너뛰어도 됩니다).
+이 PC에 Claude Code와 Codex CLI가 설치·로그인돼 있어야 실제 작업 실행이 됩니다. 설치·
+로그인 절차 자체는 각 도구의 공식 문서를 따릅니다(이 문서 범위를 벗어납니다 — 이미
+설치돼 있다면 이 단계는 건너뛰어도 됩니다):
+
+- Claude Code 공식 설치·로그인 안내: https://code.claude.com/docs/en/quickstart
+- Codex CLI 공식 설치·로그인 안내: https://learn.chatgpt.com/docs/codex/cli
+
+두 도구 모두 설치 후 터미널에서 로그인 명령(`claude` 실행 중 `/login`, `codex login`
+등 — 정확한 명령은 위 공식 문서 기준)을 한 번 실행해야 합니다.
+
+### 10-1단계 (선택) — Gemini 웹 엔진 켜기
+
+**이 단계는 선택입니다.** 건너뛰어도 Claude Code·Codex 두 실행 엔진만으로 시스템은
+그대로 동작합니다. Gemini 웹은 계획·검토·텍스트 결과를 받아보고 싶을 때만 추가하는
+세 번째 실행 엔진입니다.
+
+Gemini 웹은 API가 아니라 실제 브라우저 세션을 자동화해서 씁니다. 필요한 것 두 가지:
+
+1. **CDP(원격 디버깅) 포트를 연 Chrome에 Gemini 웹(gemini.google.com) 로그인이 돼
+   있어야 합니다** — 예: `chrome.exe --remote-debugging-port=9222`로 띄운 별도
+   Chrome 창에서 직접 로그인(비밀번호·2FA는 시스템이 대신 입력해주지 않습니다,
+   운영자가 직접 합니다).
+2. **"웹세션-자동화" 자동화 스크립트(`session.js`)가 이 PC에 있어야 합니다.** 이
+   저장소가 아니라 별도로 설치하는 자동화 도구입니다 — 기본 위치는 `<사용자 홈
+   폴더>\.codex\skills\웹세션-자동화\session.js`이고, 다른 위치에 있다면
+   `.env.operation.local`의 `GEMINI_WEB_SESSION_SCRIPT`에 그 경로를 적어줍니다. 이
+   스크립트가 없으면 Gemini 웹 엔진만 못 쓰고 나머지는 정상 동작합니다.
+
+관련 환경변수(`GEMINI_WEB_SESSION_SCRIPT`/`GEMINI_WEB_CHAT_URL`/
+`GEMINI_WEB_BRIDGE_ENTRYPOINT`/`GEMINI_WEB_CDP_URL`) 4개는 전부 선택이며, `.env.
+operation.example`에 각각의 의미가 자세히 나와 있습니다 — 비워 두면 코드가 기본값을
+스스로 찾습니다.
 
 ## 11단계 — 서비스 실행하기
 

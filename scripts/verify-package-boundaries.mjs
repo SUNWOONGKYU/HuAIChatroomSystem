@@ -23,12 +23,44 @@
 // 그래서 이 스크립트를 TypeScript 컴파일러 API(ts.createSourceFile + AST 순회) 기반으로
 // 새로 짰다. 새 npm 의존성은 추가하지 않는다 — 이 저장소는 이미 typescript 를
 // devDependency 로 갖고 있다(tsc 로 typecheck 하는 데 쓴다).
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// 결함 2(6차 감사) 대응 — 패키지 소유 판정(packageOf/addDirectOwner, 아래)이 순수
+// 문자열 비교(file.startsWith(srcDir))라 두 가지를 놓쳤다(6차 평가관 A 실증):
+//   1) node_modules/@hu-ai/<pkg> 심볼릭 링크(npm workspaces 가 만든다)의 실제 경로를
+//      거쳐 참조하면(예: "../../../node_modules/@hu-ai/orchestrator/src/index.js")
+//      문자열이 packages/orchestrator/src 로 시작하지 않으니 어느 패키지 소유도 아닌
+//      것으로 처리된다.
+//   2) Windows 는 파일시스템이 대소문자를 구분하지 않는데 이 코드는 문자열을 그대로
+//      비교하므로 "../../../Packages/Orchestrator/..." 처럼 대소문자가 다른 경로도
+//      소유 판정이 실패한다(경로 문자열 자체가 달라 startsWith 가 거짓).
+// fs.realpathSync.native 하나로 둘 다 해결된다 — 심볼릭 링크를 실제 대상으로 풀어주고,
+// Windows 는 OS 차원에서 대소문자 무시로 탐색한 뒤 실제 디스크에 저장된 대소문자로
+// 응답한다(POSIX 는 대소문자를 구분해서 탐색하므로 애초에 틀린 대소문자 경로는
+// 존재하지 않는 걸로 실패한다) — 그래서 "플랫폼별 대소문자 처리"를 따로 분기하지
+// 않아도 OS 가 알아서 각 플랫폼에 맞는 의미로 동작한다.
+//
+// 다만 이 저장소의 상대 import 는 전부 NodeNext 관례상 ".js" 확장자를 쓰는데 소스
+// 트리엔 ".ts" 파일만 있어서, 리터럴 경로 그대로는 realpathSync 가 거의 항상 ENOENT 로
+// 던진다. 그래서 존재하는 가장 가까운 조상 디렉터리까지만 realpath 하고, 그 아래
+// 존재하지 않는 나머지 세그먼트(대개 파일명)는 그대로 이어붙인다 — 패키지 소유
+// 판정에는 디렉터리 트리(심볼릭 링크·대소문자 문제가 실제로 발생하는 지점)만
+// 정규화되면 충분하고, 이 저장소엔 파일명 자체가 심볼릭 링크이거나 대소문자만 다른
+// 사례는 없다.
+function realpathBestEffort(p) {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    const parent = path.dirname(p);
+    if (parent === p) return p; // 루트까지 올라갔는데도 없음 — 더 못 감, 원본 그대로
+    return path.join(realpathBestEffort(parent), path.basename(p));
+  }
+}
 
 // 워크스페이스 레이아웃(packages/*, apps/*)을 실제로 디스크에서 읽어 만든다 —
 // 새 패키지가 추가돼도 이 스크립트를 고칠 필요가 없다.
@@ -43,7 +75,18 @@ export function discoverWorkspacePackages(repoRoot = REPO_ROOT) {
       const packageJsonPath = path.join(dir, "package.json");
       if (!statSync(dir).isDirectory() || !existsSync(packageJsonPath)) continue;
       const name = JSON.parse(readFileSync(packageJsonPath, "utf8")).name;
-      found.push({ name, dir, packageJsonPath, srcDir: path.join(dir, "src") });
+      const srcDir = path.join(dir, "src");
+      found.push({
+        name,
+        dir,
+        packageJsonPath,
+        srcDir,
+        // 소유 판정(packageOf/addDirectOwner)에만 쓰는 심볼릭 링크·대소문자 정규화된
+        // 실경로 — 사람이 읽는 진단 출력·resolveModuleFile 등은 여전히 dir/srcDir(원본
+        // 논리 경로)를 쓴다.
+        realDir: realpathBestEffort(dir),
+        realSrcDir: realpathBestEffort(srcDir)
+      });
     }
   }
   return found;
@@ -86,7 +129,8 @@ function getSourceFile(file, ctx) {
 }
 
 function packageOf(file, allPackages) {
-  const owner = allPackages.find((p) => file === p.srcDir || file.startsWith(p.srcDir + path.sep));
+  const realFile = realpathBestEffort(file);
+  const owner = allPackages.find((p) => realFile === p.realSrcDir || realFile.startsWith(p.realSrcDir + path.sep));
   return owner ? owner.name : null;
 }
 
@@ -546,11 +590,14 @@ function addDirectOwner(specifier, file, target, allPackages, names) {
   if (specifier.startsWith(".")) {
     // 실제 파일시스템 경로로 resolve 해서 그 경로가 어느 워크스페이스 패키지 폴더
     // 아래인지로 판정한다 — "../" 개수(상대경로 깊이)와 무관하게 항상 맞는다.
+    // realpathBestEffort 로 심볼릭 링크(node_modules/@hu-ai/<pkg>)와 대소문자 차이까지
+    // 정규화한 뒤 candidate.realDir 과 비교한다(위 realpathBestEffort 주석 참고).
     const resolvedBase = path.resolve(path.dirname(file), specifier);
+    const realResolvedBase = realpathBestEffort(resolvedBase);
     const owner = allPackages.find(
       (candidate) =>
         candidate.name !== target.name &&
-        (resolvedBase === candidate.dir || resolvedBase.startsWith(candidate.dir + path.sep))
+        (realResolvedBase === candidate.realDir || realResolvedBase.startsWith(candidate.realDir + path.sep))
     );
     if (owner) names.add(owner.name);
     return;

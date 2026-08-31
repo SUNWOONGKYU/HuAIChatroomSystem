@@ -455,3 +455,22 @@ test("main() 은 시크릿 없이 바이너리 스킵만 있어도 초록불로 
     rmSync(fixturePath, { force: true });
   }
 });
+
+// 9 반복 자리표시자 예외 — 복구 리허설용 테스트 방이 -1009999999999 를 쓰면서
+// 오탐으로 걸렸다. 0 반복과 같은 부류(사람이 지어낸 값)라 예외에 넣되, 예외를
+// 넓힌 탓에 진짜 값을 놓치지는 않는지 함께 고정한다.
+test("chat id 자리표시자 예외: 9 반복은 통과, 진짜 값은 여전히 탐지", () => {
+  // 지어낸 값 — 통과해야 한다.
+  assert.deepEqual(findSecretHits("doc.md", "-1009999999999"), []);
+  assert.deepEqual(findSecretHits("doc.md", "-1000000000000"), []);
+  assert.deepEqual(findSecretHits("doc.md", "-1001234567890"), []);
+
+  // 실제 운영에서 나온 값 — 반드시 탐지돼야 한다(예외를 넓히다 이걸 놓치면 안 된다).
+  for (const real of ["-1004334034373", "-1004315119076"]) {
+    const hits = findSecretHits("doc.md", real);
+    assert.equal(hits.length > 0, true, `${real} 는 탐지돼야 한다`);
+  }
+
+  // 9 로 시작하지만 반복이 짧은 값은 지어낸 값으로 보지 않는다.
+  assert.equal(findSecretHits("doc.md", "-1009912345678").length > 0, true);
+});

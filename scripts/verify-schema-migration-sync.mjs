@@ -42,6 +42,18 @@ const INLINE_CONSTRAINT_RE = /\bconstraint\s+(\w+)/g;
 // 함수 본문에 쓰인다)은 그 안의 `--`/`/*`를 주석으로 오인해 지우면 안 되므로 원문
 // 그대로 통과시킨다. 블록 주석은 내부 줄바꿈 개수만큼 빈 줄로 치환해, 주석 뒤에 오는
 // `\n\);`(테이블 본문 종료) 같은 줄바꿈 의존 패턴이 깨지지 않게 한다.
+//
+// 결함(6차 감사) 대응 — 표준 SQL(Postgres 포함)은 블록 주석 중첩을 허용하는데
+// (`/* 바깥 /* 안쪽 */ 여전히 바깥 */`), 이전 구현은 `sql.indexOf("*/", i + 2)`로
+// "맨 처음 나오는 */" 에서 무조건 닫아버렸다. 그래서 `/* 롤백 예시(중첩 주석) /* 메모 */
+// drop table ...; */` 같은 블록에서 안쪽 `*/`(메모를 닫는 것)에 바깥 주석 전체가
+// 조기 종료되고, 그 뒤에 남은 "여전히 주석 안이어야 할" `drop table ...;` 이 실제
+// DDL 로 파싱돼 방금 만든 인덱스/제약을 present 맵에서 지워버린다. 지금 마이그레이션
+// 파일엔 중첩 블록 주석이 0건이라 아직 미발현이지만, 들어오는 순간 뒤따르는 진짜
+// DDL 을 오인한다. 그래서 깊이(depth)를 세면서 `/*`를 만나면 +1, `*/`를 만나면 -1
+// 하고 depth 가 0 이 될 때까지 계속 스캔한다 — 문자열 리터럴/달러 인용과 달리, 블록
+// 주석 내부에서는 `/*`·`*/` 만 리터럴로 인식하면 되고 따옴표·달러태그를 별도로
+// 보존할 필요가 없다(주석 밖으로 나가기 전까지는 어차피 전부 버려지는 텍스트다).
 export function stripSqlComments(sql) {
   let result = "";
   let i = 0;
@@ -60,14 +72,26 @@ export function stripSqlComments(sql) {
       continue;
     }
     if (two === "/*") {
-      const end = sql.indexOf("*/", i + 2);
-      if (end === -1) {
-        i = n;
-      } else {
-        const inner = sql.slice(i + 2, end);
-        result += "\n".repeat((inner.match(/\n/g) || []).length);
-        i = end + 2;
+      // depth 로 중첩을 센다 — 안쪽 `/*` 를 만나면 +1, `*/` 를 만나면 -1, depth 가
+      // 0 이 돼야(가장 바깥 주석이 닫혀야) 스캔을 멈춘다. 끝까지 안 닫히면(depth > 0
+      // 인 채로 파일 끝에 도달) 기존과 동일하게 나머지 전체를 주석으로 간주한다.
+      let depth = 1;
+      let j = i + 2;
+      while (j < n && depth > 0) {
+        const innerTwo = sql.slice(j, j + 2);
+        if (innerTwo === "/*") {
+          depth += 1;
+          j += 2;
+        } else if (innerTwo === "*/") {
+          depth -= 1;
+          j += 2;
+        } else {
+          j += 1;
+        }
       }
+      const inner = sql.slice(i + 2, j);
+      result += "\n".repeat((inner.match(/\n/g) || []).length);
+      i = j;
       continue;
     }
     if (sql[i] === "'") {

@@ -414,3 +414,91 @@ fake store 테스트뿐이었다. 이번에 가장 작은 방(`8d6c738b`)의 스
 `.sha256` 생성 확인 → 체크섬 인자 **없이** 스냅샷 경로만으로 복구 dry-run 이 정상
 동작하는 것 확인. 사이드카 값이 같은 실행이 DB 에 기록한 checksum 과 일치함도 대조했다.
 DB 기록은 그대로 유지한다 — 둘이 어긋나면 그 자체가 변조·손상 신호다.
+
+## 2026-08-31 KST — 파괴적 복구 리허설: `new>0` 시나리오 실증 (전용 테스트 방)
+
+바로 위 절이 "남은 한계"로 명시했던 것 — `new>0`(실제 데이터 소실) 시나리오가 한 번도
+검증된 적이 없다는 지적 — 을 이번에 해소했다. 운영 5개 방(9a477b32/8d6c738b/61aa6200/
+847d1638/ba26dd59)은 조회 외에 전혀 건드리지 않았다. 별도의 전용 테스트 방을 새로
+만들어 그 방 안에서만 파괴적 삭제·복구를 실행했다.
+
+**테스트 방**: `16966452-fbb6-43b6-bbd7-5bbb87ca525a` (telegram_chat_id 는 운영 5개
+방의 값과 겹치지 않는 임의의 테스트용 값으로, 사전 조회로 중복 없음을 확인 후 사용
+— purpose 에 `[REHEARSAL-TEST...]` 로 식별 가능하게 표시). `scripts/onboard-telegram-room.mjs` 는
+쓰지 않고 REST API로 직접 최소 행만 심었다 — 그 스크립트는 운영 4개 봇과 공유되는
+`huai_telegram_bots` 테이블까지 건드려 이 리허설 목적에는 불필요한 위험이었다.
+
+**심은 데이터** (백업 대상 13개 테이블 전부, `huai_tasks.approved_by_approval_id` ↔
+`huai_approvals.task_id` 순환 FK 포함): huai_room_members 1, huai_ai_actors 2,
+huai_task_proposals 1, huai_tasks 2, huai_task_dependencies 1, huai_approvals 2,
+huai_events 2, huai_agent_personas 1, huai_task_reports 1, huai_artifacts 1,
+huai_reports 1, huai_revision_requests 1, huai_message_bindings 1.
+
+**절차와 결과**:
+
+1. `npm run backup:rooms -- --room 16966452-...` 로 스냅샷 생성, `.sha256` 사이드카
+   확인, `verify-recovery-snapshot-rehearsal.mjs` 로 무결성 통과(`missingTables=none`).
+2. 삭제 전 dry-run: 13개 테이블 전부 `new=0`.
+3. **1라운드(부분 삭제)**: huai_artifacts/huai_reports/huai_revision_requests/
+   huai_message_bindings/huai_task_reports/huai_agent_personas 6개 테이블 삭제 →
+   dry-run 재확인(삭제한 6개만 `new=1`, 나머지 7개는 `new=0`) → `--apply --yes` →
+   14/14 단계 성공. 삭제된 6개 테이블이 원래 값(UUID 포함) 그대로 복원됐음을 직접
+   조회로 확인 — `huai_message_bindings` 의 event_id/task_id/proposal_id/approval_id/
+   report_id 참조까지 전부 원래 값과 일치.
+4. **2라운드(전면 삭제)**: 나머지 삭제 가능한 테이블(huai_room_members/huai_ai_actors/
+   huai_task_proposals/huai_task_dependencies + 1라운드에서 되살아난 6개, 총 10개)을
+   전부 삭제. `huai_tasks` 의 `proposal_id`/`assignee_actor_id` 는 삭제 전에 UPDATE 로
+   null 처리해뒀다. dry-run → 정확히 그 10개 테이블만 `new>0`(모두 total 과 동일),
+   나머지 3개(huai_tasks/huai_approvals/huai_events)는 `new=0`. `--apply --yes` →
+   14/14 단계 성공.
+5. **복구 후 검증표** (스냅샷 대비 실제 DB, 2라운드 기준):
+
+| 테이블 | 스냅샷 건수 | 복구 후 실제 건수 | 비고 |
+|---|---|---|---|
+| huai_room_members | 1 | 1 | 일치 |
+| huai_ai_actors | 2 | 2 | 일치 |
+| huai_task_proposals | 1 | 1 | 일치 |
+| huai_task_dependencies | 1 | 1 | 일치 |
+| huai_events | 2 | 2 | 애초에 삭제 불가(append-only) — 변화 없음, 중복 없음 |
+| huai_approvals | 2 | 2 | 애초에 삭제 불가(append-only) — 변화 없음, 중복 없음 |
+| huai_agent_personas | 1 | 1 | 일치 |
+| huai_task_reports | 1 | 1 | 일치 |
+| huai_artifacts | 1 | 1 | 일치 |
+| huai_reports | 1 | 1 | 일치 |
+| huai_revision_requests | 1 | 1 | 일치 |
+| huai_message_bindings | 1 | 1 | 일치 |
+| huai_tasks | 2 | 2 | `approved_by_approval_id`(순환 FK) 2건 모두 원래 값으로 복원. `proposal_id`/`assignee_actor_id`(수동으로 null 처리했던 값)도 원래 값으로 복원됨 — upsert 가 전체 컬럼을 덮어쓴다는 것을 실증 |
+
+6. 복구 후 재차 dry-run → 13개 테이블 전부 `new=0` (멱등성 확인, 중복 행 없음).
+
+**부수 발견(예상 못 했던 사실)**: `huai_approvals`/`huai_events` 의 append-only
+트리거는 `UPDATE`/`DELETE` 를 직접 막을 뿐 아니라, **그 행을 참조하는 `huai_tasks`
+행을 삭제하려는 시도(캐스케이드 삭제)까지 같은 트리거로 막는다** — Postgres 의
+`ON DELETE CASCADE` 도 대상 테이블에 대한 실제 DELETE 문이라 트리거가 그대로
+걸린다. 실제로 `DELETE FROM huai_tasks WHERE task_id=...` 를 시도했더니
+`append-only-ledger:huai_approvals is immutable` 로 거부되고 트랜잭션 전체가
+롤백됐다(테스트 방에서 직접 확인). 즉 승인/이벤트가 하나라도 걸린 작업 행은 일반
+DELETE 경로로는 절대 지워지지 않는다 — 이건 설계 의도(원장 불변성)의 자연스러운
+확장이지 결함이 아니다. 다만 "승인·이벤트 테이블에서 행이 통째로 사라지는" 사고는
+일반적인 애플리케이션 버그로는 일어날 수 없고, 디스크 손상·잘못된 마이그레이션·
+트리거를 우회하는 직접 개입 같은 경로로만 일어날 수 있다는 뜻이다.
+
+**테스트 방 정리 (완전히 지우지 못함 — 정직하게 남긴다)**: 위와 같은 이유로 테스트
+방의 `huai_tasks` 2건, `huai_approvals` 2건, `huai_events` 2건, 그리고 그 셋에
+캐스케이드로 묶인 `huai_rooms` 행 자체는 일반 DELETE 로 지울 수 없었다(`huai_rooms`
+행 삭제도 같은 트리거로 거부됨 — 직접 시도해 확인). 나머지 10개 테이블
+(room_members/ai_actors/task_proposals/task_dependencies/agent_personas/task_reports/
+artifacts/reports/revision_requests/message_bindings)은 전부 삭제했고, 로컬 스냅샷
+파일(`sessions/rooms/recovery/16966452.../*.json[.sha256]`)과 `huai_recovery_snapshots`
+행도 지웠다. 남길 수밖에 없는 `huai_rooms` 행은 `status='archived'` 로 바꾸고
+purpose 를 `[REHEARSAL-TEST-ARCHIVED]` 로 재작성해 운영 스캔(활성 방만 순회하는
+경로들)에서 제외되게 해뒀다 — 완전 삭제는 트리거를 우회하는 직접 DB 접근이 필요해
+이 작업 범위를 벗어난다. 남은 잔여물: room_id `16966452-fbb6-43b6-bbd7-5bbb87ca525a`
+(status=archived), task_id `cd54c203-ef00-48da-bd6e-7b219340b152` / `84e3b780-f92d-4efc-92c4-f29d090be0da`,
+approval_id `e9ae59e9-66e9-45af-8d25-f2f4441a965e` / `74e92db6-8b6b-4269-840c-feecfc70b2c5`,
+event_id `09650822-a158-466a-8a52-82530ff84330` / `d00a27c1-cf2a-41e6-94d7-bcdfd9ae185e`.
+
+**결론**: `restore-room-backup.mjs --apply` 는 이제 "이미 있는 값을 다시 쓰는" 경로뿐
+아니라 "실제로 지워진 데이터를 되살리는"(`new>0`) 경로도 실제 프로덕션 Supabase
+프로젝트(다만 전용 테스트 방 안에서만)에 대해 검증됐다. 이 결과를
+`2026_08_12__OPERATION_INCIDENT_RUNBOOK.md` 의 "Current limitations" 절에도 반영한다.

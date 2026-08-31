@@ -201,6 +201,29 @@ export default [
       "@typescript-eslint/no-misused-promises": "error"
     }
   },
+  {
+    // 결함 1(6차 감사) 대응 — eval()/new Function()/Function() 호출은 문자열 인자를
+    // 런타임에 코드로 실행한다. no-restricted-imports·no-restricted-syntax·
+    // local/no-nonliteral-dynamic-module-load(위)와 scripts/verify-package-boundaries.mjs
+    // 는 전부 AST 상의 import/require 호출 형태만 본다 — 문자열 안에 든 코드(그 문자열이
+    // 다시 import()/require() 를 담고 있어도)는 어느 쪽도 파싱하지 않는다. 6차 평가관
+    // 둘이 각각 `new Function("spec","return import(spec)")` 와
+    // `eval("req('../../../packages/ai-adapters/src/index.js')")` 로 두 방어선을 동시에
+    // 무경고 통과시키는 걸 실증했다 — 원리적으로 정적 분석으로는 못 잡는다(문자열 안의
+    // 코드는 AST 가 아니다). 그래서 탐지 대신 행위 자체를 금지한다.
+    //
+    // 기존 사용처 전수 확인(2026-08-31, grep "eval(", "new Function(", "Function(" 을
+    // apps/*/src, packages/*/src 전체에 실행): 0건. 이 두 폴더 밖에서는
+    // supabase/miniapp-web/*.test.mjs 가 브라우저 코드의 함수 정의를 텍스트로 뽑아
+    // `new Function(...)` 으로 실행해서 테스트하는 정당한 용도로 쓰지만, 그 파일들은
+    // apps/*/src·packages/*/src 바깥이라 이 규칙 대상이 아니다(아래 files 패턴 참고) —
+    // 그래서 예외 없이 그냥 금지한다.
+    files: ["apps/*/src/**/*.ts", "packages/*/src/**/*.ts"],
+    rules: {
+      "no-eval": "error",
+      "no-new-func": "error"
+    }
+  },
   // ---- 패키지 경계 강제 ----
   // 지적 사항: "@hu-ai/*" 스코프명은 있지만 소스 어디에도 bare import 로 안 쓰이고
   // 전부 "../../../packages/x/src/..." 상대경로다 — 선언된 경계가 실제로는 0건 강제된다.

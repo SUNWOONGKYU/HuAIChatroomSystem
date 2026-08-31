@@ -10,7 +10,10 @@
 - Supabase 프로젝트 1개
 - (webhook을 쓸 경우에만) 공개 HTTPS 주소 1개: Cloudflare Tunnel, reverse proxy, 또는 배포 호스트 —
   기본값인 polling은 이게 아예 필요 없습니다. 아래 5단계 참고.
-- 작업 PC 1대: Codex CLI와 Claude Code가 로그인된 상태. Gemini 웹을 사용할 경우 자동화 전용 Chrome(CDP 9222)에 운영자가 직접 로그인해야 합니다(비밀번호·2FA 자동 입력 없음).
+- 작업 PC 1대: Codex CLI와 Claude Code가 로그인된 상태(설치·로그인 절차는 각 공식 문서 참고 —
+  [Claude Code](https://code.claude.com/docs/en/quickstart) /
+  [Codex CLI](https://learn.chatgpt.com/docs/codex/cli)). Gemini 웹을 사용할 경우 자동화 전용
+  Chrome(CDP 9222)에 운영자가 직접 로그인해야 합니다(비밀번호·2FA 자동 입력 없음).
 - Telegram 비공개 그룹 1개
 - Telegram BotFather로 만든 봇 4개
 
@@ -51,8 +54,6 @@ npm run verify:operation-ready
 ```text
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
-BOT_SERVICE_TELEGRAM_CHAT_ID=
-BOT_SERVICE_OWNER_TELEGRAM_USER_ID=
 BOT_SERVICE_RECEIVE_MODE=polling
 BOT_SERVICE_LEADER_BOT_TOKEN=
 BOT_SERVICE_CLAUDE_BOT_TOKEN=
@@ -75,6 +76,13 @@ GEMINI_WEB_CHAT_URL=
 GEMINI_WEB_BRIDGE_ENTRYPOINT=<YOUR_PROJECT_ROOT>\scripts\gemini-web-adapter.mjs
 LOCAL_GATEWAY_ALLOWED_ADAPTERS=codex,claude_code,gemini_web,antigravity
 ```
+
+`BOT_SERVICE_TELEGRAM_CHAT_ID`/`BOT_SERVICE_OWNER_TELEGRAM_USER_ID`는 위 목록에 없습니다 —
+`SUPABASE_URL`을 채우면 멀티룸 모드(`hasAnySupabaseRuntimeEnv`, `apps/bot-service/src/
+local-runtime.ts`)로 부팅되어 이 두 값은 아예 읽지 않습니다(방마다 chat-id/owner-id는
+아래 4단계에서 온보딩 명령의 `--chat-id`/`--owner-id` 인자로 따로 넣습니다). `.env.
+operation.example`에도 이 둘은 주석 처리돼 있습니다 — 굳이 채워도 해는 없지만 불필요한
+이중 입력입니다.
 
 `BOT_SERVICE_RECEIVE_MODE`를 비우거나 `webhook`으로 두면 기본값이 webhook으로 바뀌는데,
 그때만 `BOT_SERVICE_PUBLIC_BASE_URL`(공개 HTTPS 주소)이 필요합니다. polling은 이 값 자체가

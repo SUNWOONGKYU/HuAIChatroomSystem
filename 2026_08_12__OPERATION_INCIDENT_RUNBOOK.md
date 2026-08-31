@@ -278,12 +278,26 @@ captured are restored, and the script says so loudly, not silently).
   (running `--apply` without `--yes` and declining the "yes" prompt, so it exits with
   `confirmation-declined` before touching anything) **has also been run once against
   production**, separately from the write above.
-  **Still unverified: reviving data that was actually lost** — restoring into a room where
-  rows are genuinely missing (`new>0`) has never been exercised, because doing so requires a
-  destructive delete-then-restore rehearsal that has no safe target in this operation (no
-  disposable/staging Supabase project exists for this repo). Before trusting this path in a
-  live incident where real rows must be recreated, a human operator should first rehearse a
-  `new>0` restore against a disposable/staging project if one becomes available.
+  **Reviving data that was actually lost (`new>0`) has now been verified (2026-08-31)** —
+  see the "파괴적 복구 리허설" section in `OPERATION_STATUS.md` for full evidence. Since no
+  disposable/staging Supabase project exists for this repo, the rehearsal was run inside the
+  same production project but against a brand-new, clearly-labeled test room
+  (`16966452-fbb6-43b6-bbd7-5bbb87ca525a`) created solely for this purpose — the 5 real
+  production rooms were never written to. Data spanning all 13 backup-scoped tables, including
+  a genuine `huai_tasks.approved_by_approval_id` ↔ `huai_approvals.task_id` circular
+  reference, was seeded, backed up, then deleted in two rounds (a 6-table partial delete and a
+  10-table near-total delete). Both rounds showed `new=0` before deletion and `new>0` for
+  exactly the deleted tables afterward; `--apply --yes` restored every deleted row with the
+  original UUIDs and FK values (circular FK included), and a post-restore dry-run showed
+  `new=0` again with no duplicates. One incidental discovery from this rehearsal: the
+  append-only trigger on `huai_approvals`/`huai_events` blocks not only direct
+  `UPDATE`/`DELETE` but also any cascading delete that would touch them (e.g. deleting a
+  `huai_tasks` row that an approval/event still references) — so those two tables, and any
+  task row they reference, cannot be deleted at all through the normal REST/application path.
+  As a result the test room's `huai_tasks`/`huai_approvals`/`huai_events` rows and the
+  `huai_rooms` row itself could not be fully cleaned up afterward; the room was archived
+  (`status='archived'`, purpose relabeled `[REHEARSAL-TEST-ARCHIVED]`) instead of deleted, and
+  the residual row ids are recorded in `OPERATION_STATUS.md`.
 - **`huai_verifications` is not backed up at all**, so any `huai_message_bindings` or
   `huai_revision_requests` row that references a `verification_id` can fail to restore with
   a foreign-key error (the script reports this per table rather than hiding it — check the
