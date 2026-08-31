@@ -10,12 +10,12 @@ test("parses operation env comments, quotes, and bare values", () => {
 # comment
 SUPABASE_URL=https://example.supabase.co
 BOT_SERVICE_ROOM_ID="room-1"
-LOCAL_GATEWAY_ALLOWED_ROOTS='C:\\Dev\\HuAIChatroomSystem'
+LOCAL_GATEWAY_ALLOWED_ROOTS='C:\\repo'
 invalid-key=value
 `), {
     SUPABASE_URL: "https://example.supabase.co",
     BOT_SERVICE_ROOM_ID: "room-1",
-    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\Dev\\HuAIChatroomSystem"
+    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\repo"
   });
 });
 

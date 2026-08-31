@@ -25,7 +25,7 @@
 // devDependency 로 갖고 있다(tsc 로 typecheck 하는 데 쓴다).
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -580,7 +580,7 @@ export function declaredDependencies(packageJsonPath) {
 //
 // eslint 쪽과 어긋나면 두 방어선이 서로 다른 말을 하게 되므로, 아래
 // verifyLayerTableMatchesEslintConfig 가 eslint.config.js 와의 정합을 검사한다.
-const ALLOWED_INTERNAL_DEPENDENCIES = {
+export const ALLOWED_INTERNAL_DEPENDENCIES = {
   "@hu-ai/contracts": [],
   "@hu-ai/workflow": [],
   "@hu-ai/telegram-ui": [],
@@ -599,6 +599,101 @@ export function layerViolations(packageName, actualDependencies, layerTable = AL
   // 레이어 표에 없는 패키지가 생기면 조용히 통과시키지 않는다 — 표를 갱신하라는 신호다.
   if (!allowed) return [`레이어 표에 없는 패키지다 — ALLOWED_INTERNAL_DEPENDENCIES 를 갱신하라`];
   return [...actualDependencies].filter((name) => !allowed.includes(name)).sort();
+}
+
+// ── eslint.config.js 와의 정합 검사(결함 4 대응, 6차 감사) ─────────────────
+// 이전 주석은 이 검사가 존재하는 것처럼 적어놓고 실제로는 구현이 없었다(6차 평가관
+// 발견) — 있지도 않은 안전망을 문서화한 셈이었다. ALLOWED_INTERNAL_DEPENDENCIES(허용
+// 목록)와 eslint.config.js 의 no-restricted-imports patterns(금지 목록)는 극성이
+// 반대라 텍스트 diff 로는 못 비교한다. 그래서 eslint.config.js 를 실제로 동적
+// import 해서 로드하고, 각 파일 블록의 금지 목록을 "전체 후보군 - 금지 = 허용" 으로
+// 뒤집어 layerTable 과 대조한다.
+//
+// 후보군(pool) 산정이 핵심이다 — 무작정 "전체 8개 패키지"로 비교하면 오탐이 난다.
+// packages/* 블록(contracts/workflow/telegram-ui/ai-adapters/orchestrator/
+// supabase-runtime)은 apps/*(bot-service/local-gateway)를 금지 목록에 안 적어
+// 뒀는데, 이건 빠뜨린 게 아니라 애초에 packages/* 소스가 apps/* 를 참조할 이유가
+// 구조적으로 없어서다(레이어 상 아래→위 참조는 아예 상정하지 않음). 이 경우까지
+// "안 적혀 있으니 허용"으로 읽으면 모든 packages/* 블록이 즉시 어긋난 걸로 오판된다.
+// 반대로 apps/* 블록은 실제로 다른 app 을 참조하는 사례가 있다(bot-service →
+// local-gateway, 아래 layerTable 참고). 그래서 packages/* 블록은 packages/* 형제만,
+// apps/* 블록은 전체 8개를 후보군으로 삼는다 — eslint.config.js 상단 "레이어" 주석이
+// 기술하는 설계(apps 가 최상위, packages/* 는 서로만 참조)와 일치하는 기준이다.
+function toShortName(fullName) {
+  return fullName.startsWith("@hu-ai/") ? fullName.slice("@hu-ai/".length) : fullName;
+}
+
+function ownerShortNameFromFilesGlob(glob) {
+  const match = /^(?:packages|apps)\/([^/]+)\/src\//.exec(glob);
+  return match ? match[1] : null;
+}
+
+function groupOfShortName(shortName, allPackages) {
+  const pkg = allPackages.find((p) => toShortName(p.name) === shortName);
+  if (!pkg) return null;
+  const relative = path.relative(REPO_ROOT, pkg.dir);
+  return relative.split(path.sep)[0]; // "packages" | "apps"
+}
+
+// forbiddenPackagePatterns(eslint.config.js)가 만드는 정확한 형태 `(^|/)${name}(/|$)`
+// 를 되돌려 이름을 뽑는다 — eslint.config.js 의 헬퍼 함수 자체는 export 안 되어 있지만
+// (default export 인 config 배열만 공개), 그 배열 안에는 헬퍼가 만들어낸 결과값이
+// 그대로 리터럴로 박혀 있으므로 여기서 재파싱할 수 있다.
+function forbiddenShortNamesFromPatterns(patterns) {
+  const names = [];
+  for (const { regex } of patterns ?? []) {
+    const match = /^\(\^\|\/\)(.+)\(\/\|\$\)$/.exec(regex);
+    if (match) names.push(match[1]);
+  }
+  return names;
+}
+
+export async function verifyLayerTableMatchesEslintConfig(
+  layerTable = ALLOWED_INTERNAL_DEPENDENCIES,
+  { eslintConfigPath = path.join(REPO_ROOT, "eslint.config.js"), repoRoot = REPO_ROOT } = {}
+) {
+  const { default: config } = await import(pathToFileURL(eslintConfigPath).href);
+  const allPackages = discoverWorkspacePackages(repoRoot);
+  const allShortNames = Object.keys(layerTable).map(toShortName);
+  const packageOnlyShortNames = allShortNames.filter((name) => groupOfShortName(name, allPackages) === "packages");
+
+  const mismatches = [];
+  const coveredOwners = new Set();
+
+  for (const entry of config) {
+    const noRestrictedImports = entry?.rules?.["no-restricted-imports"];
+    if (!entry.files || !Array.isArray(noRestrictedImports)) continue;
+    const owners = entry.files.map(ownerShortNameFromFilesGlob).filter(Boolean);
+    if (owners.length === 0) continue;
+    const forbidden = new Set(forbiddenShortNamesFromPatterns(noRestrictedImports[1]?.patterns));
+
+    for (const owner of owners) {
+      coveredOwners.add(owner);
+      const fullName = `@hu-ai/${owner}`;
+      if (!(fullName in layerTable)) {
+        mismatches.push(`${fullName}: eslint.config.js 에 이 패키지를 규제하는 블록이 있지만 ALLOWED_INTERNAL_DEPENDENCIES 에는 이 패키지가 없다`);
+        continue;
+      }
+      const group = groupOfShortName(owner, allPackages);
+      const pool = (group === "apps" ? allShortNames : packageOnlyShortNames).filter((name) => name !== owner);
+      const allowedByEslint = pool.filter((name) => !forbidden.has(name)).map((name) => `@hu-ai/${name}`).sort();
+      const allowedByTable = [...layerTable[fullName]].sort();
+      if (JSON.stringify(allowedByEslint) !== JSON.stringify(allowedByTable)) {
+        mismatches.push(
+          `${fullName}: eslint.config.js 로 추정한 허용 목록 [${allowedByEslint.join(", ") || "없음"}] 이 ` +
+            `ALLOWED_INTERNAL_DEPENDENCIES [${allowedByTable.join(", ") || "없음"}] 와 다르다`
+        );
+      }
+    }
+  }
+
+  for (const fullName of Object.keys(layerTable)) {
+    if (!coveredOwners.has(toShortName(fullName))) {
+      mismatches.push(`${fullName}: ALLOWED_INTERNAL_DEPENDENCIES 에 있지만 eslint.config.js 에 이 패키지를 규제하는 블록이 없다`);
+    }
+  }
+
+  return mismatches;
 }
 
 // layerTable 을 인자로 받는 이유: 레이어 표는 이 저장소의 실제 패키지 이름에 묶여
@@ -656,6 +751,12 @@ export function findUnresolvableDynamicSpecifiers(repoRoot = REPO_ROOT) {
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
   let failed = false;
+
+  const layerTableMismatches = await verifyLayerTableMatchesEslintConfig();
+  for (const mismatch of layerTableMismatches) {
+    failed = true;
+    console.error(`FAIL 레이어 표/eslint.config.js 불일치 — ${mismatch}`);
+  }
 
   const unresolvable = findUnresolvableDynamicSpecifiers();
   for (const item of unresolvable) {

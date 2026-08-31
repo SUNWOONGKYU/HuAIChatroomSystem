@@ -266,15 +266,24 @@ captured are restored, and the script says so loudly, not silently).
 
 ### Current limitations (read before relying on this in a real incident)
 
-- **`--apply` has never actually written data to a real production Supabase project.**
-  Automated coverage is against an in-memory fake store
-  (`scripts/restore-room-backup.test.mjs`). The confirmation-gate rejection path (running
-  `--apply` without `--yes` and declining the "yes" prompt, so it exits with
-  `confirmation-declined` before touching anything) has been run once against a real
-  production Supabase project — that only proves the gate itself refuses cleanly, not that
-  a real write succeeds. Before trusting this in a live incident, a human operator should
-  dry-run it (and ideally exercise a real `--apply --yes` write) against a
-  disposable/staging project first.
+- **`--apply` has been exercised once against a real production Supabase project, but only
+  on the "nothing actually changes" path.** Automated coverage is against an in-memory fake
+  store (`scripts/restore-room-backup.test.mjs`, 12/12 passing). Separately, a real
+  `--apply --yes` run against production (smallest room, `8d6c738b`) completed 14/14 steps,
+  including the circular-FK 2-pass (`huai_tasks` approval FK cleared → `huai_events`/
+  `huai_approvals` inserted → approval link restored) — see `OPERATION_STATUS.md` for the
+  before/after row-count comparison. That run's dry-run preview showed `new=0` on every
+  table (the snapshot was taken from the same live data being restored into, so the apply
+  was a same-value upsert that changed nothing). **The confirmation-gate rejection path**
+  (running `--apply` without `--yes` and declining the "yes" prompt, so it exits with
+  `confirmation-declined` before touching anything) **has also been run once against
+  production**, separately from the write above.
+  **Still unverified: reviving data that was actually lost** — restoring into a room where
+  rows are genuinely missing (`new>0`) has never been exercised, because doing so requires a
+  destructive delete-then-restore rehearsal that has no safe target in this operation (no
+  disposable/staging Supabase project exists for this repo). Before trusting this path in a
+  live incident where real rows must be recreated, a human operator should first rehearse a
+  `new>0` restore against a disposable/staging project if one becomes available.
 - **`huai_verifications` is not backed up at all**, so any `huai_message_bindings` or
   `huai_revision_requests` row that references a `verification_id` can fail to restore with
   a foreign-key error (the script reports this per table rather than hiding it — check the

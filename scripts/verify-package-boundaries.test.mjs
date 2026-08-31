@@ -9,7 +9,9 @@ import {
   declaredDependencies,
   checkAllPackageBoundaries,
   findUnresolvableDynamicSpecifiers,
-  layerViolations
+  layerViolations,
+  verifyLayerTableMatchesEslintConfig,
+  ALLOWED_INTERNAL_DEPENDENCIES
 } from "./verify-package-boundaries.mjs";
 
 // 결함 2(package.json 에 dependencies 필드 부재, 3차 라운드까지 연속 지적) 대응.
@@ -467,4 +469,32 @@ test("실제 repo: 레이어 위반 0건", () => {
   for (const result of checkAllPackageBoundaries()) {
     assert.deepEqual(result.layerBreaks, [], `${result.name} 에 레이어 위반이 있다`);
   }
+});
+
+// 결함(6차 감사) 대응 — verify-package-boundaries.mjs 주석은 "아래
+// verifyLayerTableMatchesEslintConfig 가 eslint.config.js 와의 정합을 검사한다"고
+// 적어놨는데 그 함수가 저장소에 없었다(6차 평가관 발견, 있지도 않은 안전망을
+// 문서화한 상태). 이제 실제로 구현했으니, ① 실제 repo 에서 통과하는지, ②
+// 일부러 어긋나게 만들면 실제로 실패하는지 둘 다 실증한다.
+test("실제 repo: ALLOWED_INTERNAL_DEPENDENCIES 가 eslint.config.js 의 no-restricted-imports 와 일치한다", async () => {
+  const mismatches = await verifyLayerTableMatchesEslintConfig();
+  assert.deepEqual(mismatches, [], "레이어 표와 eslint.config.js 가 어긋난다 — 위 목록 참고");
+});
+
+test("verifyLayerTableMatchesEslintConfig: 레이어 표를 일부러 느슨하게 바꾸면 어긋남을 잡는다", async () => {
+  // ai-adapters 는 실제로 contracts 만 허용인데, 표에서 그 허용을 빼(전부 금지로
+  // 조작) eslint.config.js 와 어긋나게 만든다.
+  const loosened = { ...ALLOWED_INTERNAL_DEPENDENCIES, "@hu-ai/ai-adapters": [] };
+  const mismatches = await verifyLayerTableMatchesEslintConfig(loosened);
+  assert.equal(mismatches.length, 1);
+  assert.match(mismatches[0], /@hu-ai\/ai-adapters/);
+});
+
+test("verifyLayerTableMatchesEslintConfig: 표에 있는 패키지가 eslint.config.js 블록에 없으면 잡는다", async () => {
+  const withGhostPackage = { ...ALLOWED_INTERNAL_DEPENDENCIES, "@hu-ai/브랜뉴": [] };
+  const mismatches = await verifyLayerTableMatchesEslintConfig(withGhostPackage);
+  assert.ok(
+    mismatches.some((m) => m.includes("@hu-ai/브랜뉴") && m.includes("블록이 없다")),
+    "eslint.config.js 에 대응 블록이 없는 패키지를 잡아야 한다"
+  );
 });

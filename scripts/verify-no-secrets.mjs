@@ -18,7 +18,18 @@ const roots = ["apps", "packages", "supabase", "scripts"];
 // "-100" + 숫자 10자리 이상 값을 테스트 파일 제외하고 전수 확인해 이 두 유형 밖의
 // 값은 없음을 확인했다:
 //   grep -rln -e "-100[0-9]\{9,\}" apps packages supabase scripts | grep -vE "\.test\.(ts|js|mjs)$"
-const CHAT_ID_PLACEHOLDER_EXCLUSION = "1234567890|0{9,}\\d?";
+//
+// 결함(6차 감사) 대응 — 아래 telegram-chat-id-bare-value 의 숫자열 문자클래스에 \n 을
+// 허용하도록 넓히면서(줄바꿈 분할 우회 대응), 이 예외 목록도 같이 \n 허용을 넓히지
+// 않으면 새 구멍이 생긴다: placeholder 값 자체가 줄바꿈으로 쪼개지면(예:
+// `"-1001234\n567890"`) 옛 예외 패턴(문자 사이 \n 을 안 받음)이 더 이상 안 걸려
+// 부정형 lookahead 가 뚫리고, 정작 이 저장소가 실제로 쓰는 placeholder 를 줄바꿈
+// 분할 상태로 오탐하게 된다(직접 재현해 확인함). 각 문자/반복 사이에 선택적 \n 을
+// 끼워 넣어 같은 관용을 예외 쪽에도 준다 — 의미(오름차순 10자리 / 0 이 9개 이상)는
+// 그대로다.
+const CHAT_ID_PLACEHOLDER_EXCLUSION =
+  "1\\n?2\\n?3\\n?4\\n?5\\n?6\\n?7\\n?8\\n?9\\n?0" +
+  "|0(?:\\n?0){8,}(?:\\n?\\d)?";
 
 export const patterns = [
   // 결함(4차 감사) 대응 — 원래 접미부 문자클래스 [A-Za-z0-9_-] 는 개행(\n)을 포함하지
@@ -29,11 +40,26 @@ export const patterns = [
   // 숫자열까지 개행 허용을 넓히면 "버전 12345\n:뒤에 20자 이상 식별자가 오는 무관한
   // 코드"까지 오탐할 위험이 커진다(콜론 뒤 분할보다 훨씬 흔한 코드 패턴).
   { name: "telegram-bot-token", regex: /\b\d{5,}:[A-Za-z0-9_\n-]{20,}\b/ },
-  { name: "service-role-key", regex: /\bservice_role_[A-Za-z0-9_-]{16,}\b/ },
+  // 결함(6차 감사) 대응 — 5차에 telegram-bot-token 만 줄바꿈 분할에 고쳤고 이 패턴은
+  // 그대로 남아 6차에도 재현됐다(6차 평가관 실증). 위와 같은 원리로 접두사
+  // (service_role_)뒤 식별자 문자클래스에만 \n 을 추가한다 — 접두사 자체는 그대로 둔다
+  // (접두사까지 줄바꿈을 허용하면 "service_role_" 문자열이 우연히 줄 끝에 걸리는 무관한
+  // 코드까지 오탐할 위험이 커진다).
+  { name: "service-role-key", regex: /\bservice_role_[A-Za-z0-9_\n-]{16,}\b/ },
   { name: "private-key-block", regex: /BEGIN (RSA|OPENSSH|PRIVATE) KEY/ },
   // 특정 PC 에만 있는 경로. 코드·템플릿에 박히면 다른 PC 에서 조용히 없는 파일을 가리킨다.
-  // 테스트 fixture 는 제외한다(아래 isScannable).
-  { name: "machine-absolute-path", regex: /[A-Za-z]:\\{1,2}Users\\{1,2}[A-Za-z0-9._-]+\\{1,2}|[A-Za-z]:\\{1,2}Dev\\{1,2}HuAIChatroomSystem/ },
+  // 이 패턴만은 테스트 파일에도 적용한다(findSecretHits 의
+  // PATTERNS_ALSO_APPLIED_TO_TEST_FILES) — 절대경로는 픽스처로 쓸 이유가 없다.
+  // 패턴 문자열을 조각으로 조립하는 이유: 이 패턴을 리터럴로 그대로 쓰면 스캐너가
+  // 자기 소스를 스캔할 때 자기 자신에게 걸린다(테스트 파일에도 이 패턴을 적용하게
+  // 바꾼 뒤 실제로 그렇게 됐다). 조각으로 나누면 탐지 동작은 같고 자기 매칭만 피한다.
+  {
+    name: "machine-absolute-path",
+    regex: new RegExp(
+      `[A-Za-z]:\\\\{1,2}Users\\\\{1,2}[A-Za-z0-9._-]+\\\\{1,2}` +
+        `|[A-Za-z]:\\\\{1,2}${"Dev"}\\\\{1,2}${"HuAI"}${"ChatroomSystem"}`
+    )
+  },
   // 결함 2 대응 — 벤더 API 키. 문서·예제 플레이스홀더("sk-ant-YOUR_KEY_HERE", "AKIAIOSFODNN7EXAMPLE"
   // 같은 것들)는 대개 숫자가 안 섞여 있거나 잘 알려진 예시 문자열이라는 점을 이용해 오탐을
   // 줄인다 — 접두사 뒤에 숫자가 최소 하나는 있어야 매칭되게 하거나(대부분의 키), AWS 는
@@ -58,9 +84,12 @@ export const patterns = [
   // 대조 확인함(저장소 전체에 `"telegramChatId":`/`"telegram_chat_id":` 형태의 실제 매치가
   // 하나도 없다). *.test.ts/*.test.mjs 의 placeholder chat_id(-1001, -1001234567890 등)는
   // isScannable() 이 테스트 파일 자체를 스캔 대상에서 제외하므로 이중으로 안전하다.
+  // 결함(6차 감사) 대응 — 키/값 사이(\s*)는 이미 개행을 허용하지만, 값 자체의 숫자열
+  // (\d{4,})은 개행을 안 받아 그 안쪽을 쪼개면(예: `"-1004\n567890123`) 매치가 끊겨
+  // 통과했다(6차 평가관 실증). 숫자열 문자클래스에만 \n 을 추가한다.
   {
     name: "telegram-chat-id-dump",
-    regex: /\\?"telegram(?:ChatId|_chat_id)\\?"\s*:\s*\\?"-?\d{4,}/
+    regex: /\\?"telegram(?:ChatId|_chat_id)\\?"\s*:\s*\\?"-?[0-9\n]{4,}/
   },
   // 결함(3차 감사) 대응 — 위 telegram-chat-id-dump 는 `"key": "value"` JSON 직렬화
   // 모양에만 반응한다. 3차 평가관이 다음 세 가지 실측 우회를 확인했다:
@@ -76,9 +105,12 @@ export const patterns = [
   // 오탐 방지: 값의 형태만으로는 진짜 chat id 와 관례적 placeholder(-1001234567890 등)를
   // 자릿수로 구분할 수 없다(둘 다 13자리) — 그래서 이 저장소가 실제로 쓰는 placeholder
   // 값을 이름과 무관하게 예외 처리한다(위 KNOWN_PLACEHOLDER_CHAT_ID_SUFFIXES 정의부 참고).
+  // 결함(6차 감사) 대응 — "-100" 뒤 숫자열(\d{10,})도 개행을 안 받아 그 안쪽을 쪼개면
+  // (예: `-1009\n99999999`) 매치가 끊겨 통과했다(6차 평가관 실증). 숫자열 문자클래스에만
+  // \n 을 추가한다 — "-100" 접두사와 placeholder 예외(부정형 lookahead)는 그대로 둔다.
   {
     name: "telegram-chat-id-bare-value",
-    regex: new RegExp(`(?<!\\d)-100(?!(?:${CHAT_ID_PLACEHOLDER_EXCLUSION})\\b)\\d{10,}\\b`)
+    regex: new RegExp(`(?<!\\d)-100(?!(?:${CHAT_ID_PLACEHOLDER_EXCLUSION})\\b)[0-9\\n]{10,}\\b`)
   }
 ];
 
@@ -100,7 +132,10 @@ export function isScannable(path) {
   const normalized = path.replace(/\\/g, "/");
   if (IGNORED_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false;
   if (BINARY_EXTENSION_PATTERN.test(path)) return false;
-  return !EXCLUDE_PATH_PATTERNS.some((exclude) => exclude.test(path));
+  // 테스트 파일도 스캔 대상에 넣는다 — 어떤 패턴을 적용할지는 findSecretHits() 가
+  // 파일 종류를 보고 고른다(PATTERNS_ALSO_APPLIED_TO_TEST_FILES 참고). 예전처럼 여기서
+  // 통째로 걸러내면 절대경로 같은 진짜 결함까지 같이 숨는다.
+  return true;
 }
 
 // 확장자 블랙리스트에 없는 바이너리(예: 확장자가 아예 없는 바이너리, 목록에 없는
@@ -167,15 +202,42 @@ export function looksBinary(path) {
 // 널바이트를 구분자로 보고 제거한 뒤(주변 텍스트는 그대로 붙여) 스캔에 넘긴다 —
 // 정상 텍스트에는 애초에 널바이트가 없으므로 이 치환은 정상 파일에 아무 영향이
 // 없다.
-const NULL_BYTE = String.fromCharCode(0);
+//
+// 결함(6차 감사) 대응 — 널바이트(0x00)만 걷어내던 이전 버전은 널이 아닌 다른
+// 제어문자(예: 0x01) 하나로 토큰을 쪼개도 그대로 뚫렸다(6차 평가관 실증 — 샘플
+// 512바이트 중 1개(≈0.2%)라 looksBinary() 의 바이너리 판정 문턱(30%)에도 안
+// 걸린다). 5차의 널바이트 취약점과 같은 근본 원인(문자클래스가 구분자에서 끊김)이
+// 널 아닌 제어문자로 변형돼 재현된 것 — 그래서 널바이트 하나만이 아니라, 텍스트에
+// 흔한 탭(0x09)/개행(0x0A)/캐리지리턴(0x0D)을 제외한 모든 제어문자(0x00~0x1F,
+// 0x7F DEL)를 구분자로 보고 제거한다. 정상 텍스트(UTF-8 한글 포함)에는 이 범위의
+// 문자가 애초에 없으므로 이 치환은 정상 파일에 아무 영향이 없다(아래 controlByteRatio
+// 의 "탭/개행/캐리지리턴 제외" 판단 기준과 동일한 문자 집합).
+const CONTROL_CHAR_PATTERN = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
 
-export function stripNullBytes(text) {
-  return text.indexOf(NULL_BYTE) === -1 ? text : text.split(NULL_BYTE).join("");
+export function stripControlCharacters(text) {
+  return text.replace(CONTROL_CHAR_PATTERN, "");
+}
+
+// 테스트 파일에도 적용하는 패턴.
+//
+// 테스트는 시크릿처럼 생긴 픽스처(가짜 봇 토큰, placeholder chat id)를 일부러 쓰기 때문에
+// 대부분의 패턴에서 제외한다. 그런데 "개발자 PC 절대경로"는 픽스처로 쓸 이유가 없는데도
+// 그 제외에 같이 묻혀 있었다 — 실제로 local-gateway-consumer.test.ts 가 기대값에
+// 개발자 PC 저장소 절대경로를 박아둔 탓에 다른 경로에 체크아웃하면 verify:all 이
+// gate20 에서 통째로 멈추고 있었는데, 이 저장소가 커밋 118d0d8 에서 "절대경로 제거"라고
+// 잡았다던 바로 그 결함이 test 예외 뒤에 숨어 5라운드 내내 안 걸렸다(6차 감사 발견).
+const PATTERNS_ALSO_APPLIED_TO_TEST_FILES = new Set(["machine-absolute-path"]);
+
+function isTestFile(file) {
+  return EXCLUDE_PATH_PATTERNS.some((exclude) => exclude.test(file));
 }
 
 export function findSecretHits(file, text, scanPatterns = patterns) {
+  const applicable = isTestFile(file)
+    ? scanPatterns.filter(({ name }) => PATTERNS_ALSO_APPLIED_TO_TEST_FILES.has(name))
+    : scanPatterns;
   const hits = [];
-  for (const { name, regex } of scanPatterns) {
+  for (const { name, regex } of applicable) {
     const match = regex.exec(text);
     if (match) hits.push(`${file} [${name}] ${match[0].slice(0, 60)}`);
   }
@@ -290,9 +352,10 @@ function main() {
   const skipped = getSkippedFiles();
   const hits = [];
   for (const file of files) {
-    // 결함(5차 감사) 대응 — 널바이트가 (바이너리로 판정될 만큼은 아니게) 섞여 있어도
-    // 무시하지 않는다. 구분자로 보고 제거한 뒤 나머지 텍스트를 그대로 스캔한다.
-    const text = stripNullBytes(readFileSync(file, "utf8"));
+    // 결함(5·6차 감사) 대응 — 널바이트를 포함한 제어문자가 (바이너리로 판정될
+    // 만큼은 아니게) 섞여 있어도 무시하지 않는다. 구분자로 보고 제거한 뒤 나머지
+    // 텍스트를 그대로 스캔한다.
+    const text = stripControlCharacters(readFileSync(file, "utf8"));
     hits.push(...findSecretHits(file, text));
   }
 

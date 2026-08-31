@@ -24,7 +24,7 @@ const completeEnv = {
   BOT_SERVICE_CLAUDE_BOT_USERNAME: "claude_live_bot",
   BOT_SERVICE_CODEX_BOT_USERNAME: "codex_live_bot",
   BOT_SERVICE_AUDITOR_BOT_USERNAME: "auditor_live_bot",
-  LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\Dev\\HuAIChatroomSystem",
+  LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\repo",
   LOCAL_GATEWAY_ALLOWED_ADAPTERS: "codex,claude_code"
 };
 

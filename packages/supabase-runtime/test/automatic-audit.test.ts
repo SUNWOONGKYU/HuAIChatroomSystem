@@ -41,7 +41,7 @@ test("세션 기록에 실제 산출물이 섞여 있으면 감사한다", () =>
 
 test("역슬래시 경로에서도 세션 기록을 알아본다", () => {
   // 게이트웨이가 Windows 경로를 그대로 실어 보낸다.
-  assert.equal(producedRealArtifacts([artifact("C:\\Dev\\HuAIChatroomSystem\\sessions\\raw\\x.jsonl")]), false);
+  assert.equal(producedRealArtifacts([artifact("C:\\repo\\sessions\\raw\\x.jsonl")]), false);
 });
 
 test("이름에 sessions 가 들어간 실제 소스는 살린다", () => {

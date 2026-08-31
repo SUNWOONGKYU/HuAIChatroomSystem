@@ -134,7 +134,7 @@ function titleOf(text: string): string {
         roomId: "room-1",
         actorId: "actor-codex",
         adapterType: "codex" as const,
-        projectPath: "C:\\Dev\\HuAIChatroomSystem",
+        projectPath: "C:\\repo",
         timeoutMs: 600000,
         gatewayId: "gateway-1"
       }

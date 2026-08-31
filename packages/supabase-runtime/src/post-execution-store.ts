@@ -22,6 +22,7 @@ import { type TaskQuiz } from "./task-quiz.js";
 import { isUuid } from "./small-utils.js";
 import { SupabaseOutboxCore } from "./outbox-core.js";
 import { SupabaseAuditVerificationStore } from "./audit-verification-store.js";
+import { pruneRoomBackupSnapshotRows, maxSnapshotsPerRoomFromEnv } from "./room-backup.js";
 
 export class SupabasePostExecutionStore {
   constructor(
@@ -210,6 +211,21 @@ export class SupabasePostExecutionStore {
         prefer: "return=minimal"
       }).then((response) => (response.status === 409 ? undefined : response.expectOk())).catch(() => undefined);
     }
+
+    // 결함(6차 감사) 대응 — 위 루프가 남기는 snapshot_type='artifact' 행은 코드
+    // 전체에 지우는 경로가 없어 무한 누적됐다(6차 평가관 발견). 산출물 자체의
+    // 영구 기록은 huai_artifacts(위에서 이미 저장)가 갖고 있으므로, 이 포인터
+    // 행은 room 스냅샷과 같은 방식(최근 N개만 유지)으로 안전하게 정리할 수 있다 —
+    // 근거는 room-backup.ts 의 pruneRoomBackupSnapshotRows 주석 참고. 정리 실패는
+    // 이 함수 자체를 실패시키지 않는다(pruneRoomBackupSnapshotRows 가 이미 예외를
+    // 삼킨다). saved.length === 0 이면 이미 위(182줄)에서 return 했으므로 여기 도달한
+    // 시점엔 saved.length > 0 이 보장된다.
+    await pruneRoomBackupSnapshotRows(
+      { request: (method, path, options) => this.core.client.request(method, path, options) },
+      request.roomId,
+      maxSnapshotsPerRoomFromEnv(),
+      "artifact"
+    );
 
     await this.enqueueDocumentDeliveries(request, collected, savedEvent.event_id);
   }

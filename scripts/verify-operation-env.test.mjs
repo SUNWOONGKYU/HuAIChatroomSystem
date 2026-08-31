@@ -133,7 +133,7 @@ function sampleEnv() {
     BOT_SERVICE_AUDITOR_WEBHOOK_SECRET: "test-auditor-secret",
     BOT_SERVICE_OUTBOX_ENABLED: "true",
     BOT_SERVICE_OUTBOX_POLL_MS: "1000",
-    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\Dev\\HuAIChatroomSystem;C:\\tmp",
+    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\repo;C:\\tmp",
     LOCAL_GATEWAY_ALLOWED_ADAPTERS: "codex,claude_code",
     LOCAL_GATEWAY_ALLOW_NETWORK: "false",
     LOCAL_GATEWAY_MAX_RUNTIME_MS: "600000"

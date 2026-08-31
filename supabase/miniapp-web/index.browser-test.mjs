@@ -15,6 +15,22 @@ const ROOM_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const DECIDABLE_TASK = "11111111-1111-4111-8111-111111111111";
 const RUNNING_TASK = "22222222-2222-4222-8222-222222222222";
 
+// 결함(6차 감사) 대응 — 다른 브라우저 테스트(breakout-game 등)의 고정 대기 flakiness 와
+// 같은 종류가 여기 6)단계에도 있었다: window.__tasksLoads 를 참조하는 waitForFunction 은
+// 그 전역이 이 페이지에 존재한 적이 없어 조건이 늘 참으로 즉시 통과하는 장식이었고,
+// 실제로는 뒤이은 고정 300ms 대기 하나로 새로고침 fetch 가 끝나길 "바라는" 구조였다.
+// server.tasksLoads(라우트 핸들러가 Node 쪽에서 직접 증가시키는 값)를 실제로 폴링해
+// fetch 완료를 확인한다 — Playwright API 로 브라우저 쪽 조건을 폴링하는 다른 곳들과
+// 다르게, 이건 Node 프로세스 안의 값이라 page.evaluate 없이 바로 확인할 수 있다.
+async function waitForNodeCondition(predicate, description, { timeoutMs = 5000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (predicate()) return;
+    if (Date.now() >= deadline) throw new Error(`timeout(${timeoutMs}ms): ${description} 기다리다 실패했다`);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 const fixture = await startBrowserGameFixture({ envName: "OPERATION_CENTER_URL", fileName: "index.html" });
 const origin = new URL(fixture.url).origin;
 const functionsBase = origin + "/fn";
@@ -186,8 +202,12 @@ await page.waitForSelector("#overlay.open", { state: "hidden", timeout: 3000 });
 // 6) 승인 뒤 다시 불러오면 그 작업은 더 이상 결정 대상이 아니다(배지 사라짐).
 const loadsBefore = server.tasksLoads;
 await page.locator("#refresh-btn").tap();
-await page.waitForFunction((n) => (window.__tasksLoads ?? 0) >= 0 && true, loadsBefore, { timeout: 1000 }).catch(() => {});
-await page.waitForTimeout(300);
+await waitForNodeCondition(() => server.tasksLoads > loadsBefore, "새로고침 버튼을 누른 뒤 /miniapp-tasks 재조회가 끝나기를");
+await page.waitForFunction(
+  () => document.querySelectorAll("#board .task-card .pill.decidable").length === 0,
+  null,
+  { timeout: 3000 }
+);
 assert.ok(server.tasksLoads > loadsBefore, "새로고침 버튼이 실제로 목록을 다시 불러와야 한다");
 assert.equal(await page.locator("#board .task-card .pill.decidable").count(), 0, "승인한 작업에 결정 필요 배지가 남으면 안 된다");
 

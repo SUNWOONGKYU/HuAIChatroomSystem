@@ -23,7 +23,7 @@ import { parseLocalGatewayRuntimeConfig } from "../dist/apps/local-gateway/src/r
 const BASE_ENV = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
-  LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\Dev\\HuAIChatroomSystem",
+  LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\repo",
   LOCAL_GATEWAY_ALLOWED_ADAPTERS: "codex,claude_code"
 };
 

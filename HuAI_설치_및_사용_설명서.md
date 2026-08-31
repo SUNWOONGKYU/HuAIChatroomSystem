@@ -273,6 +273,36 @@ gateway_id가 다르므로(게이트웨이 프로세스 하나는 방 하나만 
    실행이 끝나면 화면 마지막 줄에 `https://huai-board-xxxxx.vercel.app` 같은 형태의 주소가
    나옵니다 — **이 주소를 메모해둡니다** (9-4에서 씁니다).
 
+   처음 배포하는 것이라면 Vercel이 `huai-board`라는 새 프로젝트를 만듭니다.
+
+3. ⚠️ **(중요) 이 프로젝트를 고정해둡니다 — 안 하면 다음 업데이트 때 화면 주소가 또
+   바뀝니다.**
+
+   왜: 9-2의 1번 명령(`build-miniapp-web.mjs`)은 실행할 때마다 `dist\miniapp-web` 폴더를
+   통째로 지우고 새로 만듭니다. 이 폴더 안에 "어느 Vercel 프로젝트에 올릴지" 기억해두는
+   연결 정보(`.vercel` 폴더)도 같이 지워지는데, 아래 값을 미리 채워두면 지워질 때마다
+   빌드 스크립트가 그 연결 정보를 다시 심어줘서 매번 같은 프로젝트에 배포됩니다. 채워두지
+   않으면 다음에 화면을 다시 빌드·배포할 때(예: 시스템 업데이트 후) Vercel이 폴더 이름만
+   보고 완전히 새 프로젝트를 또 만들어버립니다 — 그러면 주소가 바뀌는데, 9-4에서
+   BotFather에 이미 등록해둔 "협업 운영센터 열기" 버튼은 여전히 **옛날 주소**를 가리키고
+   있어서 조용히 먹통이 됩니다.
+
+   1. 브라우저에서 https://vercel.com/dashboard 를 열고 방금 만든 `huai-board` 프로젝트를
+      클릭합니다.
+   2. 위쪽 메뉴에서 **Settings → General**로 들어갑니다.
+   3. **Project ID**(`prj_...`로 시작)와, 같은 화면 또는 계정 설정에 있는 **Team ID /
+      Org ID**(`team_...`로 시작. 개인 계정이면 이 화면에 없을 수도 있습니다 — 그때는
+      개인 계정 Settings의 "Your ID" 값을 씁니다)를 각각 복사합니다.
+   4. `.env.operation.local`을 메모장으로 다시 열고, `VERCEL_BOARD_PROJECT_ID`와
+      `VERCEL_BOARD_ORG_ID`로 시작하는 줄을 찾아 각각 값을 붙여넣습니다:
+
+      ```text
+      VERCEL_BOARD_PROJECT_ID=prj_xxxxxxxxxxxxxxxxxxxxxxxx
+      VERCEL_BOARD_ORG_ID=team_xxxxxxxxxxxxxxxxxxxxxxxx
+      ```
+
+   5. 저장하고 메모장을 닫습니다.
+
 ### 9-3. Supabase 쪽 서버(Edge Functions) 배포
 
 왜: 방금 올린 화면은 데이터를 직접 갖고 있지 않습니다. Supabase에 있는 서버 함수

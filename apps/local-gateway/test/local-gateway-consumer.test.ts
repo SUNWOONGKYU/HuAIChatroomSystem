@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import nodePath from "node:path";
 import { FakeBotServiceStore } from "../../bot-service/src/fake-store.js";
 import { runLocalGatewayConsumerOnce, type LocalGatewayOutboxStore } from "../src/consumer.js";
 import { TelegramUpdateEnvelope, type GatewayEvent, type ExecutionRequest, type OutboxRecord } from "../../../packages/contracts/src/index.js";
@@ -613,7 +614,12 @@ test("antigravity 레거시 값과 gemini_web은 Gemini 웹 브리지를 사용�
   };
   const args = resolveAdapterPlan(request).args;
 
-  assert.equal(args[0], "C:\\Dev\\HuAIChatroomSystem\\scripts\\gemini-web-adapter.mjs");
+  // 구현(packages/ai-adapters/src/index.ts)은 리포 루트를 동적으로 찾아 브리지 경로를
+  // 만든다. 여기 기대값을 개발자 PC 절대경로로 박아두면 다른 경로에 체크아웃한 순간
+  // verify:all 이 이 게이트에서 멈춘다 — 실제로 그 상태였고, 시크릿 스캐너가 *.test.ts 를
+  // 제외하고 있어 machine-absolute-path 패턴도 못 잡았다. 경로 끝부분만 확인한다.
+  assert.match(args[0], /[\\/]scripts[\\/]gemini-web-adapter\.mjs$/);
+  assert.equal(nodePath.isAbsolute(args[0]), true, "브리지 경로는 절대경로여야 한다");
   assert.equal(args.includes("--timeout"), true);
   assert.equal(planInput(request), "감사해줘");
   const geminiPlan = resolveAdapterPlan({ ...request, adapterType: "gemini_web" });

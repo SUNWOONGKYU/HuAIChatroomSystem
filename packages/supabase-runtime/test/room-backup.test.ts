@@ -473,6 +473,51 @@ test("pruneRoomBackupSnapshotRows: 상한 초과분을 GET 후 DELETE 로 실제
   assert.equal(deleteCall?.path, "/huai_recovery_snapshots?snapshot_id=in.(s1)");
 });
 
+// 결함(6차 감사) 대응 — snapshotType 이 'room' 고정이라 'artifact' 행을 지우는
+// 경로가 코드 전체에 없어 무한 누적됐다(6차 평가관 발견). snapshotType 매개변수화
+// 뒤, 실제로 쿼리의 snapshot_type 조건이 바뀌는지 확인한다.
+test("pruneRoomBackupSnapshotRows: snapshotType 을 넘기면 그 타입만 조회·정리한다", async () => {
+  const calls: Array<{ method: string; path: string }> = [];
+  const request: RoomBackupRestRequest = async (method, path) => {
+    calls.push({ method, path });
+    if (method === "GET") {
+      return {
+        status: 200,
+        async expectOk() {},
+        async json<T>() {
+          return [
+            { snapshot_id: "a2", created_at: "2026-08-02T00:00:00.000Z" },
+            { snapshot_id: "a1", created_at: "2026-08-01T00:00:00.000Z" }
+          ] as unknown as T;
+        }
+      };
+    }
+    return { status: 200, async expectOk() {}, async json<T>() { return undefined as T; } };
+  };
+
+  const deleted = await pruneRoomBackupSnapshotRows({ request }, ROOM_ID, 1, "artifact");
+
+  assert.deepEqual(deleted, ["a1"]);
+  const getCall = calls.find((call) => call.method === "GET");
+  assert.equal(
+    getCall?.path,
+    `/huai_recovery_snapshots?room_id=eq.${ROOM_ID}&snapshot_type=eq.artifact&select=snapshot_id,created_at`
+  );
+});
+
+test("pruneRoomBackupSnapshotRows: snapshotType 을 안 넘기면 여전히 'room' 이 기본값이다(기존 호출부 하위호환)", async () => {
+  const calls: Array<{ method: string; path: string }> = [];
+  const request: RoomBackupRestRequest = async (method, path) => {
+    calls.push({ method, path });
+    return { status: 200, async expectOk() {}, async json<T>() { return [] as unknown as T; } };
+  };
+
+  await pruneRoomBackupSnapshotRows({ request }, ROOM_ID, 240);
+
+  const getCall = calls.find((call) => call.method === "GET");
+  assert.match(getCall?.path ?? "", /snapshot_type=eq\.room\b/);
+});
+
 test("pruneRoomBackupSnapshotRows: 지울 게 없으면 DELETE 를 호출하지 않는다", async () => {
   const calls: Array<{ method: string; path: string }> = [];
   const request: RoomBackupRestRequest = async (method, path) => {

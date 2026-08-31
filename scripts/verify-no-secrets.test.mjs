@@ -13,7 +13,7 @@ import {
   getSkippedFiles,
   looksBinary,
   controlByteRatio,
-  stripNullBytes
+  stripControlCharacters
 } from "./verify-no-secrets.mjs";
 
 function regexFor(name) {
@@ -36,6 +36,23 @@ test("줄바꿈으로 쪼갠 텔레그램 봇 토큰도 탐지한다 — 4차 �
 test("숫자열:콜론 뒤가 20자 미만이면(줄바꿈으로 쪼개도) 통과한다", () => {
   const regex = regexFor("telegram-bot-token");
   assert.doesNotMatch("id: 123456789:short\nmore", regex);
+});
+
+// 결함(6차 감사) 대응 — 5차에 telegram-bot-token 만 줄바꿈 분할을 고쳤고
+// service-role-key/telegram-chat-id-dump/telegram-chat-id-bare-value 는 그대로
+// 남아 6차 평가관이 세 패턴 전부 재현했다. 같은 방식(식별자/숫자열 문자클래스에만
+// \n 추가)으로 넓혔는지 양성(분할 탐지)·음성(오탐 안 늘어남) 둘 다 검증한다.
+test("service_role_ 키를 탐지한다(줄바꿈 없는 정상 형태)", () => {
+  const regex = regexFor("service-role-key");
+  assert.match("SUPABASE_SERVICE_ROLE_KEY=service_role_aBc123XyZ9876543210defgh", regex);
+});
+test("줄바꿈으로 쪼갠 service_role_ 키도 탐지한다 — 6차 감사 우회 재현", () => {
+  const regex = regexFor("service-role-key");
+  assert.match("leak: service_role_aBc123XyZ98765\n43210defgh", regex);
+});
+test("service_role_ 뒤 식별자가 16자 미만이면(줄바꿈으로 쪼개도) 통과한다", () => {
+  const regex = regexFor("service-role-key");
+  assert.doesNotMatch("id: service_role_short\nmore", regex);
 });
 
 // 결함 2 대응 — 벤더 API 키 접두사 8종. 실제 키 모양(양성)은 잡고, 문서·예제
@@ -123,9 +140,14 @@ test("node_modules/dist/.git 은 스캔 대상에서 제외된다", () => {
   assert.equal(isScannable("dist/apps/local-gateway/src/index.js"), false);
   assert.equal(isScannable(".git/config"), false);
 });
-test("테스트/브라우저 테스트 파일은 여전히 제외된다", () => {
-  assert.equal(isScannable("apps/local-gateway/test/artifact-publisher.test.ts"), false);
-  assert.equal(isScannable("supabase/miniapp-web/egg-game.browser-test.mjs"), false);
+// 결함(6차 감사) 대응 — isScannable() 은 더 이상 테스트/브라우저 테스트 파일을 통째로
+// 걸러내지 않는다(machine-absolute-path 같은 진짜 결함이 test 제외 뒤에 숨어 5라운드
+// 안 걸렸던 사건 대응, verify-no-secrets.mjs 의 isScannable 주석 참고). 어떤 패턴을
+// 적용할지는 findSecretHits() 가 파일 종류로 골라서 처리한다 — 이 테스트는 그 역할
+// 분담이 유지되는지 확인한다.
+test("테스트/브라우저 테스트 파일도 이제 스캔 대상이다(패턴 선별은 findSecretHits 가 맡는다)", () => {
+  assert.equal(isScannable("apps/local-gateway/test/artifact-publisher.test.ts"), true);
+  assert.equal(isScannable("supabase/miniapp-web/egg-game.browser-test.mjs"), true);
 });
 
 // 결함(3차 감사) 대응 — 화이트리스트를 블랙리스트로 뒤집었다. start-services-detached.ps1
@@ -227,6 +249,16 @@ test("테스트 fixture 의 짧은 placeholder chat_id(-1001 등)는 애초에 �
   const regex = regexFor("telegram-chat-id-dump");
   assert.doesNotMatch('telegram_chat_id: "-1001"', regex);
 });
+// 결함(6차 감사) 대응 — 값 숫자열(\d{4,})이 개행을 안 받아, 값 안쪽을 줄바꿈으로
+// 쪼개면 매치가 끊겨 통과했다(6차 평가관 실증).
+test("값의 숫자열을 줄바꿈으로 쪼개도 탐지한다 — 6차 감사 우회 재현", () => {
+  const regex = regexFor("telegram-chat-id-dump");
+  assert.match('{"telegramChatId": "-1\n004334034373"}', regex);
+});
+test("값 숫자열이 3자리 미만이면(줄바꿈으로 쪼개도) 통과한다", () => {
+  const regex = regexFor("telegram-chat-id-dump");
+  assert.doesNotMatch('{"telegramChatId": "-1\n2"}', regex);
+});
 // 결함(3차 감사) 대응 — telegram-chat-id-dump 는 `"key": "value"` 모양만 본다. 3차
 // 평가관이 실측한 세 가지 우회(CSV·따옴표 없는 콜론·홑따옴표)를 재현·검증한다.
 test("CSV 형태(키와 값이 다른 줄)의 진짜 chat_id 를 탐지한다", () => {
@@ -258,6 +290,20 @@ test("placeholder 와 자릿수가 같아도 다른 값이면 탐지한다 — �
 test("짧은 4자리 placeholder(-1001)는 자릿수 미달이라 애초에 통과한다", () => {
   const regex = regexFor("telegram-chat-id-bare-value");
   assert.doesNotMatch("telegram_chat_id: -1001", regex);
+});
+// 결함(6차 감사) 대응 — "-100" 뒤 숫자열(\d{10,})이 개행을 안 받아, 그 안쪽을
+// 줄바꿈으로 쪼개면 매치가 끊겨 통과했다(6차 평가관 실증).
+test("숫자열을 줄바꿈으로 쪼개도 탐지한다 — 6차 감사 우회 재현", () => {
+  const regex = regexFor("telegram-chat-id-bare-value");
+  assert.match("chat id -1004\n315119076 leaked", regex);
+});
+test("숫자열이 10자리 미만이면(줄바꿈으로 쪼개도) 통과한다", () => {
+  const regex = regexFor("telegram-chat-id-bare-value");
+  assert.doesNotMatch("chat id -100\n12 short", regex);
+});
+test("placeholder(-1001234567890)를 줄바꿈으로 쪼개도 여전히 통과한다 — 분할이 오탐을 만들면 안 된다", () => {
+  const regex = regexFor("telegram-chat-id-bare-value");
+  assert.doesNotMatch('const CHAT_ID = "-1001234\n567890";', regex);
 });
 
 test("재발 시나리오 — 파일명이 달라도(outbox_all2.json) 내용이 같으면 잡힌다", () => {
@@ -303,11 +349,20 @@ test("controlByteRatio — 널바이트 1개만 섞인 텍스트는 비율이 �
   assert.ok(controlByteRatio(buffer) < 0.3);
 });
 
-test("stripNullBytes — 널바이트를 제거하고 앞뒤 텍스트를 이어붙인다", () => {
-  assert.equal(stripNullBytes("abc def"), "abcdef");
+test("stripControlCharacters — 널바이트를 제거하고 앞뒤 텍스트를 이어붙인다", () => {
+  assert.equal(stripControlCharacters("abc" + String.fromCharCode(0) + "def"), "abcdef");
 });
-test("stripNullBytes — 널바이트가 없으면 그대로 돌려준다", () => {
-  assert.equal(stripNullBytes("no null bytes here"), "no null bytes here");
+test("stripControlCharacters — 제어문자가 없으면 그대로 돌려준다", () => {
+  assert.equal(stripControlCharacters("no null bytes here"), "no null bytes here");
+});
+test("stripControlCharacters — 탭/개행/캐리지리턴은 지우지 않는다(정상 텍스트 보존)", () => {
+  assert.equal(stripControlCharacters("a\tb\nc\rd"), "a\tb\nc\rd");
+});
+// 결함(6차 감사) 대응 — 널이 아닌 다른 제어문자(0x01 등)도 같은 방식으로 걷어내야
+// 한다. 되돌리면(정규식을 \x00 하나로만 좁히면) 이 테스트가 실패한다.
+test("stripControlCharacters — 널이 아닌 제어문자(0x01)도 제거한다 — 6차 감사 우회 재현", () => {
+  const withControlChar = "abc" + String.fromCharCode(0x01) + "def";
+  assert.equal(stripControlCharacters(withControlChar), "abcdef");
 });
 
 test("looksBinary — 널바이트 1개만 섞인 파일은 바이너리로 판정하지 않는다(예전엔 여기서 무음 스킵됐다)", () => {
@@ -337,6 +392,29 @@ test("재현 — 첫 512바이트 안 널바이트 1개 뒤에 숨긴 telegram b
     Buffer.from([0]), // 널바이트 1개 — 예전엔 이거 하나로 파일 전체가 무음 스킵됐다
     Buffer.alloc(150, 0x61),
     Buffer.from("\nBOT_TOKEN=123456789:AAFooBarBaz0123456789AbCdEfGhIj\n", "utf8")
+  ]);
+  writeFileSync(fixturePath, content);
+  try {
+    const result = spawnSync(process.execPath, ["scripts/verify-no-secrets.mjs"], { encoding: "utf8" });
+    assert.equal(result.status, 1, `stdout=${result.stdout}\nstderr=${result.stderr}`);
+    assert.match(result.stderr, /Potential secret material found/);
+    assert.match(result.stderr, /telegram-bot-token/);
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
+});
+
+// 결함(6차 감사) 대응 — 널바이트가 아닌 다른 제어문자(0x01)로 토큰 한가운데를 쪼개도
+// 예전엔(stripNullBytes 가 \x00 만 제거하던 시절) 무음 통과했다(6차 평가관 실증 — 되돌려서
+// 직접 재현해 확인함). 이 테스트는 그 구체적인 우회가 이제 막혔는지 실제 스크립트를
+// 서브프로세스로 실행해 검증한다 — 되돌리면(stripControlCharacters 의 정규식을 \x00 하나로만
+// 좁히면) 이 테스트는 exit 0 을 받아 실패한다.
+test("재현 — telegram bot token 한가운데를 널 아닌 제어문자(0x01)로 쪼개도 실제로 잡는다(6차 감사 우회)", () => {
+  const fixturePath = "scripts/__ctrlchar-secret-scan-fixture.tmp.js";
+  const content = Buffer.concat([
+    Buffer.from("BOT_TOKEN=123456789:AAFooBarBaz0123", "utf8"),
+    Buffer.from([0x01]), // 널바이트가 아닌 제어문자 1개 — 예전엔 이거 하나로 토큰 매치가 끊겨 통과했다
+    Buffer.from("456789AbCdEfGhIj\n", "utf8")
   ]);
   writeFileSync(fixturePath, content);
   try {

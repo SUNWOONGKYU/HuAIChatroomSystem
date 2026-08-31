@@ -405,20 +405,38 @@ export function recoverySnapshotRowsToPrune(rows: readonly RecoverySnapshotRow[]
 }
 
 /**
- * 방 하나의 huai_recovery_snapshots(snapshot_type='room') 행 중 최근 maxCount 개를
+ * 방 하나의 huai_recovery_snapshots(snapshot_type=snapshotType) 행 중 최근 maxCount 개를
  * 넘는 오래된 행을 지운다. pruneRoomBackupSnapshots(파일)과 같은 best-effort 원칙 —
  * 조회·삭제가 실패해도 예외를 던지지 않고 빈 배열을 돌려준다. 정리 실패가 백업 자체의
  * 성공 여부에 영향을 주면 안 된다.
+ *
+ * 결함(6차 감사) 대응 — 원래 이 함수는 snapshot_type='room' 으로 고정돼 있어서,
+ * 'artifact' 타입(post-execution-store.ts 의 산출물 저장 경로가 매번 남기는 복구
+ * 포인터) 행은 지우는 경로가 코드 전체에 없어 무한 누적됐다(6차 평가관 발견). 두
+ * 타입은 성격이 다르다 — 'room' 은 방 전체 상태를 통째로 다시 담는 스냅샷이라
+ * 최신 것 하나가 이전 것들을 완전히 대체하므로("로그 회전", 위 DEFAULT_MAX_SNAPSHOTS_PER_ROOM
+ * 주석 참고) 지워도 정보 손실이 없다. 'artifact' 는 산출물 하나하나가 서로 다른
+ * 고유 파일을 가리키는 포인터라 서로 대체 관계가 아니지만, 그 산출물 자체의 영구
+ * 기록은 huai_artifacts 테이블이 이미 갖고 있다(post-execution-store.ts 의 삽입
+ * 순서 참고 — huai_artifacts 먼저, huai_recovery_snapshots 는 그 다음 "복구용
+ * 보조 포인터"로 남긴다는 주석이 있다) — 그러니 오래된 'artifact' 포인터 행을
+ * 지워도 산출물 자체를 못 찾게 되는 게 아니라, 그 산출물에 대한 보조 복구 경로
+ * 하나가 줄어들 뿐이다. snapshotType 을 매개변수화해서 두 타입 모두 같은 정리
+ * 로직을 재사용한다 — 상한은 일단 room 과 같은 값(maxSnapshotsPerRoomFromEnv)을
+ * 쓴다(별도 산출물 전용 상한을 새로 만들 만한 근거 데이터가 없어, 기존에 이미
+ * 검증된 보존 기간 상수를 그대로 재사용하는 쪽을 택했다 — 필요해지면 나중에
+ * 분리한다).
  */
 export async function pruneRoomBackupSnapshotRows(
   deps: Pick<RoomBackupDeps, "request">,
   roomId: string,
-  maxCount: number
+  maxCount: number,
+  snapshotType: string = "room"
 ): Promise<string[]> {
   try {
     const listResponse = await deps.request(
       "GET",
-      `/huai_recovery_snapshots?room_id=eq.${encodeURIComponent(roomId)}&snapshot_type=eq.room&select=snapshot_id,created_at`
+      `/huai_recovery_snapshots?room_id=eq.${encodeURIComponent(roomId)}&snapshot_type=eq.${encodeURIComponent(snapshotType)}&select=snapshot_id,created_at`
     );
     const rows = await listResponse.json<RecoverySnapshotRow[]>();
     const idsToDelete = recoverySnapshotRowsToPrune(rows ?? [], maxCount);

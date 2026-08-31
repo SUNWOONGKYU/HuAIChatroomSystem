@@ -5,7 +5,7 @@ import { type OutboxRecord } from "../../../packages/contracts/src/index.js";
 
 test("parses local gateway runtime env", () => {
   const config = parseLocalGatewayRuntimeConfig({
-    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\Dev\\HuAIChatroomSystem;C:\\tmp",
+    LOCAL_GATEWAY_ALLOWED_ROOTS: "C:\\repo;C:\\tmp",
     LOCAL_GATEWAY_ALLOWED_ADAPTERS: "codex,claude_code",
     LOCAL_GATEWAY_INTERVAL_MS: "250",
     LOCAL_GATEWAY_LIMIT: "7",
@@ -16,7 +16,7 @@ test("parses local gateway runtime env", () => {
     LOCAL_GATEWAY_ALLOW_NETWORK: "true"
   });
 
-  assert.deepEqual(config.policy.allowedProjectRoots, ["C:\\Dev\\HuAIChatroomSystem", "C:\\tmp"]);
+  assert.deepEqual(config.policy.allowedProjectRoots, ["C:\\repo", "C:\\tmp"]);
   assert.deepEqual(config.policy.allowedAdapters, ["codex", "claude_code"]);
   assert.equal(config.intervalMs, 250);
   assert.equal(config.limit, 7);

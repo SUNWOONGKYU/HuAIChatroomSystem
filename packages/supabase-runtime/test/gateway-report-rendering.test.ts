@@ -382,7 +382,7 @@ function makeRequest(): ExecutionRequest {
     actorId: "actor-1",
     requestedBy: "user-1",
     adapterType: "codex",
-    projectPath: "C:\\Dev\\HuAIChatroomSystem",
+    projectPath: "C:\\repo",
     prompt: "do work",
     timeoutMs: 30_000,
     idempotencyKey: "test-idempotency",
@@ -438,7 +438,7 @@ test("gateway report removes low-value implementation details from Telegram text
       "현재 확인 가능한 근거를 종합하면, 전체 완성도는 77/100점으로 평가합니다.",
       "## 분야별 평가",
       "| 분야 | 점수 | 판정 | 확인 근거 |",
-      "📁 C:\\Dev\\HuAIChatroomSystem\\",
+      "📁 C:\\repo\\",
       "📄 OPERATION_STATUS.md",
       "검증 제한도 명시합니다. 이번 환경에서는 실행 정책이 일부 명령을 차단했습니다.",
       "필요 조치: 조회 기능과 복구 검증을 보강해야 합니다."
@@ -778,7 +778,7 @@ test("답이 파일 이름을 언급해도 버리지 않는다", () => {
         text: [
           "조사 결과: `package.json` name 필드 값 = `\"hu-ai-chatroom-system\"`.",
           "",
-          "근거: `C:\Dev\HuAIChatroomSystem\package.json` 2번째 줄 직접 읽음.",
+          "근거: `C:\fixture-project\package.json` 2번째 줄 직접 읽음.",
           "",
           "후속 조치: 불필요. 값 확인 끝."
         ].join("\n")
@@ -825,7 +825,7 @@ test("줄 전체가 경로뿐이면 여전히 버린다", () => {
         attemptId: "attempt-1",
         text: [
           "변경한 파일:",
-          "C:\Dev\HuAIChatroomSystem\packages\orchestrator\src\index.ts",
+          "C:\fixture-project\packages\orchestrator\src\index.ts",
           "dist/apps/bot-service/src/cli.js",
           "node_modules/.bin/tsc",
           "결론: 세 파일을 갱신했습니다."

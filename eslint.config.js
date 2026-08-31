@@ -342,21 +342,27 @@ export default [
     }
   },
   {
+    // 결함(6차 감사) 대응 — forbidden 목록에 "bot-service" 가 빠져 있었다.
+    // ALLOWED_INTERNAL_DEPENDENCIES(scripts/verify-package-boundaries.mjs)는
+    // local-gateway 가 bot-service(형제 app)를 참조하는 걸 금지하는데, 여기 eslint 쪽은
+    // 그 방향을 아예 안 적어 놓아 "안 적혀 있으니 허용"으로 조용히 뚫려 있었다 —
+    // scripts/verify-package-boundaries.mjs 의 verifyLayerTableMatchesEslintConfig 가
+    // 이 종류의 드리프트를 이제 실측으로 잡는다.
     files: ["apps/local-gateway/src/**/*.ts"],
     plugins: { local: localRulesPlugin },
     rules: {
       "no-restricted-imports": ["error", {
         patterns: forbiddenPackagePatterns(
-          ["telegram-ui", "orchestrator", "workflow"],
+          ["telegram-ui", "orchestrator", "workflow", "bot-service"],
           "local-gateway 는 contracts/ai-adapters/supabase-runtime 외 패키지를"
         )
       }],
       "no-restricted-syntax": ["error", ...forbiddenDynamicImportSelectors(
-        ["telegram-ui", "orchestrator", "workflow"],
+        ["telegram-ui", "orchestrator", "workflow", "bot-service"],
         "local-gateway 는 contracts/ai-adapters/supabase-runtime 외 패키지를"
       )],
       "local/no-nonliteral-dynamic-module-load": ["error", forbiddenPackagePatterns(
-        ["telegram-ui", "orchestrator", "workflow"],
+        ["telegram-ui", "orchestrator", "workflow", "bot-service"],
         "local-gateway 는 contracts/ai-adapters/supabase-runtime 외 패키지를"
       )]
     }

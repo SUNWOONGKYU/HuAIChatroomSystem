@@ -50,6 +50,44 @@ test("already stored artifact is not inserted again and emits no artifact_saved 
   assert.equal(calls.requests.some((request) => request.body?.idempotency_key === "artifact-saved:attempt-art"), false);
 });
 
+// 결함(6차 감사) 대응 — snapshot_type='artifact' 행을 남기기만 하고 지우는 경로가
+// 코드 전체에 없어 무한 누적됐다(6차 평가관 발견). 산출물 저장 뒤 같은 방의 상한
+// 초과 'artifact' 행을 실제로 정리하는지 확인한다.
+test("완료된 실행이 산출물을 저장한 뒤, 같은 방의 상한 초과 snapshot_type='artifact' 행을 정리한다", async () => {
+  const previousMax = process.env.HUAI_ROOM_BACKUP_MAX_SNAPSHOTS;
+  process.env.HUAI_ROOM_BACKUP_MAX_SNAPSHOTS = "1";
+  try {
+    const calls = makeFetchSequence(undefined, {
+      existingArtifactSnapshotRows: [
+        { snapshot_id: "old-2", created_at: "2026-08-02T00:00:00.000Z" },
+        { snapshot_id: "old-1", created_at: "2026-08-01T00:00:00.000Z" }
+      ]
+    });
+    const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
+
+    await store.recordGatewayExecutionResult({
+      request: makeRequest(),
+      status: "completed",
+      events: [artifactEvent("docs/report.md", "file:///C:/work/docs/report.md", "sha-1")],
+      occurredAt: "2026-08-14T00:00:00.000Z"
+    });
+
+    const pruneGet = calls.requests.find(
+      (request) => request.method === "GET" && /huai_recovery_snapshots\?.*snapshot_type=eq\.artifact/.test(request.url)
+    );
+    assert.ok(pruneGet, "snapshot_type='artifact' 행을 조회하는 GET 이 있어야 한다");
+
+    const pruneDelete = calls.requests.find(
+      (request) => request.method === "DELETE" && /huai_recovery_snapshots\?snapshot_id=in\./.test(request.url)
+    );
+    assert.ok(pruneDelete, "상한 초과분을 지우는 DELETE 가 있어야 한다");
+    assert.match(pruneDelete!.url, /snapshot_id=in\.\(old-1\)/, "가장 오래된 행만 지워야 한다(최근 1개만 유지)");
+  } finally {
+    if (previousMax === undefined) delete process.env.HUAI_ROOM_BACKUP_MAX_SNAPSHOTS;
+    else process.env.HUAI_ROOM_BACKUP_MAX_SNAPSHOTS = previousMax;
+  }
+});
+
 test("non-uuid task ids skip artifact persistence", async () => {
   const calls = makeFetchSequence();
   const store = new SupabaseOutboxStore({ url: "https://example.supabase.co", serviceRoleKey: "service-role-key", fetchImpl: calls.fetchImpl });
@@ -144,7 +182,15 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 // 순서 고정 큐는 구현에 호출이 하나 늘 때마다 깨진다. URL 로 응답을 정한다.
-function makeFetchSequence(_responses?: Response[], options: { existingArtifact?: boolean } = {}) {
+function makeFetchSequence(
+  _responses?: Response[],
+  options: {
+    existingArtifact?: boolean;
+    // 결함(6차 감사) 대응 — pruneRoomBackupSnapshotRows(snapshot_type='artifact')
+    // 가 조회할 때 돌려줄 기존 행. 상한 초과 시나리오를 만드는 데 쓴다.
+    existingArtifactSnapshotRows?: Array<{ snapshot_id: string; created_at: string }>;
+  } = {}
+) {
   const requests: Array<{ url: string; method: string; body: any }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -159,6 +205,9 @@ function makeFetchSequence(_responses?: Response[], options: { existingArtifact?
     if (path.includes("huai_events") && method === "POST") {
       const key = JSON.parse(String(init?.body)).idempotency_key;
       return jsonResponse(201, [eventRow(key, "x")]);
+    }
+    if (path.includes("huai_recovery_snapshots") && method === "GET" && path.includes("snapshot_type=eq.artifact")) {
+      return jsonResponse(200, options.existingArtifactSnapshotRows ?? []);
     }
     return jsonResponse(200, []);
   };
