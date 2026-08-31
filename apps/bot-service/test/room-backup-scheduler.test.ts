@@ -149,7 +149,7 @@ test("listRoomIdsFromSupabase는 huai_rooms 를 조회해 room_id 배열로 변�
 
   assert.deepEqual(roomIds, ["r1", "r2"]);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://example.supabase.co/rest/v1/huai_rooms?select=room_id");
+  assert.equal(calls[0].url, "https://example.supabase.co/rest/v1/huai_rooms?select=room_id&status=eq.active");
   assert.equal(calls[0].headers.apikey, "service-role-key");
 });
 
@@ -166,4 +166,21 @@ test("listRoomIdsFromSupabase는 실패 응답을 명확한 에러로 던진다"
   const listRoomIds = listRoomIdsFromSupabase("https://example.supabase.co", "key", fetchImpl);
 
   await assert.rejects(() => listRoomIds(), /list-rooms-failed:500/);
+});
+
+// 실측(2026-08-31): 필터가 없어 archived 방까지 6시간마다 백업하고 있었다.
+test("listRoomIdsFromSupabase 는 active 방만 조회한다", async () => {
+  const requested: string[] = [];
+  const listRoomIds = listRoomIdsFromSupabase("https://example.supabase.co", "key", (async (url: string) => {
+    requested.push(String(url));
+    return { ok: true, async json() { return [{ room_id: "room-1" }]; } } as unknown as Response;
+  }) as unknown as typeof fetch);
+
+  assert.deepEqual(await listRoomIds(), ["room-1"]);
+  assert.equal(requested.length, 1);
+  assert.equal(
+    requested[0]?.includes("status=eq.active"),
+    true,
+    `archived 방까지 백업하면 안 된다 — 실제 요청: ${requested[0]}`
+  );
 });

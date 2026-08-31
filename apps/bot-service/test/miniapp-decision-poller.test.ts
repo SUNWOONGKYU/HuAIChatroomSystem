@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isPermanentDecisionFailure,
   runMiniAppDecisionPollOnce,
   type MiniAppDecisionOutcomeEvent,
   type MiniAppDecisionPollerOptions, approvalKeysetFilter } from "../src/miniapp-decision-poller.js";
@@ -218,14 +219,40 @@ test("a failing decision in one room does not block or lose a sibling room's dec
   assert.equal(result.replayed, 1, "room B's decision must still replay despite room A's failure earlier in the batch");
   assert.equal(persistence.commits.length, 1);
   assert.equal(persistence.commits[0]!.message.input.envelope.telegramChatId, roomB.telegramChatId);
-  assert.equal(backend.processed.has("broken-room"), false, "the failed decision must not be marked processed (must retry)");
   assert.equal(backend.processed.get("healthy-room")?.outcome, "replayed");
+  // unknown-room 은 구조적 실패라 종결한다 — 재시도해도 같은 답이고, 안 끊으면 매 주기
+  // 영원히 재시도된다(2026-08-31 라이브에서 실제로 46회 넘게 반복하는 것을 관측).
+  // 종결하되 근거는 남는다.
+  assert.equal(result.deadLettered, 1);
+  assert.equal(backend.processed.get("broken-room")?.outcome, "failed");
+  assert.match(backend.processed.get("broken-room")?.detail ?? "", /unknown-room/);
 
-  // 다음 주기에도 실패한 방의 결정은 다시 잡혀야 한다(커서가 그 지점 이전에 묶여야 함).
+  // 종결됐으므로 다음 주기에 같은 행을 또 붙들지 않는다.
   const secondRun = await runMiniAppDecisionPollOnce(options(backend, persistence, [roomA, roomB]));
-  assert.equal(secondRun.fetched, 2, "the cursor must not have advanced past the unresolved failure");
-  assert.equal(secondRun.failed, 1);
+  assert.equal(secondRun.failed, 0, "종결된 구조적 실패를 다시 시도하면 안 된다");
   assert.equal(secondRun.replayed, 0, "room B's decision was already processed and must not replay again");
+});
+
+// 위와 같은 형제 방 격리를 일시적 실패로 다시 확인한다. 이쪽은 재시도가 정답이므로
+// 종결하면 안 되고, 커서도 그 지점 이전에 묶여 다음 주기에 다시 잡혀야 한다.
+test("일시적 실패는 종결하지 않고 다음 주기에 다시 잡는다", async () => {
+  const backend = new FakeMiniAppBackend();
+  backend.approvals.push(approvalRow({ approvalId: "flaky", roomId: roomA.roomId, entityRef: "proposal_flaky", stage: "task_approval", decision: "approved", decider: ownerA, createdAt: "2026-08-15T00:00:00.000Z" }));
+  backend.approvals.push(approvalRow({ approvalId: "healthy", roomId: roomB.roomId, entityRef: "proposal_ok", stage: "task_approval", decision: "approved", decider: ownerB, createdAt: "2026-08-15T00:01:00.000Z" }));
+  const persistence = new FakePersistence();
+  persistence.failCommitFor = (message) => message.input.envelope.telegramChatId === roomA.telegramChatId;
+
+  const result = await runMiniAppDecisionPollOnce(options(backend, persistence, [roomA, roomB]));
+
+  assert.equal(result.failed, 1);
+  assert.equal(result.deadLettered, 0, "일시적 실패를 종결하면 재시도 기회를 잃는다");
+  assert.equal(result.replayed, 1, "형제 방의 결정은 그대로 처리돼야 한다");
+  assert.equal(backend.processed.has("flaky"), false, "일시적 실패는 processed 로 남기면 안 된다");
+
+  // 커서가 실패 지점 이전에 묶여 다음 주기에 다시 잡힌다.
+  const secondRun = await runMiniAppDecisionPollOnce(options(backend, persistence, [roomA, roomB]));
+  assert.equal(secondRun.fetched, 2, "커서가 미해결 실패를 지나치면 안 된다");
+  assert.equal(secondRun.failed, 1);
 });
 
 // executionDefaults 가 없는 방(A-5)의 결정: orchestrator 는 더 이상 던지지 않는다
@@ -661,11 +688,15 @@ function approvalRow(input: {
 
 class FakePersistence implements OrchestratorPersistencePort {
   commits: Array<{ message: TelegramInboundQueueMessage; result: Extract<TelegramInputHandlingResult, { accepted: true }> }> = [];
+  // 일시적 실패(네트워크·Supabase 오류)를 흉내내는 훅. 구조적 실패(unknown-room 등)와
+  // 달리 이건 재시도가 정답이라, 폴러가 종결하지 않고 다시 잡는지 확인하는 데 쓴다.
+  failCommitFor?: (message: TelegramInboundQueueMessage) => boolean;
 
   async commitTelegramInputResult(input: {
     message: TelegramInboundQueueMessage;
     result: Extract<TelegramInputHandlingResult, { accepted: true }>;
   }): Promise<{ events: PersistedEvent[]; outbox: PersistedOutboxItem[] }> {
+    if (this.failCommitFor?.(input.message)) throw new Error("supabase-rest-error:503:service unavailable");
     this.commits.push(input);
     return { events: [], outbox: [] };
   }
@@ -825,4 +856,17 @@ test("커서 값은 URL 에 그대로 실리지 않는다", () => {
 
   assert.equal(filter.includes("+00:00"), false);
   assert.match(filter, /%2B00%3A00/);
+});
+
+// 실측(2026-08-31, 운영 서비스 기동 관측): archived 방의 승인 행 2건이 `unknown-room`
+// 으로 매 주기 실패하며 로그를 46회 넘게 채웠다. 구조적 실패는 재시도해도 같은 답이라
+// 종결 처리해서 무한 재시도를 끊는다 — 다만 일시적 실패까지 종결하면 안 된다.
+test("isPermanentDecisionFailure: 구조적 실패만 종결 대상으로 본다", () => {
+  assert.equal(isPermanentDecisionFailure("unknown-room:16966452-fbb6-43b6-bbd7-5bbb87ca525a"), true);
+  assert.equal(isPermanentDecisionFailure("missing-entity-ref"), true);
+
+  // 일시적 실패는 재시도가 정답이므로 종결하면 안 된다.
+  assert.equal(isPermanentDecisionFailure("supabase-rest-error:503:service unavailable"), false);
+  assert.equal(isPermanentDecisionFailure("fetch failed"), false);
+  assert.equal(isPermanentDecisionFailure(undefined), false);
 });

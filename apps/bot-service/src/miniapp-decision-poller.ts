@@ -71,6 +71,8 @@ export type MiniAppDecisionPollResult = {
   replayed: number;
   skipped: number;
   failed: number;
+  // failed 중 재시도해도 결과가 같아 종결 처리한 건수(무한 재시도 차단).
+  deadLettered: number;
 };
 
 export type MiniAppDecisionPollerHandle = {
@@ -107,13 +109,14 @@ export async function runMiniAppDecisionPollOnce(options: MiniAppDecisionPollerO
 
   const cursor = await client.fetchCursor();
   const rows = await client.fetchApprovalsSince(cursor, options.limit);
-  if (rows.length === 0) return { fetched: 0, replayed: 0, skipped: 0, failed: 0 };
+  if (rows.length === 0) return { fetched: 0, replayed: 0, skipped: 0, failed: 0, deadLettered: 0 };
 
   const alreadyProcessed = await client.fetchProcessedSet(rows.map((row) => row.approval_id));
 
   let replayed = 0;
   let skipped = 0;
   let failed = 0;
+  let deadLettered = 0;
   // 이번 배치에서 처음 만난 실패 행의 created_at. 커서를 이 지점 이전으로 묶어둬야
   // 다음 주기에 이 행이 다시 잡힌다 — 안 그러면 방 하나가 영구 고장났을 때 그
   // 뒤에 줄 선(다른 방일 수도 있는) 결정들까지 영원히 못 잡히는 새로운 아사(starvation)
@@ -128,6 +131,23 @@ export async function runMiniAppDecisionPollOnce(options: MiniAppDecisionPollerO
 
     if (event.outcome === "failed") {
       failed += 1;
+      // 구조적 실패는 재시도해도 결과가 같다 — 종결 처리해서 무한 재시도를 끊는다.
+      //
+      // 실측(2026-08-31, 운영 서비스를 실제로 띄워 관측): 복구 리허설로 archived 된 방의
+      // 승인 행 2건이 `unknown-room` 으로 매 주기 실패하면서 로그를 46회 넘게 채웠다.
+      // 이 파일 아래쪽 주석이 이미 같은 양상("실패는 processed 로 안 남아 매 주기 영원히
+      // 재시도되는 유령 실패")을 지목하고 tuple dedup 으로 한 경우만 막아뒀는데, 일반
+      // 경우는 열려 있었다.
+      //
+      // 일시적 실패(네트워크·Supabase 오류)는 재시도해야 하므로 그대로 두고, 같은 입력을
+      // 다시 넣어도 같은 답이 나오는 구조적 실패만 종결한다. 종결해도 근거는 남는다 —
+      // huai_miniapp_decision_processed 에 outcome/detail 이 기록되므로 운영자가 보고
+      // 필요하면 그 행을 지워 재구동할 수 있다.
+      if (isPermanentDecisionFailure(event.reason)) {
+        await client.markProcessed(row.approval_id, event.outcome, event.reason);
+        deadLettered += 1;
+        continue;
+      }
       if (earliestUnresolvedCreatedAt === undefined) earliestUnresolvedCreatedAt = row.created_at;
       continue; // 이 행만 미해결로 남기고 배치의 나머지는 계속 처리한다.
     }
@@ -156,7 +176,7 @@ export async function runMiniAppDecisionPollOnce(options: MiniAppDecisionPollerO
       : undefined;
   if (newCursor) await client.advanceCursor(newCursor);
 
-  return { fetched: rows.length, replayed, skipped, failed };
+  return { fetched: rows.length, replayed, skipped, failed, deadLettered };
 }
 
 export function startMiniAppDecisionPollerLoop(
@@ -186,6 +206,20 @@ export function startMiniAppDecisionPollerLoop(
       clearInterval(timer);
     }
   };
+}
+
+// 같은 입력을 다시 넣어도 같은 답이 나오는 실패. 재시도가 의미 없으므로 종결한다.
+//
+// unknown-room: 방이 런타임 방 목록에 없다(삭제·archived·미설정). 그 상태가 유지되는 한
+//   몇 번을 다시 돌려도 같은 결과다.
+// missing-entity-ref: 승인 행에 대상 식별자가 없다. 행 자체가 불완전해 고쳐지지 않는다.
+//
+// 네트워크·Supabase 오류 같은 일시적 실패는 여기 넣지 않는다 — 그건 재시도가 정답이다.
+const PERMANENT_DECISION_FAILURE_PREFIXES = ["unknown-room:", "missing-entity-ref"] as const;
+
+export function isPermanentDecisionFailure(reason: string | undefined): boolean {
+  if (!reason) return false;
+  return PERMANENT_DECISION_FAILURE_PREFIXES.some((prefix) => reason.startsWith(prefix));
 }
 
 async function resolveDecision(

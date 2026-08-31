@@ -487,15 +487,27 @@ create table if not exists huai_miniapp_decision_processed (
   outcome text not null,
   detail text,
   processed_at timestamptz not null default now(),
-  -- failed 는 일부러 뺐다. 폴러는 failed 를 기록하지 않고 다음 주기에 재시도하도록
-  -- 두는 것이 설계이고, 제약에서 빠져 있는 것이 그 설계를 강제하는 안전장치다.
+  -- failed 를 나중에 더했다(20260831120000).
+  --
+  -- 원래 설계는 "폴러가 failed 를 기록하지 않고 다음 주기에 재시도한다"였고, 제약에서
+  -- 빠져 있는 것이 그 설계를 강제하는 안전장치였다. 일시적 실패(네트워크·Supabase 오류)
+  -- 에는 그게 맞다. 그런데 2026-08-31 에 운영 서비스를 실제로 띄워 보니 구조적 실패
+  -- (unknown-room, missing-entity-ref)는 몇 번을 다시 돌려도 같은 답이라 영원히 재시도되고,
+  -- 로그와 Supabase 호출을 계속 낭비했다. 재시도가 정답인 실패와 아닌 실패를 구분하지
+  -- 않은 것이 원래 설계의 빈틈이었다.
+  --
+  -- 이제 폴러가 구조적 실패만 골라 failed 로 종결한다(isPermanentDecisionFailure).
+  -- 일시적 실패는 여전히 기록하지 않고 재시도한다 — 원래 설계의 옳은 부분은 그대로다.
+  -- 종결해도 근거는 남는다: outcome='failed' 와 detail(사유)이 남으므로 운영자가 보고
+  -- 필요하면 그 행을 지워 재구동할 수 있다.
   constraint huai_miniapp_decision_processed_outcome_check
     check (outcome in (
       'replayed',
       'skipped_duplicate',
       'skipped_unsupported_stage',
       'skipped_unauthorized',
-      'skipped_already_executed'
+      'skipped_already_executed',
+      'failed'
     ))
 );
 

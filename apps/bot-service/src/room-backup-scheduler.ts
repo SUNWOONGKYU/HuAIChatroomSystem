@@ -106,7 +106,14 @@ export function listRoomIdsFromSupabase(
 ): () => Promise<string[]> {
   const baseUrl = url.replace(/\/+$/, "");
   return async () => {
-    const response = await fetchImpl(`${baseUrl}/rest/v1/huai_rooms?select=room_id`, {
+    // status=active 만 본다.
+    //
+    // 실측(2026-08-31, 운영 서비스를 실제로 띄워 관측): 필터가 없어서 archived 방까지
+    // 6시간마다 백업하고 있었다. archived 는 더 이상 쓰지 않기로 한 방이라 스냅샷을
+    // 계속 쌓을 이유가 없고, 방이 늘수록 낭비가 커진다. bot-service 의 다른 경로
+    // (미니앱 결정 폴러가 참조하는 런타임 방 목록)는 이미 active 만 보고 있어서
+    // 이 스케줄러만 기준이 달랐다 — 같은 기준으로 맞춘다.
+    const response = await fetchImpl(`${baseUrl}/rest/v1/huai_rooms?select=room_id&status=eq.active`, {
       headers: { apikey: serviceRoleKey, authorization: `Bearer ${serviceRoleKey}` }
     });
     if (!response.ok) {
